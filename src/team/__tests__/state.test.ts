@@ -99,6 +99,33 @@ describe('team state', () => {
     }
   });
 
+  it('createTask does not overwrite existing tasks when config next_task_id is missing (legacy)', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-team-state-'));
+    try {
+      await initTeamState('team-legacy', 't', 'executor', 1, cwd);
+
+      // Simulate legacy config by removing next_task_id field.
+      const configPath = join(cwd, '.omx', 'state', 'team', 'team-legacy', 'config.json');
+      const cfg = JSON.parse(readFileSync(configPath, 'utf8')) as unknown as { [key: string]: unknown };
+      delete cfg.next_task_id;
+      await writeAtomic(configPath, JSON.stringify(cfg, null, 2));
+
+      // Create an existing task-1.json, then create another task; it must get id=2.
+      const t1 = await createTask('team-legacy', { subject: 'a', description: 'd', status: 'pending' }, cwd);
+      assert.equal(t1.id, '1');
+
+      // Remove next_task_id again to simulate older config still missing field.
+      const cfg2 = JSON.parse(readFileSync(configPath, 'utf8')) as unknown as { [key: string]: unknown };
+      delete cfg2.next_task_id;
+      await writeAtomic(configPath, JSON.stringify(cfg2, null, 2));
+
+      const t2 = await createTask('team-legacy', { subject: 'b', description: 'd', status: 'pending' }, cwd);
+      assert.equal(t2.id, '2');
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('listTasks returns sorted by ID', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-team-state-'));
     try {

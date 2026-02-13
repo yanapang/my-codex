@@ -197,6 +197,33 @@ function normalizeNextTaskId(raw: unknown): number {
   return Math.max(1, floored);
 }
 
+function hasValidNextTaskId(raw: unknown): boolean {
+  const asNum = typeof raw === 'number' ? raw : Number(raw);
+  return Number.isFinite(asNum) && Math.floor(asNum) >= 1;
+}
+
+async function computeNextTaskIdFromDisk(teamName: string, cwd: string): Promise<number> {
+  const tasksRoot = join(teamDir(teamName, cwd), 'tasks');
+  if (!existsSync(tasksRoot)) return 1;
+
+  let maxId = 0;
+  try {
+    const files = await readdir(tasksRoot);
+    for (const f of files) {
+      const m = /^task-(\d+)\.json$/.exec(f);
+      if (!m) continue;
+      const id = Number(m[1]);
+      if (Number.isFinite(id) && id > maxId) maxId = id;
+    }
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') return 1;
+    throw error;
+  }
+
+  return maxId + 1;
+}
+
 // Read team config
 export async function readTeamConfig(teamName: string, cwd: string): Promise<TeamConfig | null> {
   try {
@@ -285,10 +312,18 @@ function taskFilePath(teamName: string, taskId: string, cwd: string): string {
 
 async function withTeamLock<T>(teamName: string, cwd: string, fn: () => Promise<T>): Promise<T> {
   const lockDir = join(teamDir(teamName, cwd), '.lock.create-task');
+  const ownerPath = join(lockDir, 'owner');
+  const ownerToken = `${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`;
   const deadline = Date.now() + 5000;
   while (true) {
     try {
       await mkdir(lockDir);
+      try {
+        await writeFile(ownerPath, ownerToken, 'utf8');
+      } catch (error) {
+        await rm(lockDir, { recursive: true, force: true });
+        throw error;
+      }
       break;
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
@@ -303,7 +338,14 @@ async function withTeamLock<T>(teamName: string, cwd: string, fn: () => Promise<
   try {
     return await fn();
   } finally {
-    await rm(lockDir, { recursive: true, force: true });
+    try {
+      const currentOwner = await readFile(ownerPath, 'utf8');
+      if (currentOwner.trim() === ownerToken) {
+        await rm(lockDir, { recursive: true, force: true });
+      }
+    } catch {
+      // best effort
+    }
   }
 }
 
@@ -317,7 +359,10 @@ export async function createTask(
     const cfg = await readTeamConfig(teamName, cwd);
     if (!cfg) throw new Error(`Team ${teamName} not found`);
 
-    const nextNumeric = normalizeNextTaskId(cfg.next_task_id);
+    let nextNumeric = normalizeNextTaskId(cfg.next_task_id);
+    if (!hasValidNextTaskId(cfg.next_task_id)) {
+      nextNumeric = await computeNextTaskIdFromDisk(teamName, cwd);
+    }
     const nextId = String(nextNumeric);
 
     const created: TeamTask = {

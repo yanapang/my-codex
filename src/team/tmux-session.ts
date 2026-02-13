@@ -94,16 +94,20 @@ function paneLooksReady(captured: string): boolean {
     .filter(l => l.trim() !== '');
 
   const lastLine = lines.length > 0 ? lines[lines.length - 1] : '';
-  if (/^\s*>\s*/.test(lastLine)) return true;
-
-  // fallback heuristic: codex output tends to contain its name early on
-  if (/codex/i.test(content)) return true;
+  if (/^\s*[›>]\s*/.test(lastLine)) return true;
 
   return false;
 }
 
 function paneHasTrustPrompt(captured: string): boolean {
-  return /Do you trust the contents of this directory\?/i.test(captured);
+  const lines = captured
+    .split('\n')
+    .map((line) => line.replace(/\r/g, '').trim())
+    .filter((line) => line.length > 0);
+  const tail = lines.slice(-12);
+  const hasQuestion = tail.some((line) => /Do you trust the contents of this directory\?/i.test(line));
+  const hasActiveChoices = tail.some((line) => /Yes,\s*continue|No,\s*quit|Press enter to continue/i.test(line));
+  return hasQuestion && hasActiveChoices;
 }
 
 // Poll tmux capture-pane for Codex prompt indicator (> or similar)
@@ -112,6 +116,7 @@ function paneHasTrustPrompt(captured: string): boolean {
 export function waitForWorkerReady(sessionName: string, workerIndex: number, timeoutMs: number = 15000): boolean {
   const backoffMs = [1000, 2000, 4000, 8000];
   const startedAt = Date.now();
+  let blockedByTrustPrompt = false;
 
   const check = (): boolean => {
     const result = runTmux(['capture-pane', '-t', paneTarget(sessionName, workerIndex), '-p']);
@@ -122,12 +127,14 @@ export function waitForWorkerReady(sessionName: string, workerIndex: number, tim
         runTmux(['send-keys', '-t', paneTarget(sessionName, workerIndex), 'Enter']);
         return false;
       }
+      blockedByTrustPrompt = true;
       return false;
     }
     return paneLooksReady(result.stdout);
   };
 
   if (check()) return true;
+  if (blockedByTrustPrompt) return false;
 
   for (const delay of backoffMs) {
     const elapsed = Date.now() - startedAt;
@@ -137,6 +144,7 @@ export function waitForWorkerReady(sessionName: string, workerIndex: number, tim
     sleepSeconds(Math.max(0, Math.min(delay, remaining)) / 1000);
 
     if (check()) return true;
+    if (blockedByTrustPrompt) return false;
   }
 
   return false;
