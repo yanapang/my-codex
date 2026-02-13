@@ -102,4 +102,40 @@ describe('transitionPhase', () => {
     const state = createTeamState('invalid');
     assert.throws(() => transitionPhase(state, 'team-verify'), /Invalid transition/);
   });
+
+  it('preserves explicit reason and appends exactly one transition record', () => {
+    const start = createTeamState('reason');
+    const beforeLen = start.phase_transitions.length;
+    const next = transitionPhase(start, 'team-prd', 'requirements clarified');
+
+    assert.equal(start.phase_transitions.length, beforeLen);
+    assert.equal(next.phase_transitions.length, beforeLen + 1);
+    assert.equal(next.phase_transitions.at(-1)?.from, 'team-plan');
+    assert.equal(next.phase_transitions.at(-1)?.to, 'team-prd');
+    assert.equal(next.phase_transitions.at(-1)?.reason, 'requirements clarified');
+    assert.ok(!Number.isNaN(Date.parse(next.phase_transitions.at(-1)?.at ?? '')));
+  });
+
+  it('marks complete as terminal and keeps fix attempt unchanged', () => {
+    const start = createTeamState('complete-path', 5);
+    const verify = moveToVerify(start);
+    const complete = transitionPhase(verify, 'complete');
+
+    assert.equal(complete.active, false);
+    assert.equal(complete.phase, 'complete');
+    assert.equal(complete.current_fix_attempt, 0);
+    assert.equal(canResumeTeamState(complete), false);
+  });
+});
+
+describe('canResumeTeamState', () => {
+  it('returns false for non-terminal inactive state', () => {
+    const paused: TeamState = {
+      ...createTeamState('paused'),
+      phase: 'team-exec',
+      active: false,
+    };
+    assert.equal(isTerminalPhase(paused.phase), false);
+    assert.equal(canResumeTeamState(paused), false);
+  });
 });
