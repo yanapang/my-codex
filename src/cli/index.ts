@@ -3,6 +3,7 @@
  * Multi-agent orchestration for OpenAI Codex CLI
  */
 
+import { execSync } from 'child_process';
 import { setup } from './setup.js';
 import { doctor } from './doctor.js';
 import { version } from './version.js';
@@ -12,6 +13,7 @@ const HELP = `
 oh-my-codex (omx) - Multi-agent orchestration for Codex CLI
 
 Usage:
+  omx           Launch Codex CLI + HUD in tmux (or just Codex if no tmux)
   omx setup     Install skills, prompts, MCP servers, and AGENTS.md
   omx doctor    Check installation health
   omx version   Show version information
@@ -27,7 +29,7 @@ Options:
 `;
 
 export async function main(args: string[]): Promise<void> {
-  const command = args[0] || 'help';
+  const command = args[0] || 'launch';
   const flags = new Set(args.filter(a => a.startsWith('--')));
   const options = {
     force: flags.has('--force'),
@@ -37,6 +39,9 @@ export async function main(args: string[]): Promise<void> {
 
   try {
     switch (command) {
+      case 'launch':
+        await launchWithHud(args.slice(1));
+        break;
       case 'setup':
         await setup(options);
         break;
@@ -90,6 +95,51 @@ async function showStatus(): Promise<void> {
     }
   } catch {
     console.log('No active modes.');
+  }
+}
+
+async function launchWithHud(args: string[]): Promise<void> {
+  const cwd = process.cwd();
+  const omxBin = process.argv[1]; // path to bin/omx.js
+  const codexArgs = args.length > 0 ? ' ' + args.join(' ') : '';
+
+  if (process.env.TMUX) {
+    // Already in tmux: launch codex in current pane, HUD in bottom split
+    const hudCmd = `node ${omxBin} hud --watch`;
+    try {
+      execSync(`tmux split-window -v -l 4 -d -c "${cwd}" '${hudCmd}'`, { stdio: 'inherit' });
+    } catch {
+      // HUD split failed, continue without it
+    }
+    // Replace current process with codex
+    const { execFileSync } = await import('child_process');
+    try {
+      execFileSync('codex', args, { cwd, stdio: 'inherit' });
+    } catch {
+      process.exit(0);
+    }
+  } else {
+    // Not in tmux: create a new tmux session with codex + HUD pane
+    const sessionName = `omx-${Date.now()}`;
+    const hudCmd = `node ${omxBin} hud --watch`;
+    try {
+      execSync(
+        `tmux new-session -d -s "${sessionName}" -c "${cwd}" "codex${codexArgs}" \\; ` +
+        `split-window -v -l 4 -d -c "${cwd}" '${hudCmd}' \\; ` +
+        `select-pane -t 0 \\; ` +
+        `attach-session -t "${sessionName}"`,
+        { stdio: 'inherit' }
+      );
+    } catch {
+      // tmux not available, just run codex directly
+      console.log('tmux not available, launching codex without HUD...');
+      const { execFileSync } = await import('child_process');
+      try {
+        execFileSync('codex', args, { cwd, stdio: 'inherit' });
+      } catch {
+        process.exit(0);
+      }
+    }
   }
 }
 
