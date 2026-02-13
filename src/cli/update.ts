@@ -126,6 +126,7 @@ async function askYesNo(question: string): Promise<boolean> {
 
 export async function maybeCheckAndPromptUpdate(cwd: string): Promise<void> {
   if (process.env.OMX_AUTO_UPDATE === '0') return;
+  const promptForApproval = process.env.OMX_AUTO_UPDATE_PROMPT === '1';
 
   const now = Date.now();
   const state = await readUpdateState(cwd);
@@ -145,15 +146,17 @@ export async function maybeCheckAndPromptUpdate(cwd: string): Promise<void> {
 
   console.log(`[omx] Update available: v${current} -> v${latest}.`);
 
-  const approved = await askYesNo('[omx] Update now? [Y/n] ');
-  if (!approved) {
-    await notify({
-      title: 'OMX Update Available',
-      message: `New version available: v${current} -> v${latest}.`,
-      type: 'info',
-      projectPath: cwd,
-    });
-    return;
+  if (promptForApproval) {
+    const approved = await askYesNo('[omx] Update now? [Y/n] ');
+    if (!approved) {
+      await notify({
+        title: 'OMX Update Available',
+        message: `New version available: v${current} -> v${latest}.`,
+        type: 'info',
+        projectPath: cwd,
+      });
+      return;
+    }
   }
 
   console.log(`[omx] Running: npm install -g ${PACKAGE_NAME}@latest`);

@@ -211,6 +211,13 @@ omx version   # Print version info
 omx help      # Usage guide
 ```
 
+## Auto-Update Behavior
+
+OMX checks for package updates at launch (throttled) and, by default, attempts to update automatically when a newer version is available.
+
+- `OMX_AUTO_UPDATE=0` disables auto-update checks entirely.
+- `OMX_AUTO_UPDATE_PROMPT=1` restores interactive confirmation before updating.
+
 ## Tmux Injection Workaround (Opt-In)
 
 OMX includes a production-safe workaround for Codex hook limitations: it can inject a continuation prompt into a tmux pane from `scripts/notify-hook.js`.
