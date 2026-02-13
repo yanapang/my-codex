@@ -1,4 +1,6 @@
 import { join } from 'path';
+import { existsSync } from 'fs';
+import { readdir } from 'fs/promises';
 
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -24,4 +26,27 @@ export function getStateDir(workingDirectory?: string, sessionId?: string): stri
 
 export function getStatePath(mode: string, workingDirectory?: string, sessionId?: string): string {
   return join(getStateDir(workingDirectory, sessionId), `${mode}-state.json`);
+}
+
+export async function getAllSessionScopedStatePaths(
+  mode: string,
+  workingDirectory?: string,
+): Promise<string[]> {
+  const sessionsRoot = join(getBaseStateDir(workingDirectory), 'sessions');
+  if (!existsSync(sessionsRoot)) return [];
+
+  const entries = await readdir(sessionsRoot, { withFileTypes: true });
+  return entries
+    .filter((entry) => entry.isDirectory() && SESSION_ID_PATTERN.test(entry.name))
+    .map((entry) => getStatePath(mode, workingDirectory, entry.name));
+}
+
+export async function getAllScopedStatePaths(
+  mode: string,
+  workingDirectory?: string,
+): Promise<string[]> {
+  return [
+    getStatePath(mode, workingDirectory),
+    ...(await getAllSessionScopedStatePaths(mode, workingDirectory)),
+  ];
 }

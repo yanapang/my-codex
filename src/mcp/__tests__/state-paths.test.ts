@@ -1,7 +1,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, rm } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import {
+  getAllScopedStatePaths,
   getBaseStateDir,
+  getAllSessionScopedStatePaths,
   getStateDir,
   getStatePath,
   validateSessionId,
@@ -34,5 +39,65 @@ describe('state paths', () => {
       getStatePath('ralph', '/repo', 'sess1'),
       '/repo/.omx/state/sessions/sess1/ralph-state.json'
     );
+  });
+
+  it('enumerates global-only path', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-paths-'));
+    try {
+      const paths = await getAllScopedStatePaths('team', wd);
+      assert.deepEqual(paths, [getStatePath('team', wd)]);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('enumerates session-scoped paths', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-paths-'));
+    try {
+      const sessionsRoot = join(getBaseStateDir(wd), 'sessions');
+      await mkdir(join(sessionsRoot, 'sess1'), { recursive: true });
+      await mkdir(join(sessionsRoot, 'sess_2'), { recursive: true });
+
+      const paths = await getAllSessionScopedStatePaths('team', wd);
+      assert.deepEqual(paths.sort(), [
+        getStatePath('team', wd, 'sess1'),
+        getStatePath('team', wd, 'sess_2'),
+      ].sort());
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('enumerates global and session-scoped paths together', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-paths-'));
+    try {
+      const sessionsRoot = join(getBaseStateDir(wd), 'sessions');
+      await mkdir(join(sessionsRoot, 'sess1'), { recursive: true });
+      await mkdir(join(sessionsRoot, 'sess2'), { recursive: true });
+
+      const paths = await getAllScopedStatePaths('ralph', wd);
+      assert.deepEqual(paths.sort(), [
+        getStatePath('ralph', wd),
+        getStatePath('ralph', wd, 'sess1'),
+        getStatePath('ralph', wd, 'sess2'),
+      ].sort());
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores invalid session directory names', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-paths-'));
+    try {
+      const sessionsRoot = join(getBaseStateDir(wd), 'sessions');
+      await mkdir(join(sessionsRoot, 'valid-session'), { recursive: true });
+      await mkdir(join(sessionsRoot, 'bad.name'), { recursive: true });
+      await mkdir(join(sessionsRoot, 'bad name'), { recursive: true });
+
+      const paths = await getAllSessionScopedStatePaths('team', wd);
+      assert.deepEqual(paths, [getStatePath('team', wd, 'valid-session')]);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
   });
 });

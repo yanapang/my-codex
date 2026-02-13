@@ -11,9 +11,14 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { readFile, writeFile, readdir, mkdir, unlink } from 'fs/promises';
-import { join } from 'path';
 import { existsSync } from 'fs';
-import { getBaseStateDir, getStateDir, getStatePath, validateSessionId } from './state-paths.js';
+import { join } from 'path';
+import {
+  getAllScopedStatePaths,
+  getStateDir,
+  getStatePath,
+  validateSessionId,
+} from './state-paths.js';
 
 const SUPPORTED_MODES = [
   'autopilot', 'ultrapilot', 'team', 'pipeline',
@@ -166,22 +171,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       const removedPaths: string[] = [];
-
-      const globalPath = getStatePath(mode, wd);
-      if (existsSync(globalPath)) {
-        await unlink(globalPath);
-        removedPaths.push(globalPath);
-      }
-
-      const sessionsRoot = join(getBaseStateDir(wd), 'sessions');
-      if (existsSync(sessionsRoot)) {
-        const sessionDirs = await readdir(sessionsRoot);
-        for (const dirName of sessionDirs) {
-          const scopedPath = getStatePath(mode, wd, dirName);
-          if (!existsSync(scopedPath)) continue;
-          await unlink(scopedPath);
-          removedPaths.push(scopedPath);
-        }
+      const paths = await getAllScopedStatePaths(mode, wd);
+      for (const path of paths) {
+        if (!existsSync(path)) continue;
+        await unlink(path);
+        removedPaths.push(path);
       }
 
       return {
