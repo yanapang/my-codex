@@ -4,12 +4,13 @@
  */
 
 import { execSync, execFileSync } from 'child_process';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { setup } from './setup.js';
 import { doctor } from './doctor.js';
 import { version } from './version.js';
 import { tmuxHookCommand } from './tmux-hook.js';
 import { hudCommand } from '../hud/index.js';
+import { getAllScopedStateDirs, getBaseStateDir, getStateDir } from '../mcp/state-paths.js';
 import { maybeCheckAndPromptUpdate } from './update.js';
 import { generateOverlay, applyOverlay, stripOverlay } from '../hooks/agents-overlay.js';
 import {
@@ -101,18 +102,25 @@ export async function main(args: string[]): Promise<void> {
 
 async function showStatus(): Promise<void> {
   const { readdir, readFile } = await import('fs/promises');
-  const { join } = await import('path');
-  const stateDir = join(process.cwd(), '.omx', 'state');
+  const cwd = process.cwd();
   try {
-    const files = await readdir(stateDir);
-    const states = files.filter(f => f.endsWith('-state.json'));
+    const scopedDirs = await getAllScopedStateDirs(cwd);
+    const states: string[] = [];
+    for (const stateDir of scopedDirs) {
+      const files = await readdir(stateDir).catch(() => [] as string[]);
+      for (const file of files) {
+        if (!file.endsWith('-state.json') || file === 'session.json') continue;
+        states.push(join(stateDir, file));
+      }
+    }
     if (states.length === 0) {
       console.log('No active modes.');
       return;
     }
-    for (const file of states) {
-      const content = await readFile(join(stateDir, file), 'utf-8');
+    for (const path of states) {
+      const content = await readFile(path, 'utf-8');
       const state = JSON.parse(content);
+      const file = basename(path);
       const mode = file.replace('-state.json', '');
       console.log(`${mode}: ${state.active ? 'ACTIVE' : 'inactive'} (phase: ${state.current_phase || 'n/a'})`);
     }
@@ -243,17 +251,19 @@ async function postLaunch(cwd: string, sessionId: string): Promise<void> {
   // 3. Cancel any still-active modes
   try {
     const { readdir, writeFile, readFile } = await import('fs/promises');
-    const stateDir = join(cwd, '.omx', 'state');
-    const files = await readdir(stateDir).catch(() => [] as string[]);
-    for (const file of files) {
-      if (!file.endsWith('-state.json') || file === 'session.json') continue;
-      const path = join(stateDir, file);
-      const content = await readFile(path, 'utf-8');
-      const state = JSON.parse(content);
-      if (state.active) {
-        state.active = false;
-        state.completed_at = new Date().toISOString();
-        await writeFile(path, JSON.stringify(state, null, 2));
+    const scopedDirs = [getBaseStateDir(cwd), getStateDir(cwd, sessionId)];
+    for (const stateDir of scopedDirs) {
+      const files = await readdir(stateDir).catch(() => [] as string[]);
+      for (const file of files) {
+        if (!file.endsWith('-state.json') || file === 'session.json') continue;
+        const path = join(stateDir, file);
+        const content = await readFile(path, 'utf-8');
+        const state = JSON.parse(content);
+        if (state.active) {
+          state.active = false;
+          state.completed_at = new Date().toISOString();
+          await writeFile(path, JSON.stringify(state, null, 2));
+        }
       }
     }
   } catch (err) {
@@ -263,23 +273,25 @@ async function postLaunch(cwd: string, sessionId: string): Promise<void> {
 
 async function cancelModes(): Promise<void> {
   const { readdir, writeFile, readFile } = await import('fs/promises');
-  const { join } = await import('path');
-  const stateDir = join(process.cwd(), '.omx', 'state');
+  const cwd = process.cwd();
   try {
-    const files = await readdir(stateDir);
-    const states = files.filter(f => f.endsWith('-state.json'));
+    const scopedDirs = await getAllScopedStateDirs(cwd);
     let cancelled = 0;
-    for (const file of states) {
-      const path = join(stateDir, file);
-      const content = await readFile(path, 'utf-8');
-      const state = JSON.parse(content);
-      if (state.active) {
-        state.active = false;
-        state.current_phase = 'cancelled';
-        state.completed_at = new Date().toISOString();
-        await writeFile(path, JSON.stringify(state, null, 2));
-        cancelled++;
-        console.log(`Cancelled: ${file.replace('-state.json', '')}`);
+    for (const stateDir of scopedDirs) {
+      const files = await readdir(stateDir).catch(() => [] as string[]);
+      for (const file of files) {
+        if (!file.endsWith('-state.json') || file === 'session.json') continue;
+        const path = join(stateDir, file);
+        const content = await readFile(path, 'utf-8');
+        const state = JSON.parse(content);
+        if (state.active) {
+          state.active = false;
+          state.current_phase = 'cancelled';
+          state.completed_at = new Date().toISOString();
+          await writeFile(path, JSON.stringify(state, null, 2));
+          cancelled++;
+          console.log(`Cancelled: ${file.replace('-state.json', '')}`);
+        }
       }
     }
     if (cancelled === 0) {

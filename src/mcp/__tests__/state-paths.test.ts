@@ -4,8 +4,10 @@ import { mkdir, mkdtemp, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
+  getAllScopedStateDirs,
   getAllScopedStatePaths,
   getBaseStateDir,
+  getAllSessionScopedStateDirs,
   getAllSessionScopedStatePaths,
   getStateDir,
   getStatePath,
@@ -63,6 +65,23 @@ describe('state paths', () => {
         getStatePath('team', wd, 'sess1'),
         getStatePath('team', wd, 'sess_2'),
       ].sort());
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('enumerates state directories across all scopes', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-paths-'));
+    try {
+      const sessionsRoot = join(getBaseStateDir(wd), 'sessions');
+      await mkdir(join(sessionsRoot, 'sess1'), { recursive: true });
+      await mkdir(join(sessionsRoot, 'bad.name'), { recursive: true });
+
+      const sessionDirs = await getAllSessionScopedStateDirs(wd);
+      assert.deepEqual(sessionDirs, [join(sessionsRoot, 'sess1')]);
+
+      const dirs = await getAllScopedStateDirs(wd);
+      assert.deepEqual(dirs, [getBaseStateDir(wd), join(sessionsRoot, 'sess1')]);
     } finally {
       await rm(wd, { recursive: true, force: true });
     }

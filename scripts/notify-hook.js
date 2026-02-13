@@ -23,6 +23,8 @@ import {
   buildSendKeysArgv,
 } from './tmux-hook-engine.js';
 
+const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
 function asNumber(value) {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'string' && value.trim() !== '') {
@@ -263,6 +265,22 @@ async function logTmuxHookEvent(logsDir, event) {
   await appendFile(file, JSON.stringify(event) + '\n').catch(() => {});
 }
 
+async function getScopedStateDirsForCurrentSession(baseStateDir) {
+  const scopedDirs = [baseStateDir];
+  const sessionPath = join(baseStateDir, 'session.json');
+  try {
+    const session = JSON.parse(await readFile(sessionPath, 'utf-8'));
+    const sessionId = safeString(session && session.session_id ? session.session_id : '');
+    if (SESSION_ID_PATTERN.test(sessionId)) {
+      const sessionDir = join(baseStateDir, 'sessions', sessionId);
+      if (existsSync(sessionDir)) scopedDirs.push(sessionDir);
+    }
+  } catch {
+    // No session file or malformed - fall back to global only
+  }
+  return scopedDirs;
+}
+
 async function handleTmuxInjection({
   payload,
   cwd,
@@ -289,13 +307,16 @@ async function handleTmuxInjection({
 
   const activeModes = [];
   try {
-    const files = await readdir(stateDir);
-    for (const file of files) {
-      if (!file.endsWith('-state.json') || file === 'tmux-hook-state.json') continue;
-      const path = join(stateDir, file);
-      const parsed = JSON.parse(await readFile(path, 'utf-8'));
-      if (parsed && parsed.active) {
-        activeModes.push(file.replace('-state.json', ''));
+    const scopedDirs = await getScopedStateDirsForCurrentSession(stateDir);
+    for (const scopedDir of scopedDirs) {
+      const files = await readdir(scopedDir).catch(() => []);
+      for (const file of files) {
+        if (!file.endsWith('-state.json') || file === 'tmux-hook-state.json') continue;
+        const path = join(scopedDir, file);
+        const parsed = JSON.parse(await readFile(path, 'utf-8'));
+        if (parsed && parsed.active) {
+          activeModes.push(file.replace('-state.json', ''));
+        }
       }
     }
   } catch {
@@ -448,15 +469,18 @@ async function main() {
 
   // 2. Update active mode state (increment iteration)
   try {
-    const stateFiles = await readdir(stateDir);
-    for (const f of stateFiles) {
-      if (!f.endsWith('-state.json')) continue;
-      const statePath = join(stateDir, f);
-      const state = JSON.parse(await readFile(statePath, 'utf-8'));
-      if (state.active) {
-        state.iteration = (state.iteration || 0) + 1;
-        state.last_turn_at = new Date().toISOString();
-        await writeFile(statePath, JSON.stringify(state, null, 2));
+    const scopedDirs = await getScopedStateDirsForCurrentSession(stateDir);
+    for (const scopedDir of scopedDirs) {
+      const stateFiles = await readdir(scopedDir).catch(() => []);
+      for (const f of stateFiles) {
+        if (!f.endsWith('-state.json')) continue;
+        const statePath = join(scopedDir, f);
+        const state = JSON.parse(await readFile(statePath, 'utf-8'));
+        if (state.active) {
+          state.iteration = (state.iteration || 0) + 1;
+          state.last_turn_at = new Date().toISOString();
+          await writeFile(statePath, JSON.stringify(state, null, 2));
+        }
       }
     }
   } catch {

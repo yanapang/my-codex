@@ -32,13 +32,8 @@ export async function getAllSessionScopedStatePaths(
   mode: string,
   workingDirectory?: string,
 ): Promise<string[]> {
-  const sessionsRoot = join(getBaseStateDir(workingDirectory), 'sessions');
-  if (!existsSync(sessionsRoot)) return [];
-
-  const entries = await readdir(sessionsRoot, { withFileTypes: true });
-  return entries
-    .filter((entry) => entry.isDirectory() && SESSION_ID_PATTERN.test(entry.name))
-    .map((entry) => getStatePath(mode, workingDirectory, entry.name));
+  const sessionDirs = await getAllSessionScopedStateDirs(workingDirectory);
+  return sessionDirs.map((dir) => join(dir, `${mode}-state.json`));
 }
 
 export async function getAllScopedStatePaths(
@@ -49,4 +44,18 @@ export async function getAllScopedStatePaths(
     getStatePath(mode, workingDirectory),
     ...(await getAllSessionScopedStatePaths(mode, workingDirectory)),
   ];
+}
+
+export async function getAllSessionScopedStateDirs(workingDirectory?: string): Promise<string[]> {
+  const sessionsRoot = join(getBaseStateDir(workingDirectory), 'sessions');
+  if (!existsSync(sessionsRoot)) return [];
+
+  const entries = await readdir(sessionsRoot, { withFileTypes: true });
+  return entries
+    .filter((entry) => entry.isDirectory() && SESSION_ID_PATTERN.test(entry.name))
+    .map((entry) => join(sessionsRoot, entry.name));
+}
+
+export async function getAllScopedStateDirs(workingDirectory?: string): Promise<string[]> {
+  return [getBaseStateDir(workingDirectory), ...(await getAllSessionScopedStateDirs(workingDirectory))];
 }
