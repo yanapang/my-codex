@@ -13,6 +13,7 @@ import {
 import { readFile, writeFile, readdir, mkdir, unlink } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
+import { getBaseStateDir, getStateDir, getStatePath, validateSessionId } from './state-paths.js';
 
 const SUPPORTED_MODES = [
   'autopilot', 'ultrapilot', 'team', 'pipeline',
@@ -20,14 +21,6 @@ const SUPPORTED_MODES = [
 ] as const;
 
 type Mode = typeof SUPPORTED_MODES[number];
-
-function getStateDir(workingDirectory?: string): string {
-  return join(workingDirectory || process.cwd(), '.omx', 'state');
-}
-
-function getStatePath(mode: string, workingDirectory?: string): string {
-  return join(getStateDir(workingDirectory), `${mode}-state.json`);
-}
 
 const server = new Server(
   { name: 'omx-state', version: '0.1.0' },
@@ -44,6 +37,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           mode: { type: 'string', enum: [...SUPPORTED_MODES], description: 'The mode to read state for' },
           workingDirectory: { type: 'string', description: 'Working directory override' },
+          session_id: { type: 'string', description: 'Optional session scope ID' },
         },
         required: ['mode'],
       },
@@ -65,6 +59,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           error: { type: 'string' },
           state: { type: 'object', description: 'Additional custom fields' },
           workingDirectory: { type: 'string' },
+          session_id: { type: 'string', description: 'Optional session scope ID' },
         },
         required: ['mode'],
       },
@@ -77,6 +72,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           mode: { type: 'string', enum: [...SUPPORTED_MODES] },
           workingDirectory: { type: 'string' },
+          session_id: { type: 'string', description: 'Optional session scope ID' },
+          all_sessions: { type: 'boolean', description: 'Clear matching mode in global and all session scopes' },
         },
         required: ['mode'],
       },
@@ -88,6 +85,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: 'object',
         properties: {
           workingDirectory: { type: 'string' },
+          session_id: { type: 'string', description: 'Optional session scope ID' },
         },
       },
     },
@@ -99,6 +97,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           mode: { type: 'string', enum: [...SUPPORTED_MODES] },
           workingDirectory: { type: 'string' },
+          session_id: { type: 'string', description: 'Optional session scope ID' },
         },
       },
     },
@@ -108,11 +107,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
   const wd = (args as Record<string, unknown>)?.workingDirectory as string | undefined;
+  let sessionId: string | undefined;
+  try {
+    sessionId = validateSessionId((args as Record<string, unknown>)?.session_id);
+  } catch (error) {
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ error: (error as Error).message }) }],
+      isError: true,
+    };
+  }
 
   switch (name) {
     case 'state_read': {
       const mode = (args as Record<string, unknown>).mode as string;
-      const path = getStatePath(mode, wd);
+      const path = getStatePath(mode, wd, sessionId);
       if (!existsSync(path)) {
         return { content: [{ type: 'text', text: JSON.stringify({ exists: false, mode }) }] };
       }
@@ -122,9 +130,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case 'state_write': {
       const mode = (args as Record<string, unknown>).mode as string;
-      const stateDir = getStateDir(wd);
+      const stateDir = getStateDir(wd, sessionId);
       await mkdir(stateDir, { recursive: true });
-      const path = getStatePath(mode, wd);
+      const path = getStatePath(mode, wd, sessionId);
 
       let existing: Record<string, unknown> = {};
       if (existsSync(path)) {
@@ -133,7 +141,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         } catch { /* start fresh */ }
       }
 
-      const { mode: _m, workingDirectory: _w, state: customState, ...fields } = args as Record<string, unknown>;
+      const {
+        mode: _m,
+        workingDirectory: _w,
+        session_id: _sid,
+        state: customState,
+        ...fields
+      } = args as Record<string, unknown>;
       const merged = { ...existing, ...fields, ...(customState as Record<string, unknown> || {}) };
       await writeFile(path, JSON.stringify(merged, null, 2));
       return { content: [{ type: 'text', text: JSON.stringify({ success: true, mode, path }) }] };
@@ -141,15 +155,52 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case 'state_clear': {
       const mode = (args as Record<string, unknown>).mode as string;
-      const path = getStatePath(mode, wd);
-      if (existsSync(path)) {
-        await unlink(path);
+      const allSessions = (args as Record<string, unknown>).all_sessions === true;
+
+      if (!allSessions) {
+        const path = getStatePath(mode, wd, sessionId);
+        if (existsSync(path)) {
+          await unlink(path);
+        }
+        return { content: [{ type: 'text', text: JSON.stringify({ cleared: true, mode, path }) }] };
       }
-      return { content: [{ type: 'text', text: JSON.stringify({ cleared: true, mode }) }] };
+
+      const removedPaths: string[] = [];
+
+      const globalPath = getStatePath(mode, wd);
+      if (existsSync(globalPath)) {
+        await unlink(globalPath);
+        removedPaths.push(globalPath);
+      }
+
+      const sessionsRoot = join(getBaseStateDir(wd), 'sessions');
+      if (existsSync(sessionsRoot)) {
+        const sessionDirs = await readdir(sessionsRoot);
+        for (const dirName of sessionDirs) {
+          const scopedPath = getStatePath(mode, wd, dirName);
+          if (!existsSync(scopedPath)) continue;
+          await unlink(scopedPath);
+          removedPaths.push(scopedPath);
+        }
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            cleared: true,
+            mode,
+            all_sessions: true,
+            removed: removedPaths.length,
+            paths: removedPaths,
+            warning: 'all_sessions clears global and session-scoped state files',
+          }),
+        }],
+      };
     }
 
     case 'state_list_active': {
-      const stateDir = getStateDir(wd);
+      const stateDir = getStateDir(wd, sessionId);
       const active: string[] = [];
       if (existsSync(stateDir)) {
         const files = await readdir(stateDir);
@@ -168,7 +219,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case 'state_get_status': {
       const mode = (args as Record<string, unknown>)?.mode as string | undefined;
-      const stateDir = getStateDir(wd);
+      const stateDir = getStateDir(wd, sessionId);
       const statuses: Record<string, unknown> = {};
 
       if (!existsSync(stateDir)) {
