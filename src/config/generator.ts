@@ -19,37 +19,39 @@ function getOmxConfigBlock(pkgRoot: string): string {
   const memoryServerPath = join(pkgRoot, 'dist', 'mcp', 'memory-server.js');
   const notifyHookPath = join(pkgRoot, 'scripts', 'notify-hook.js');
 
-  return `
-# ============================================================
-# oh-my-codex (OMX) Configuration
-# Managed by omx setup - manual edits preserved on next setup
-# ============================================================
-
-# OMX Developer Instructions
-# developer_instructions = "You have oh-my-codex installed. Use /architect, /executor, /planner as slash commands for specialized agent roles. Skills are available via /skills."
-
-# Notification hook - fires after each agent turn
-# notify = ["node", "${notifyHookPath}"]
-
-# Feature flags for sub-agent orchestration
-[features]
-collab = true
-child_agents_md = true
-
-# OMX State Management MCP Server
-[mcp_servers.omx_state]
-command = "node"
-args = ["${stateServerPath}"]
-enabled = true
-startup_timeout_sec = 5
-
-# OMX Project Memory MCP Server
-[mcp_servers.omx_memory]
-command = "node"
-args = ["${memoryServerPath}"]
-enabled = true
-startup_timeout_sec = 5
-`;
+  return [
+    '',
+    '# ============================================================',
+    '# oh-my-codex (OMX) Configuration',
+    '# Managed by omx setup - manual edits preserved on next setup',
+    '# ============================================================',
+    '',
+    '# OMX Developer Instructions',
+    `developer_instructions = "You have oh-my-codex installed. Use /prompts:architect, /prompts:executor, /prompts:planner for specialized agent roles. Workflow skills: /prompts:ralph, /prompts:autopilot, /prompts:plan. AGENTS.md is your orchestration brain."`,
+    '',
+    '# Notification hook - fires after each agent turn',
+    `notify = ["node", "${notifyHookPath}"]`,
+    '',
+    '# Feature flags for sub-agent orchestration',
+    '[features]',
+    'collab = true',
+    'child_agents_md = true',
+    '',
+    '# OMX State Management MCP Server',
+    '[mcp_servers.omx_state]',
+    'command = "node"',
+    `args = ["${stateServerPath}"]`,
+    'enabled = true',
+    'startup_timeout_sec = 5',
+    '',
+    '# OMX Project Memory MCP Server',
+    '[mcp_servers.omx_memory]',
+    'command = "node"',
+    `args = ["${memoryServerPath}"]`,
+    'enabled = true',
+    'startup_timeout_sec = 5',
+    '',
+  ].join('\n');
 }
 
 /**
