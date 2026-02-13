@@ -65,19 +65,32 @@ export async function hudCommand(args: string[]): Promise<void> {
     return;
   }
 
-  // Watch mode: clear + render every 1s
+  // Watch mode: overwrite in-place (no flicker)
+  let firstRender = true;
   const render = async () => {
-    process.stdout.write('\x1b[2J\x1b[H'); // Clear screen + move cursor to top
-    await renderOnce(cwd, flags);
+    if (firstRender) {
+      process.stdout.write('\x1b[2J\x1b[H'); // Clear screen on first render only
+      firstRender = false;
+    } else {
+      process.stdout.write('\x1b[H'); // Move cursor to top-left (no clear)
+    }
+    const [ctx, config] = await Promise.all([
+      readAllState(cwd),
+      readHudConfig(cwd),
+    ]);
+    const preset = flags.preset ?? config.preset;
+    const line = renderHud(ctx, preset);
+    process.stdout.write(line + '\x1b[K\n\x1b[J'); // Write line, clear rest of line + below
   };
 
+  process.stdout.write('\x1b[?25l'); // Hide cursor
   await render();
   const interval = setInterval(render, 1000);
 
   // Graceful exit on Ctrl+C
   process.on('SIGINT', () => {
     clearInterval(interval);
-    process.stdout.write('\x1b[2J\x1b[H');
+    process.stdout.write('\x1b[?25h\x1b[2J\x1b[H'); // Show cursor + clear
     process.exit(0);
   });
 
