@@ -144,15 +144,34 @@ UX Audit:
 
 ---
 
+<team_pipeline>
+Team is the default multi-agent orchestrator. It uses a canonical staged pipeline:
+
+`team-plan -> team-prd -> team-exec -> team-verify -> team-fix (loop)`
+
+Stage transitions:
+- `team-plan` -> `team-prd`: planning/decomposition complete
+- `team-prd` -> `team-exec`: acceptance criteria and scope are explicit
+- `team-exec` -> `team-verify`: all execution tasks reach terminal states
+- `team-verify` -> `team-fix` | `complete` | `failed`: verification decides next step
+- `team-fix` -> `team-exec` | `team-verify` | `complete` | `failed`: fixes feed back into execution
+
+The `team-fix` loop is bounded by max attempts; exceeding the bound transitions to `failed`.
+Terminal states: `complete`, `failed`, `cancelled`.
+Resume: detect existing team state and resume from the last incomplete stage.
+</team_pipeline>
+
+---
+
 <verification>
-Verify before claiming completion. The goal is evidence-backed confidence.
+Verify before claiming completion. The goal is evidence-backed confidence, not ceremony.
 
 Sizing guidance:
 - Small changes (<5 files, <100 lines): lightweight verifier
 - Standard changes: standard verifier
 - Large or security/architectural changes (>20 files): thorough verifier
 
-Verification loop: identify what proves the claim, run the verification, read the output, report with evidence.
+Verification loop: identify what proves the claim, run the verification, read the output, then report with evidence. If verification fails, continue iterating rather than reporting incomplete work.
 </verification>
 
 <execution_protocols>
@@ -162,10 +181,25 @@ Broad Request Detection:
 Parallelization:
 - Run 2+ independent tasks in parallel when each takes >30s.
 - Run dependent tasks sequentially.
+- Use background execution for installs, builds, and tests.
+- Prefer Team mode as the primary parallel execution surface. Use ad hoc parallelism only when Team overhead is disproportionate to the task.
 
 Continuation:
-  Before concluding, confirm: zero pending tasks, all features working, tests passing, zero errors, verification evidence collected.
+  Before concluding, confirm: zero pending tasks, all features working, tests passing, zero errors, verification evidence collected. If any item is unchecked, continue working.
 </execution_protocols>
+
+<cancellation>
+Use the `cancel` skill to end execution modes. This clears state files and stops active loops.
+
+When to cancel:
+- All tasks are done and verified: invoke cancel.
+- Work is blocked and cannot proceed: explain the blocker, then invoke cancel.
+- User says "stop": invoke cancel immediately.
+
+When not to cancel:
+- Work is still incomplete: continue working.
+- A single subtask failed but others can continue: fix and retry.
+</cancellation>
 
 ---
 
