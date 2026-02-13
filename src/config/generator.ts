@@ -20,6 +20,7 @@ function getOmxConfigBlock(pkgRoot: string): string {
   const codeIntelServerPath = join(pkgRoot, 'dist', 'mcp', 'code-intel-server.js');
   const traceServerPath = join(pkgRoot, 'dist', 'mcp', 'trace-server.js');
   const notifyHookPath = join(pkgRoot, 'scripts', 'notify-hook.js');
+  const notifyCommand = `node "${notifyHookPath}"`.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 
   return [
     '',
@@ -32,7 +33,7 @@ function getOmxConfigBlock(pkgRoot: string): string {
     `developer_instructions = "You have oh-my-codex installed. Use /prompts:architect, /prompts:executor, /prompts:planner for specialized agent roles. Workflow skills via $name: $ralph, $autopilot, $plan. AGENTS.md is your orchestration brain."`,
     '',
     '# Notification hook - fires after each agent turn',
-    `notify = ["node", "${notifyHookPath}"]`,
+    `notify = "${notifyCommand}"`,
     '',
     '# Feature flags for sub-agent orchestration',
     '[features]',
