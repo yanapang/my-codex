@@ -13,6 +13,7 @@ import {
 } from '../utils/paths.js';
 import { mergeConfig } from '../config/generator.js';
 import { getPackageRoot } from '../utils/package.js';
+import { readSessionState, isSessionStale } from '../hooks/session.js';
 
 interface SetupOptions {
   force?: boolean;
@@ -70,8 +71,17 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
   console.log('[5/7] Generating AGENTS.md...');
   const agentsMdSrc = join(pkgRoot, 'templates', 'AGENTS.md');
   const agentsMdDst = join(process.cwd(), 'AGENTS.md');
+
+  // Guard: refuse to overwrite AGENTS.md during active session
+  const activeSession = await readSessionState(process.cwd());
+  const sessionIsActive = activeSession && !isSessionStale(activeSession);
+
   if (existsSync(agentsMdSrc)) {
-    if (force || !existsSync(agentsMdDst)) {
+    if (sessionIsActive && force) {
+      console.log('  WARNING: Active omx session detected (pid ' + activeSession!.pid + ').');
+      console.log('  Skipping AGENTS.md overwrite to avoid corrupting runtime overlay.');
+      console.log('  Stop the active session first, then re-run setup --force.');
+    } else if (force || !existsSync(agentsMdDst)) {
       if (!dryRun) {
         const content = await readFile(agentsMdSrc, 'utf-8');
         await writeFile(agentsMdDst, content);

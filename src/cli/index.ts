@@ -3,11 +3,16 @@
  * Multi-agent orchestration for OpenAI Codex CLI
  */
 
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
+import { join } from 'path';
 import { setup } from './setup.js';
 import { doctor } from './doctor.js';
 import { version } from './version.js';
 import { hudCommand } from '../hud/index.js';
+import { generateOverlay, applyOverlay, stripOverlay } from '../hooks/agents-overlay.js';
+import {
+  readSessionState, isSessionStale, writeSessionStart, writeSessionEnd,
+} from '../hooks/session.js';
 
 const HELP = `
 oh-my-codex (omx) - Multi-agent orchestration for Codex CLI
@@ -100,7 +105,56 @@ async function showStatus(): Promise<void> {
 
 async function launchWithHud(args: string[]): Promise<void> {
   const cwd = process.cwd();
-  const omxBin = process.argv[1]; // path to bin/omx.js
+  const sessionId = `omx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  // ── Phase 1: preLaunch ──────────────────────────────────────────────────
+  try {
+    await preLaunch(cwd, sessionId);
+  } catch (err) {
+    // preLaunch errors must NOT prevent Codex from starting
+    console.error(`[omx] preLaunch warning: ${err instanceof Error ? err.message : err}`);
+  }
+
+  // ── Phase 2: run ────────────────────────────────────────────────────────
+  try {
+    runCodex(cwd, args);
+  } finally {
+    // ── Phase 3: postLaunch ─────────────────────────────────────────────
+    await postLaunch(cwd, sessionId);
+  }
+}
+
+/**
+ * preLaunch: Prepare environment before Codex starts.
+ * 1. Orphan cleanup (stale session from a crashed launch)
+ * 2. Generate + apply AGENTS.md overlay
+ * 3. Write session.json
+ */
+async function preLaunch(cwd: string, sessionId: string): Promise<void> {
+  // 1. Orphan cleanup
+  const existingSession = await readSessionState(cwd);
+  if (existingSession && isSessionStale(existingSession)) {
+    const agentsMdPath = join(cwd, 'AGENTS.md');
+    try { await stripOverlay(agentsMdPath, cwd); } catch { /* best effort */ }
+    const { unlink } = await import('fs/promises');
+    try { await unlink(join(cwd, '.omx', 'state', 'session.json')); } catch { /* best effort */ }
+  }
+
+  // 2. Generate + apply AGENTS.md overlay
+  const agentsMdPath = join(cwd, 'AGENTS.md');
+  const overlay = await generateOverlay(cwd, sessionId);
+  await applyOverlay(agentsMdPath, overlay, cwd);
+
+  // 3. Write session state
+  await writeSessionStart(cwd, sessionId);
+}
+
+/**
+ * runCodex: Launch Codex CLI (blocks until exit).
+ * All 3 paths (new tmux, existing tmux, no tmux) block via execSync/execFileSync.
+ */
+function runCodex(cwd: string, args: string[]): void {
+  const omxBin = process.argv[1];
   const codexArgs = args.length > 0 ? ' ' + args.join(' ') : '';
 
   if (process.env.TMUX) {
@@ -111,12 +165,11 @@ async function launchWithHud(args: string[]): Promise<void> {
     } catch {
       // HUD split failed, continue without it
     }
-    // Replace current process with codex
-    const { execFileSync } = await import('child_process');
+    // execFileSync imported at top level
     try {
       execFileSync('codex', args, { cwd, stdio: 'inherit' });
     } catch {
-      process.exit(0);
+      // Codex exited
     }
   } else {
     // Not in tmux: create a new tmux session with codex + HUD pane
@@ -133,13 +186,53 @@ async function launchWithHud(args: string[]): Promise<void> {
     } catch {
       // tmux not available, just run codex directly
       console.log('tmux not available, launching codex without HUD...');
-      const { execFileSync } = await import('child_process');
+      // execFileSync imported at top level
       try {
         execFileSync('codex', args, { cwd, stdio: 'inherit' });
       } catch {
-        process.exit(0);
+        // Codex exited
       }
     }
+  }
+}
+
+/**
+ * postLaunch: Clean up after Codex exits.
+ * Each step is independently fault-tolerant (try/catch per step).
+ */
+async function postLaunch(cwd: string, sessionId: string): Promise<void> {
+  // 1. Strip AGENTS.md overlay
+  try {
+    await stripOverlay(join(cwd, 'AGENTS.md'), cwd);
+  } catch (err) {
+    console.error(`[omx] postLaunch: overlay strip failed: ${err instanceof Error ? err.message : err}`);
+  }
+
+  // 2. Archive session (write history, delete session.json)
+  try {
+    await writeSessionEnd(cwd, sessionId);
+  } catch (err) {
+    console.error(`[omx] postLaunch: session archive failed: ${err instanceof Error ? err.message : err}`);
+  }
+
+  // 3. Cancel any still-active modes
+  try {
+    const { readdir, writeFile, readFile } = await import('fs/promises');
+    const stateDir = join(cwd, '.omx', 'state');
+    const files = await readdir(stateDir).catch(() => [] as string[]);
+    for (const file of files) {
+      if (!file.endsWith('-state.json') || file === 'session.json') continue;
+      const path = join(stateDir, file);
+      const content = await readFile(path, 'utf-8');
+      const state = JSON.parse(content);
+      if (state.active) {
+        state.active = false;
+        state.completed_at = new Date().toISOString();
+        await writeFile(path, JSON.stringify(state, null, 2));
+      }
+    }
+  } catch (err) {
+    console.error(`[omx] postLaunch: mode cleanup failed: ${err instanceof Error ? err.message : err}`);
   }
 }
 

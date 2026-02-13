@@ -44,9 +44,9 @@ export const HOOK_MAPPING: Record<HookEvent, {
   notes: string;
 }> = {
   SessionStart: {
-    mechanism: 'AGENTS.md native loading',
+    mechanism: 'AGENTS.md native loading + runtime overlay',
     capability: 'full',
-    notes: 'Codex CLI reads AGENTS.md at session start automatically',
+    notes: 'Codex CLI reads AGENTS.md at start; omx preLaunch injects dynamic overlay (modes, notepad, memory, compaction protocol)',
   },
   PreToolUse: {
     mechanism: 'AGENTS.md inline guidance',
@@ -74,19 +74,19 @@ export const HOOK_MAPPING: Record<HookEvent, {
     notes: 'Native sub-agent lifecycle tracking via collab feature',
   },
   PreCompact: {
-    mechanism: 'Not available',
-    capability: 'none',
-    notes: 'Codex CLI manages context compaction internally',
+    mechanism: 'AGENTS.md overlay compaction protocol',
+    capability: 'partial',
+    notes: 'Overlay includes compaction survival instructions; no event interception but model is instructed to checkpoint state',
   },
   Stop: {
-    mechanism: 'notify config',
-    capability: 'partial',
-    notes: 'notify fires on agent-turn-complete, can detect session end',
+    mechanism: 'notify config + postLaunch cleanup',
+    capability: 'full',
+    notes: 'notify fires on agent-turn-complete; postLaunch strips overlay and archives session on exit',
   },
   SessionEnd: {
-    mechanism: 'Not directly available',
-    capability: 'none',
-    notes: 'No session-end hook; notify on last turn is closest approximation',
+    mechanism: 'omx postLaunch lifecycle phase',
+    capability: 'partial',
+    notes: 'postLaunch runs after Codex exits: strips overlay, archives session, cancels active modes',
   },
 };
 
