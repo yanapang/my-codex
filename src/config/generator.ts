@@ -11,6 +11,25 @@ interface MergeOptions {
   verbose?: boolean;
 }
 
+function selectNotifyFormat(): 'string' | 'array' {
+  const forced = (process.env.OMX_NOTIFY_FORMAT || '').trim().toLowerCase();
+  if (forced === 'string' || forced === 'array') return forced;
+  // Default to string for compatibility with environments expecting TOML string.
+  // Array format is available with OMX_NOTIFY_FORMAT=array.
+  return 'string';
+}
+
+function getNotifyConfigLine(notifyHookPath: string): string {
+  const format = selectNotifyFormat();
+  const notifyCommand = `node "${notifyHookPath}"`
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"');
+  if (format === 'array') {
+    return `notify = ["node", "${notifyHookPath}"]`;
+  }
+  return `notify = "${notifyCommand}"`;
+}
+
 /**
  * OMX config entries to merge into config.toml
  */
@@ -20,7 +39,6 @@ function getOmxConfigBlock(pkgRoot: string): string {
   const codeIntelServerPath = join(pkgRoot, 'dist', 'mcp', 'code-intel-server.js');
   const traceServerPath = join(pkgRoot, 'dist', 'mcp', 'trace-server.js');
   const notifyHookPath = join(pkgRoot, 'scripts', 'notify-hook.js');
-  const notifyCommand = `node "${notifyHookPath}"`.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 
   return [
     '',
@@ -33,7 +51,7 @@ function getOmxConfigBlock(pkgRoot: string): string {
     `developer_instructions = "You have oh-my-codex installed. Use /prompts:architect, /prompts:executor, /prompts:planner for specialized agent roles. Workflow skills via $name: $ralph, $autopilot, $plan. AGENTS.md is your orchestration brain."`,
     '',
     '# Notification hook - fires after each agent turn',
-    `notify = "${notifyCommand}"`,
+    getNotifyConfigLine(notifyHookPath),
     '',
     '# Feature flags for sub-agent orchestration',
     '[features]',

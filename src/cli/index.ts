@@ -3,8 +3,9 @@
  * Multi-agent orchestration for OpenAI Codex CLI
  */
 
-import { execSync, execFileSync } from 'child_process';
+import { execSync, execFileSync, spawn } from 'child_process';
 import { basename, join } from 'path';
+import { existsSync } from 'fs';
 import { setup } from './setup.js';
 import { doctor } from './doctor.js';
 import { version } from './version.js';
@@ -16,6 +17,7 @@ import { generateOverlay, applyOverlay, stripOverlay } from '../hooks/agents-ove
 import {
   readSessionState, isSessionStale, writeSessionStart, writeSessionEnd, resetSessionMetrics,
 } from '../hooks/session.js';
+import { getPackageRoot } from '../utils/package.js';
 
 const HELP = `
 oh-my-codex (omx) - Multi-agent orchestration for Codex CLI
@@ -25,7 +27,7 @@ Usage:
   omx setup     Install skills, prompts, MCP servers, and AGENTS.md
   omx doctor    Check installation health
   omx version   Show version information
-  omx tmux-hook Manage tmux prompt injection workaround (init|status|validate)
+  omx tmux-hook Manage tmux prompt injection workaround (init|status|validate|test)
   omx hud       Show HUD statusline (--watch, --json, --preset=NAME)
   omx help      Show this help message
   omx status    Show active modes and state
@@ -216,6 +218,13 @@ async function preLaunch(cwd: string, sessionId: string): Promise<void> {
   // 3. Write session state
   await resetSessionMetrics(cwd);
   await writeSessionStart(cwd, sessionId);
+
+  // 4. Start notify fallback watcher (best effort)
+  try {
+    await startNotifyFallbackWatcher(cwd);
+  } catch {
+    // Non-fatal
+  }
 }
 
 /**
@@ -270,6 +279,20 @@ function runCodex(cwd: string, args: string[]): void {
  * Each step is independently fault-tolerant (try/catch per step).
  */
 async function postLaunch(cwd: string, sessionId: string): Promise<void> {
+  // 0. Flush fallback watcher once to reduce race with fast codex exit.
+  try {
+    await flushNotifyFallbackOnce(cwd);
+  } catch {
+    // Non-fatal
+  }
+
+  // 0. Stop notify fallback watcher first.
+  try {
+    await stopNotifyFallbackWatcher(cwd);
+  } catch {
+    // Non-fatal
+  }
+
   // 1. Strip AGENTS.md overlay
   try {
     await stripOverlay(join(cwd, 'AGENTS.md'), cwd);
@@ -305,6 +328,80 @@ async function postLaunch(cwd: string, sessionId: string): Promise<void> {
   } catch (err) {
     console.error(`[omx] postLaunch: mode cleanup failed: ${err instanceof Error ? err.message : err}`);
   }
+}
+
+function notifyFallbackPidPath(cwd: string): string {
+  return join(cwd, '.omx', 'state', 'notify-fallback.pid');
+}
+
+async function startNotifyFallbackWatcher(cwd: string): Promise<void> {
+  if (process.env.OMX_NOTIFY_FALLBACK === '0') return;
+
+  const { mkdir, writeFile, readFile } = await import('fs/promises');
+  const pidPath = notifyFallbackPidPath(cwd);
+  const pkgRoot = getPackageRoot();
+  const watcherScript = join(pkgRoot, 'scripts', 'notify-fallback-watcher.js');
+  const notifyScript = join(pkgRoot, 'scripts', 'notify-hook.js');
+  if (!existsSync(watcherScript) || !existsSync(notifyScript)) return;
+
+  // Stop stale watcher from a previous run.
+  if (existsSync(pidPath)) {
+    try {
+      const prev = JSON.parse(await readFile(pidPath, 'utf-8')) as { pid?: number };
+      if (prev && typeof prev.pid === 'number') {
+        process.kill(prev.pid, 'SIGTERM');
+      }
+    } catch {
+      // Ignore stale PID parse/kill errors.
+    }
+  }
+
+  await mkdir(join(cwd, '.omx', 'state'), { recursive: true }).catch(() => {});
+  const child = spawn(
+    process.execPath,
+    [watcherScript, '--cwd', cwd, '--notify-script', notifyScript],
+    {
+      cwd,
+      detached: true,
+      stdio: 'ignore',
+    }
+  );
+  child.unref();
+
+  await writeFile(
+    pidPath,
+    JSON.stringify({ pid: child.pid, started_at: new Date().toISOString() }, null, 2)
+  ).catch(() => {});
+}
+
+async function stopNotifyFallbackWatcher(cwd: string): Promise<void> {
+  const { readFile, unlink } = await import('fs/promises');
+  const pidPath = notifyFallbackPidPath(cwd);
+  if (!existsSync(pidPath)) return;
+
+  try {
+    const parsed = JSON.parse(await readFile(pidPath, 'utf-8')) as { pid?: number };
+    if (parsed && typeof parsed.pid === 'number') {
+      process.kill(parsed.pid, 'SIGTERM');
+    }
+  } catch {
+    // Ignore stop errors.
+  }
+
+  await unlink(pidPath).catch(() => {});
+}
+
+async function flushNotifyFallbackOnce(cwd: string): Promise<void> {
+  const { spawnSync } = await import('child_process');
+  const pkgRoot = getPackageRoot();
+  const watcherScript = join(pkgRoot, 'scripts', 'notify-fallback-watcher.js');
+  const notifyScript = join(pkgRoot, 'scripts', 'notify-hook.js');
+  if (!existsSync(watcherScript) || !existsSync(notifyScript)) return;
+  spawnSync(process.execPath, [watcherScript, '--once', '--cwd', cwd, '--notify-script', notifyScript], {
+    cwd,
+    stdio: 'ignore',
+    timeout: 3000,
+  });
 }
 
 async function cancelModes(): Promise<void> {

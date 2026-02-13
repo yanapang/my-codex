@@ -205,7 +205,7 @@ omx --yolo    # Launch Codex with low-friction execution flags
 omx --madmax  # Launch Codex with full approval+sandbox bypass (dangerous)
 omx setup     # Install and configure OMX
 omx doctor    # Run 9 installation health checks
-omx tmux-hook # Manage tmux prompt-injection workaround (init/status/validate)
+omx tmux-hook # Manage tmux prompt-injection workaround (init/status/validate/test)
 omx status    # Show active mode state
 omx cancel    # Cancel active execution modes
 omx hud       # Show HUD statusline (--watch, --json, --preset=NAME)
@@ -251,9 +251,19 @@ Validate tmux target:
 omx tmux-hook validate
 ```
 
+Run an end-to-end synthetic hook turn:
+
+```bash
+omx tmux-hook test
+```
+
 Config file: `.omx/tmux-hook.json`  
 Runtime state: `.omx/state/tmux-hook-state.json`  
 Structured logs: `.omx/logs/tmux-hook-YYYY-MM-DD.jsonl`
+
+Compatibility note:
+- OMX writes `notify` as a TOML array by default.
+- Override with `OMX_NOTIFY_FORMAT=string` before `omx setup` for environments that require string notify syntax.
 
 ## Setup Details
 

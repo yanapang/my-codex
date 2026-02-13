@@ -190,6 +190,30 @@ function normalizeTmuxState(raw) {
   };
 }
 
+function normalizeNotifyState(raw) {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      recent_turns: {},
+      last_event_at: '',
+    };
+  }
+  return {
+    recent_turns: raw.recent_turns && typeof raw.recent_turns === 'object' ? raw.recent_turns : {},
+    last_event_at: safeString(raw.last_event_at),
+  };
+}
+
+function pruneRecentTurns(recentTurns, now) {
+  const pruned = {};
+  const minTs = now - (24 * 60 * 60 * 1000);
+  const entries = Object.entries(recentTurns || {}).slice(-2000);
+  for (const [key, value] of entries) {
+    const ts = asNumber(value);
+    if (ts !== null && ts >= minTs) pruned[key] = ts;
+  }
+  return pruned;
+}
+
 function pruneRecentKeys(recentKeys, now) {
   const pruned = {};
   const minTs = now - (24 * 60 * 60 * 1000);
@@ -517,6 +541,29 @@ async function main() {
   // Ensure directories exist
   await mkdir(logsDir, { recursive: true }).catch(() => {});
   await mkdir(stateDir, { recursive: true }).catch(() => {});
+
+  // Turn-level dedupe prevents double-processing when native notify and fallback
+  // watcher both emit the same completed turn.
+  try {
+    const turnId = safeString(payload['turn-id'] || payload.turn_id || '');
+    if (turnId) {
+      const now = Date.now();
+      const threadId = safeString(payload['thread-id'] || payload.thread_id || '');
+      const eventType = safeString(payload.type || 'agent-turn-complete');
+      const key = `${threadId || 'no-thread'}|${turnId}|${eventType}`;
+      const dedupeStatePath = join(stateDir, 'notify-hook-state.json');
+      const dedupeState = normalizeNotifyState(await readJsonIfExists(dedupeStatePath, null));
+      dedupeState.recent_turns = pruneRecentTurns(dedupeState.recent_turns, now);
+      if (dedupeState.recent_turns[key]) {
+        process.exit(0);
+      }
+      dedupeState.recent_turns[key] = now;
+      dedupeState.last_event_at = new Date().toISOString();
+      await writeFile(dedupeStatePath, JSON.stringify(dedupeState, null, 2)).catch(() => {});
+    }
+  } catch {
+    // Non-critical
+  }
 
   // 1. Log the turn
   const logEntry = {
