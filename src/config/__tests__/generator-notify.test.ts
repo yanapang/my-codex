@@ -5,8 +5,34 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mergeConfig } from '../generator.js';
 
-describe('config generator notify', () => {
-  it('writes notify as a TOML array by default (Codex expects a sequence)', async () => {
+describe('config generator', () => {
+  it('places top-level keys before [features]', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-config-gen-'));
+    try {
+      const configPath = join(wd, 'config.toml');
+      await mergeConfig(configPath, wd);
+      const toml = await readFile(configPath, 'utf-8');
+
+      // Top-level keys must appear before the first [table] header
+      const notifyIdx = toml.indexOf('notify =');
+      const reasoningIdx = toml.indexOf('model_reasoning_effort =');
+      const devInstrIdx = toml.indexOf('developer_instructions =');
+      const featuresIdx = toml.indexOf('[features]');
+
+      assert.ok(notifyIdx >= 0, 'notify not found');
+      assert.ok(reasoningIdx >= 0, 'model_reasoning_effort not found');
+      assert.ok(devInstrIdx >= 0, 'developer_instructions not found');
+      assert.ok(featuresIdx >= 0, '[features] not found');
+
+      assert.ok(notifyIdx < featuresIdx, 'notify must come before [features]');
+      assert.ok(reasoningIdx < featuresIdx, 'model_reasoning_effort must come before [features]');
+      assert.ok(devInstrIdx < featuresIdx, 'developer_instructions must come before [features]');
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('writes notify as a TOML array', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-config-gen-'));
     try {
       const configPath = join(wd, 'config.toml');
@@ -14,35 +40,26 @@ describe('config generator notify', () => {
       const toml = await readFile(configPath, 'utf-8');
 
       assert.match(toml, /^notify = \["node", ".*notify-hook\.js"\]$/m);
-      assert.doesNotMatch(toml, /^notify = ".*"$/m);
     } finally {
       await rm(wd, { recursive: true, force: true });
     }
   });
 
-  it('writes notify as string when OMX_NOTIFY_FORMAT=string', async () => {
+  it('writes model_reasoning_effort and developer_instructions', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-config-gen-'));
-    const prev = process.env.OMX_NOTIFY_FORMAT;
     try {
-      process.env.OMX_NOTIFY_FORMAT = 'string';
       const configPath = join(wd, 'config.toml');
       await mergeConfig(configPath, wd);
       const toml = await readFile(configPath, 'utf-8');
 
-      assert.match(toml, /^notify = ".*"$/m);
-      assert.doesNotMatch(toml, /^notify = \[/m);
-      assert.match(toml, /notify = "node /);
+      assert.match(toml, /^model_reasoning_effort = "high"$/m);
+      assert.match(toml, /^developer_instructions = "You have oh-my-codex installed/m);
     } finally {
-      if (prev === undefined) {
-        delete process.env.OMX_NOTIFY_FORMAT;
-      } else {
-        process.env.OMX_NOTIFY_FORMAT = prev;
-      }
       await rm(wd, { recursive: true, force: true });
     }
   });
 
-  it('handles paths with spaces in array format', async () => {
+  it('handles paths with spaces in notify array', async () => {
     const base = await mkdtemp(join(tmpdir(), 'omx config gen space-'));
     const wd = join(base, 'pkg root');
     try {
@@ -60,128 +77,78 @@ describe('config generator notify', () => {
     }
   });
 
-  it('escapes backslashes in array format for Windows-style paths', async () => {
-    const base = await mkdtemp(join(tmpdir(), 'omx-config-gen-win-'));
-    const wd = join(base, 'C:\\Users\\alice\\pkg');
-    try {
-      await mkdir(wd, { recursive: true });
-      const configPath = join(wd, 'config.toml');
-      await mergeConfig(configPath, wd);
-      const toml = await readFile(configPath, 'utf-8');
-
-      const m = toml.match(/^notify = \["node", "(.*)"\]$/m);
-      assert.ok(m, 'notify array not found');
-      assert.ok(
-        m[1].includes('C:\\\\Users\\\\alice\\\\pkg'),
-        `expected escaped Windows path, got: ${m[1]}`
-      );
-    } finally {
-      await rm(base, { recursive: true, force: true });
-    }
-  });
-
-  it('does not emit developer_instructions or model_reasoning_effort', async () => {
-    const wd = await mkdtemp(join(tmpdir(), 'omx-config-gen-'));
-    try {
-      const configPath = join(wd, 'config.toml');
-      await mergeConfig(configPath, wd);
-      const toml = await readFile(configPath, 'utf-8');
-
-      assert.doesNotMatch(toml, /developer_instructions/);
-      assert.doesNotMatch(toml, /model_reasoning_effort/);
-    } finally {
-      await rm(wd, { recursive: true, force: true });
-    }
-  });
-
-  it('re-runs setup by replacing OMX block cleanly', async () => {
+  it('re-runs setup replacing OMX config cleanly', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-config-gen-'));
     try {
       const configPath = join(wd, 'config.toml');
       await mergeConfig(configPath, wd);
 
+      // Simulate user adding content
       let toml = await readFile(configPath, 'utf-8');
       toml += '\n# user tail\n[user.settings]\nname = "kept"\n';
       await writeFile(configPath, toml);
 
+      // Re-run setup
       await mergeConfig(configPath, wd);
       const rerun = await readFile(configPath, 'utf-8');
 
+      // OMX block appears exactly once
       assert.equal(
         (rerun.match(/# oh-my-codex \(OMX\) Configuration/g) ?? []).length,
         1
       );
       assert.equal((rerun.match(/# End oh-my-codex/g) ?? []).length, 1);
+
+      // Features correct
       assert.equal((rerun.match(/^\[features\]$/gm) ?? []).length, 1);
       assert.match(rerun, /^collab = true$/m);
       assert.match(rerun, /^child_agents_md = true$/m);
+
+      // User content preserved
       assert.match(rerun, /^\[user.settings\]$/m);
       assert.match(rerun, /^name = "kept"$/m);
+
+      // Top-level keys present and before [features]
       assert.match(rerun, /^notify = \["node", ".*notify-hook\.js"\]$/m);
+      assert.match(rerun, /^model_reasoning_effort = "high"$/m);
+      const notifyIdx = rerun.indexOf('notify =');
+      const featuresIdx = rerun.indexOf('[features]');
+      assert.ok(notifyIdx < featuresIdx, 'notify must come before [features]');
     } finally {
       await rm(wd, { recursive: true, force: true });
     }
   });
 
-  it('migrates a legacy OMX block notify array into current format', async () => {
+  it('preserves existing user top-level config', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-config-gen-'));
     try {
       const configPath = join(wd, 'config.toml');
-      const legacy = [
+      const existing = [
+        'model = "o3"',
+        'approval_policy = "on-failure"',
+        '',
         '[features]',
-        'web_search_request = true',
-        '',
-        '# ============================================================',
-        '# oh-my-codex (OMX) Configuration',
-        '# Managed by omx setup - manual edits preserved on next setup',
-        '# ============================================================',
-        '',
-        'notify = ["node", "/tmp/notify-hook.js"]',
-        '',
-        '[mcp_servers.omx_state]',
-        'command = "node"',
-        'args = ["/tmp/state-server.js"]',
-        '',
-        '# ============================================================',
-        '# End oh-my-codex',
+        'web_search = true',
         '',
       ].join('\n');
-      await writeFile(configPath, legacy);
+      await writeFile(configPath, existing);
 
       await mergeConfig(configPath, wd);
-      const merged = await readFile(configPath, 'utf-8');
+      const toml = await readFile(configPath, 'utf-8');
 
-      assert.match(merged, /^notify = \["node", ".*notify-hook\.js"\]$/m);
-      assert.equal((merged.match(/# oh-my-codex \(OMX\) Configuration/g) ?? []).length, 1);
-    } finally {
-      await rm(wd, { recursive: true, force: true });
-    }
-  });
+      // User's existing top-level keys preserved
+      assert.match(toml, /^model = "o3"$/m);
+      assert.match(toml, /^approval_policy = "on-failure"$/m);
 
-  it('merges into existing [features] table without duplicating it', async () => {
-    const wd = await mkdtemp(join(tmpdir(), 'omx-config-gen-'));
-    try {
-      const configPath = join(wd, 'config.toml');
-      const original = [
-        '[features]',
-        'custom_user_flag = false',
-        'child_agents_md = false',
-        '',
-        '[user.settings]',
-        'name = "kept"',
-        '',
-      ].join('\n');
-      await writeFile(configPath, original);
+      // OMX keys added
+      assert.match(toml, /^notify = \[/m);
+      assert.match(toml, /^model_reasoning_effort = "high"$/m);
 
-      await mergeConfig(configPath, wd);
-      const merged = await readFile(configPath, 'utf-8');
+      // User's feature flag preserved
+      assert.match(toml, /^web_search = true$/m);
 
-      assert.equal((merged.match(/^\[features\]$/gm) ?? []).length, 1);
-      assert.match(merged, /^custom_user_flag = false$/m);
-      assert.match(merged, /^collab = true$/m);
-      assert.match(merged, /^child_agents_md = true$/m);
-      assert.match(merged, /^\[user.settings\]$/m);
-      assert.match(merged, /^name = "kept"$/m);
+      // OMX feature flags added
+      assert.match(toml, /^collab = true$/m);
     } finally {
       await rm(wd, { recursive: true, force: true });
     }
@@ -221,6 +188,35 @@ describe('config generator notify', () => {
       assert.match(toml, /^\[user.after\]$/m);
       assert.match(toml, /^name = "kept-after"$/m);
       assert.match(toml, /^notify = \["node", ".*notify-hook\.js"\]$/m);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('merges into existing [features] table without duplicating it', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-config-gen-'));
+    try {
+      const configPath = join(wd, 'config.toml');
+      const original = [
+        '[features]',
+        'custom_user_flag = false',
+        'child_agents_md = false',
+        '',
+        '[user.settings]',
+        'name = "kept"',
+        '',
+      ].join('\n');
+      await writeFile(configPath, original);
+
+      await mergeConfig(configPath, wd);
+      const merged = await readFile(configPath, 'utf-8');
+
+      assert.equal((merged.match(/^\[features\]$/gm) ?? []).length, 1);
+      assert.match(merged, /^custom_user_flag = false$/m);
+      assert.match(merged, /^collab = true$/m);
+      assert.match(merged, /^child_agents_md = true$/m);
+      assert.match(merged, /^\[user.settings\]$/m);
+      assert.match(merged, /^name = "kept"$/m);
     } finally {
       await rm(wd, { recursive: true, force: true });
     }

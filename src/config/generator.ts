@@ -1,6 +1,13 @@
 /**
  * Config.toml generator/merger for oh-my-codex
  * Merges OMX MCP server entries and feature flags into existing config.toml
+ *
+ * TOML structure reminder: bare key=value pairs after a [table] header belong
+ * to that table.  Top-level (root-table) keys MUST appear before the first
+ * [table] header.  This generator therefore splits its output into:
+ *   1. Top-level keys  (notify, model_reasoning_effort, developer_instructions)
+ *   2. [features] flags
+ *   3. [table] sections (mcp_servers, tui)
  */
 
 import { readFile, writeFile } from 'fs/promises';
@@ -10,6 +17,64 @@ import { join } from 'path';
 interface MergeOptions {
   verbose?: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// Top-level OMX keys (must live before any [table] header)
+// ---------------------------------------------------------------------------
+
+/** Keys we own at the TOML root level. Used for upsert + strip. */
+const OMX_TOP_LEVEL_KEYS = [
+  'notify',
+  'model_reasoning_effort',
+  'developer_instructions',
+] as const;
+
+function getOmxTopLevelLines(pkgRoot: string): string[] {
+  const notifyHookPath = join(pkgRoot, 'scripts', 'notify-hook.js');
+  const escapedPath = notifyHookPath
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"');
+
+  return [
+    '# oh-my-codex top-level settings (must be before any [table])',
+    `notify = ["node", "${escapedPath}"]`,
+    'model_reasoning_effort = "high"',
+    `developer_instructions = "You have oh-my-codex installed. Use /prompts:architect, /prompts:executor, /prompts:planner for specialized agent roles. Workflow skills via $name: $ralph, $autopilot, $plan. AGENTS.md is your orchestration brain."`,
+  ];
+}
+
+/**
+ * Remove any existing OMX-owned top-level keys so we can re-insert them
+ * cleanly.  Also removes the comment line that precedes them.
+ */
+function stripOmxTopLevelKeys(config: string): string {
+  let lines = config.split(/\r?\n/);
+
+  // Remove the OMX top-level comment line
+  lines = lines.filter((l) => l.trim() !== '# oh-my-codex top-level settings (must be before any [table])');
+
+  // Remove lines matching OMX-owned keys (only in root scope, i.e. before
+  // the first [table] header).
+  const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
+  const boundary = firstTable >= 0 ? firstTable : lines.length;
+
+  const result: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (i < boundary) {
+      const isOmxKey = OMX_TOP_LEVEL_KEYS.some((k) =>
+        new RegExp(`^\\s*${k}\\s*=`).test(lines[i])
+      );
+      if (isOmxKey) continue;
+    }
+    result.push(lines[i]);
+  }
+
+  return result.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// [features] upsert
+// ---------------------------------------------------------------------------
 
 function upsertFeatureFlags(config: string): string {
   const lines = config.split(/\r?\n/);
@@ -63,27 +128,9 @@ function upsertFeatureFlags(config: string): string {
   return lines.join('\n');
 }
 
-function selectNotifyFormat(): 'string' | 'array' {
-  const forced = (process.env.OMX_NOTIFY_FORMAT || '').trim().toLowerCase();
-  if (forced === 'string' || forced === 'array') return forced;
-  // Default to array to match Codex schema (notify expects a sequence).
-  // String format is available with OMX_NOTIFY_FORMAT=string for legacy environments.
-  return 'array';
-}
-
-function getNotifyConfigLine(notifyHookPath: string): string {
-  const format = selectNotifyFormat();
-  const escapedNotifyHookPath = notifyHookPath
-    .replace(/\\/g, '\\\\')
-    .replace(/"/g, '\\"');
-  const notifyCommand = `node "${notifyHookPath}"`
-    .replace(/\\/g, '\\\\')
-    .replace(/"/g, '\\"');
-  if (format === 'array') {
-    return `notify = ["node", "${escapedNotifyHookPath}"]`;
-  }
-  return `notify = "${notifyCommand}"`;
-}
+// ---------------------------------------------------------------------------
+// OMX [table] sections block (appended at end of file)
+// ---------------------------------------------------------------------------
 
 function stripExistingOmxBlocks(config: string): { cleaned: string; removed: number } {
   const marker = 'oh-my-codex (OMX) Configuration';
@@ -124,14 +171,14 @@ function stripExistingOmxBlocks(config: string): { cleaned: string; removed: num
 }
 
 /**
- * OMX config entries to merge into config.toml
+ * OMX table-section block (MCP servers, TUI).
+ * Contains ONLY [table] sections — no bare keys.
  */
-function getOmxConfigBlock(pkgRoot: string): string {
+function getOmxTablesBlock(pkgRoot: string): string {
   const stateServerPath = join(pkgRoot, 'dist', 'mcp', 'state-server.js');
   const memoryServerPath = join(pkgRoot, 'dist', 'mcp', 'memory-server.js');
   const codeIntelServerPath = join(pkgRoot, 'dist', 'mcp', 'code-intel-server.js');
   const traceServerPath = join(pkgRoot, 'dist', 'mcp', 'trace-server.js');
-  const notifyHookPath = join(pkgRoot, 'scripts', 'notify-hook.js');
 
   return [
     '',
@@ -139,9 +186,6 @@ function getOmxConfigBlock(pkgRoot: string): string {
     '# oh-my-codex (OMX) Configuration',
     '# Managed by omx setup - manual edits preserved on next setup',
     '# ============================================================',
-    '',
-    '# Notification hook - fires after each agent turn',
-    getNotifyConfigLine(notifyHookPath),
     '',
     '# OMX State Management MCP Server',
     '[mcp_servers.omx_state]',
@@ -181,9 +225,19 @@ function getOmxConfigBlock(pkgRoot: string): string {
   ].join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
 /**
  * Merge OMX config into existing config.toml
- * Preserves existing user settings, appends OMX block if not present
+ * Preserves existing user settings, appends OMX block if not present.
+ *
+ * Layout:
+ *   1. OMX top-level keys (notify, model_reasoning_effort, developer_instructions)
+ *   2. [features] with collab + child_agents_md
+ *   3. … user sections …
+ *   4. OMX [table] sections (mcp_servers, tui)
  */
 export async function mergeConfig(
   configPath: string,
@@ -196,7 +250,7 @@ export async function mergeConfig(
     existing = await readFile(configPath, 'utf-8');
   }
 
-  // Check if OMX config is already present
+  // Strip old OMX table-section block
   if (existing.includes('oh-my-codex (OMX) Configuration')) {
     const stripped = stripExistingOmxBlocks(existing);
     existing = stripped.cleaned;
@@ -205,10 +259,18 @@ export async function mergeConfig(
     }
   }
 
+  // Strip any stale OMX top-level keys (from previous runs or wrong positions)
+  existing = stripOmxTopLevelKeys(existing);
+
+  // Upsert [features] flags
   existing = upsertFeatureFlags(existing);
 
-  const omxBlock = getOmxConfigBlock(pkgRoot);
-  const finalConfig = existing.trimEnd() + '\n' + omxBlock;
+  // Build final config:
+  //   top-level keys → existing content (with [features]) → OMX tables block
+  const topLines = getOmxTopLevelLines(pkgRoot);
+  const tablesBlock = getOmxTablesBlock(pkgRoot);
+
+  const finalConfig = topLines.join('\n') + '\n\n' + existing.trimEnd() + '\n' + tablesBlock;
 
   await writeFile(configPath, finalConfig);
   if (options.verbose) {
