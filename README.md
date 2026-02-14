@@ -203,9 +203,12 @@ The AGENTS.md orchestration brain detects keywords and activates skills automati
 ```bash
 omx --yolo    # Launch Codex with low-friction execution flags
 omx --madmax  # Launch Codex with full approval+sandbox bypass (dangerous)
+omx --high    # Launch Codex with reasoning effort set to high (default)
+omx --xhigh   # Launch Codex with reasoning effort set to xhigh
 omx setup     # Install and configure OMX
 omx doctor    # Run 9 installation health checks
 omx tmux-hook # Manage tmux prompt-injection workaround (init/status/validate/test)
+omx reasoning <mode> # Set default reasoning mode (low|medium|high|xhigh)
 omx status    # Show active mode state
 omx cancel    # Cancel active execution modes
 omx hud       # Show HUD statusline (--watch, --json, --preset=NAME)
@@ -222,6 +225,12 @@ omx help      # Usage guide
   Launches Codex with `--dangerously-bypass-approvals-and-sandbox` (native Codex flag).
   This bypasses approval prompts and sandboxing.
   Use only in externally sandboxed/trusted environments.
+
+- `--high`
+  Launches Codex with reasoning effort set to `high` (default).
+
+- `--xhigh`
+  Launches Codex with reasoning effort set to `xhigh`.
 
 ## Tmux Injection Workaround (v0.2.3 Default)
 
@@ -273,10 +282,12 @@ Compatibility note:
 1. Creates directories (`~/.codex/prompts/`, `~/.agents/skills/`, `.omx/state/`)
 2. Installs 30 agent prompt files to `~/.codex/prompts/`
 3. Installs 39 skill directories to `~/.agents/skills/`
-4. Updates `~/.codex/config.toml` with MCP servers, features, notify hook, and `[tui] status_line`
+4. Updates `~/.codex/config.toml` with MCP servers, features, notify hook, `[tui] status_line`, and default `model_reasoning_effort = "high"`
 5. Generates `AGENTS.md` orchestration brain in the current project root
 6. Configures the post-turn notification hook
 7. Creates `.omx/hud-config.json` with default HUD preset
+
+Use `omx reasoning <mode>` to change the default reasoning effort (for example `high` or `xhigh`).
 
 ## Coverage
 
