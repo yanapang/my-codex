@@ -12,8 +12,6 @@
  * 4. Triggers desktop notifications if configured
  */
 
-import { writeFile, appendFile, mkdir, readFile } from 'fs/promises';
-import { join } from 'path';
 import { writeFile, appendFile, mkdir, readFile, rename } from 'fs/promises';
 import { join, resolve as resolvePath } from 'path';
 import { existsSync } from 'fs';

@@ -5,7 +5,7 @@ description: N coordinated agents on shared task list using tmux-based orchestra
 
 # Team Skill
 
-Spawn N coordinated Codex CLI sessions as worker agents, each in its own tmux window, working on a shared task list. Communication flows through file-based inboxes and shared state files. The lead session orchestrates work by writing task assignments, monitoring progress via heartbeat files, and detecting completion or failure.
+Spawn N coordinated Codex CLI sessions as worker agents in tmux split panes, working on a shared task list. Communication uses native MCP-backed state/mailbox APIs with tmux used only as transport/notification.
 
 ## Usage
 
@@ -48,11 +48,9 @@ User: "$team 3:executor fix all TypeScript errors"
            |       -> state_write(mode="team", phase="team-plan", ...)
            |       -> initTeamState(.omx/state/team/{name}/)
            |
-           +-- 4. Create tmux session: omx-team-{name}
-           |       -> window 0: "monitor" (HUD)
-           |       -> window 1: "worker-1" (env: OMX_TEAM_WORKER={name}/worker-1)
-           |       -> window 2: "worker-2" (env: OMX_TEAM_WORKER={name}/worker-2)
-           |       -> window 3: "worker-3" (env: OMX_TEAM_WORKER={name}/worker-3)
+           +-- 4. Split the current tmux window into worker panes
+           |       -> leader stays in the current pane (no new Codex session)
+           |       -> worker panes launch Codex with env: OMX_TEAM_WORKER={name}/worker-<n>
            |
            +-- 5. Wait for worker readiness (poll tmux capture-pane)
            |
@@ -68,7 +66,7 @@ User: "$team 3:executor fix all TypeScript errors"
            |
            +-- 8. Shutdown
                    -> send shutdown inbox + trigger
-                   -> tmux kill-session
+                   -> kill only created worker panes (leader keeps current session)
                    -> state_clear(mode="team")
 ```
 
@@ -82,20 +80,31 @@ The lead NEVER sends large prompts via tmux send-keys. Instead:
 2. Send a short trigger (<200 chars) via `tmux send-keys`: "Read and follow the instructions in .omx/state/team/{name}/workers/{id}/inbox.md"
 3. Worker reads the inbox file and executes
 
-### Worker -> Lead (State Files)
+### Worker -> Lead (MCP Mailbox + State Files)
 
 Workers communicate by writing JSON state files:
 
 - **Task status**: `.omx/state/team/{name}/tasks/task-{id}.json` (status, result, error)
 - **Worker status**: `.omx/state/team/{name}/workers/{id}/status.json` (idle/working/blocked/done/failed)
 - **Heartbeat** (automatic): `.omx/state/team/{name}/workers/{id}/heartbeat.json` (updated by notify hook after each turn)
+- **Direct message to lead (MCP tool)**: `team_send_message` (to `leader-fixed`) writes `.omx/state/team/{name}/mailbox/leader-fixed.json`
+- **Worker broadcast (MCP tool)**: `team_broadcast` sends mailbox messages to other workers
+- **Mailbox read (MCP tool)**: `team_mailbox_list`
+- **Mailbox delivery ack (MCP tool)**: `team_mailbox_mark_delivered`
+
+### Required Worker Bootstrap
+
+On initialization, workers must:
+1. Load `skills/worker/SKILL.md`
+2. Send a startup ACK message to `leader-fixed`
+3. Then begin assigned tasks
 
 ### Worker Identity
 
-Each worker knows its identity via the `OMX_TEAM_WORKER` environment variable, set when the tmux window is created:
+Each worker knows its identity via the `OMX_TEAM_WORKER` environment variable, set when the tmux pane is created:
 
 ```bash
-tmux new-window -t {session} -n worker-1 "env OMX_TEAM_WORKER={team}/worker-1 codex"
+tmux split-window -t {leader-pane} -d -c {cwd} "env OMX_TEAM_WORKER={team}/worker-1 codex"
 ```
 
 The notify hook reads this to:
@@ -176,11 +185,10 @@ The lead monitors via `monitorTeam()` which reads all state files and returns a 
 1. Write shutdown inbox to each worker with exit instructions
 2. Send short trigger via send-keys
 3. Wait up to 15 seconds for workers to exit
-4. Force kill remaining workers via tmux kill-window
-5. Destroy tmux session via tmux kill-session
-6. Strip AGENTS.md overlay
-7. Clean up state: `rm -rf .omx/state/team/{name}/`
-8. Clear mode state: `state_clear(mode="team")`
+4. Force kill remaining workers via tmux kill-pane
+5. Strip AGENTS.md overlay
+6. Clean up state: `rm -rf .omx/state/team/{name}/`
+7. Clear mode state: `state_clear(mode="team")`
 
 ## Team + Ralph Composition
 
@@ -199,4 +207,3 @@ When invoked with `ralph` modifier, both modes activate:
 ## V1 Limitations
 
 - **No git worktree isolation**: Workers share the project directory. File conflicts are mitigated by scoping tasks to non-overlapping file sets and explicit worker rules. Git worktree isolation is planned for V2.
-- **No inter-worker messaging**: Workers cannot communicate directly. All coordination goes through the lead via state files.

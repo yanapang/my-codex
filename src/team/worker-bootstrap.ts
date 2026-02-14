@@ -15,12 +15,15 @@ You are a team worker in team "${teamName}". Your identity and assigned tasks ar
 
 ## Protocol
 1. Read your inbox file at the path provided in your first instruction
-2. Read your task from .omx/state/team/${teamName}/tasks/{id}.json
-3. Update task status to "in_progress" by writing {"status": "in_progress"} to the task file
-4. Do the work using your tools
-5. On completion: write {"status": "completed", "result": "summary of what was done"} to the task file
-6. Update your status: write {"state": "idle"} to .omx/state/team/${teamName}/workers/{your-name}/status.json
-7. Wait for new instructions (the lead will send them via your terminal)
+2. Load the worker skill instructions from skills/worker/SKILL.md in this repository and follow them
+3. Send an ACK to the lead using MCP tool team_send_message (to_worker="leader-fixed") once initialized
+4. Read your task from .omx/state/team/${teamName}/tasks/{id}.json
+5. Request a claim via the state API (claimTask); do not directly set status to "in_progress" in the task file
+6. Do the work using your tools
+7. On completion: write {"status": "completed", "result": "summary of what was done"} to the task file
+8. Update your status: write {"state": "idle"} to .omx/state/team/${teamName}/workers/{your-name}/status.json
+9. Wait for new instructions (the lead will send them via your terminal)
+10. Check your mailbox for messages at .omx/state/team/${teamName}/mailbox/{your-name}.json
 
 ## Rules
 - Do NOT edit files outside the paths listed in your task description
@@ -112,13 +115,15 @@ ${taskList}
 
 ## Instructions
 
-1. Start with the first non-blocked task
-2. Read the task file at \`.omx/state/team/${teamName}/tasks/task-{id}.json\`
-3. Write \`{"status": "in_progress"}\` to the task file to claim it
-4. Complete the work described in the task
-5. Write \`{"status": "completed", "result": "brief summary"}\` to the task file
-6. Write \`{"state": "idle"}\` to \`.omx/state/team/${teamName}/workers/${workerName}/status.json\`
-7. Wait for the next instruction from the lead
+1. Load and follow \`skills/worker/SKILL.md\`
+2. Send startup ACK to the lead mailbox using MCP tool \`team_send_message\` with \`to_worker="leader-fixed"\`
+3. Start with the first non-blocked task
+4. Read the task file for your selected task id at \`.omx/state/team/${teamName}/tasks/task-<id>.json\`
+5. Request a claim via state API (\`claimTask\`) to claim it
+6. Complete the work described in the task
+7. Write \`{"status": "completed", "result": "brief summary"}\` to the task file
+8. Write \`{"state": "idle"}\` to \`.omx/state/team/${teamName}/workers/${workerName}/status.json\`
+9. Wait for the next instruction from the lead
 
 ## Scope Rules
 - Only edit files described in your task descriptions
@@ -148,7 +153,7 @@ ${taskDescription}
 ## Instructions
 
 1. Read the task file at \`.omx/state/team/${teamName}/tasks/task-${taskId}.json\`
-2. Write \`{"status": "in_progress"}\` to claim it
+2. Request a claim via state API (\`claimTask\`)
 3. Complete the work
 4. Write \`{"status": "completed", "result": "brief summary"}\` when done
 5. Write \`{"state": "idle"}\` to your status file
@@ -158,10 +163,20 @@ ${taskDescription}
 /**
  * Generate inbox content for shutdown.
  */
-export function generateShutdownInbox(): string {
+export function generateShutdownInbox(teamName: string, workerName: string): string {
   return `# Shutdown Request
 
-All tasks are complete. Please wrap up any remaining work and exit your session.
+All tasks are complete. Please wrap up any remaining work and respond with a shutdown acknowledgement.
+
+## Shutdown Ack Protocol
+1. Write your decision to:
+   \`.omx/state/team/${teamName}/workers/${workerName}/shutdown-ack.json\`
+2. Format:
+   - Accept:
+     \`{\"status\":\"accept\",\"reason\":\"ok\",\"updated_at\":\"<iso>\"}\`
+   - Reject:
+     \`{\"status\":\"reject\",\"reason\":\"still working\",\"updated_at\":\"<iso>\"}\`
+3. After writing the ack, exit your Codex session.
 
 Type \`exit\` or press Ctrl+C to end your Codex session.
 `;
@@ -173,4 +188,13 @@ Type \`exit\` or press Ctrl+C to end your Codex session.
  */
 export function generateTriggerMessage(workerName: string, teamName: string): string {
   return `Read and follow the instructions in .omx/state/team/${teamName}/workers/${workerName}/inbox.md`;
+}
+
+/**
+ * Generate a SHORT trigger for mailbox notifications.
+ * Always < 200 characters, ASCII-safe.
+ */
+export function generateMailboxTriggerMessage(workerName: string, teamName: string, count: number): string {
+  const n = Number.isFinite(count) ? Math.max(1, Math.floor(count)) : 1;
+  return `You have ${n} new message(s). Check .omx/state/team/${teamName}/mailbox/${workerName}.json`;
 }

@@ -26,6 +26,7 @@ Usage:
   omx           Launch Codex CLI + HUD in tmux (or just Codex if no tmux)
   omx setup     Install skills, prompts, MCP servers, and AGENTS.md
   omx doctor    Check installation health
+  omx doctor --team  Check team/swarm runtime health diagnostics
   omx version   Show version information
   omx tmux-hook Manage tmux prompt injection workaround (init|status|validate|test)
   omx hud       Show HUD statusline (--watch, --json, --preset=NAME)
@@ -59,6 +60,7 @@ export async function main(args: string[]): Promise<void> {
     force: flags.has('--force'),
     dryRun: flags.has('--dry-run'),
     verbose: flags.has('--verbose'),
+    team: flags.has('--team'),
   };
 
   try {

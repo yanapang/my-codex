@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildWorkerStartupCommand,
   createTeamSession,
   isTmuxAvailable,
   listTeamSessions,
@@ -48,6 +49,70 @@ describe('sendToWorker validation', () => {
       () => sendToWorker('omx-team-x', 1, `hello [OMX_TMUX_INJECT]`),
       /marker/i
     );
+  });
+});
+
+describe('buildWorkerStartupCommand', () => {
+  it('uses zsh with ~/.zshrc and exec codex', () => {
+    const prevShell = process.env.SHELL;
+    process.env.SHELL = '/bin/zsh';
+    try {
+      const cmd = buildWorkerStartupCommand('alpha', 2);
+      assert.match(cmd, /OMX_TEAM_WORKER=alpha\/worker-2/);
+      assert.match(cmd, /'\/bin\/zsh' -lc/);
+      assert.match(cmd, /source ~\/\.zshrc/);
+      assert.match(cmd, /exec codex/);
+    } finally {
+      if (typeof prevShell === 'string') process.env.SHELL = prevShell;
+      else delete process.env.SHELL;
+    }
+  });
+
+  it('uses bash with ~/.bashrc and preserves launch args', () => {
+    const prevShell = process.env.SHELL;
+    process.env.SHELL = '/usr/bin/bash';
+    try {
+      const cmd = buildWorkerStartupCommand('alpha', 1, ['--model', 'gpt-5']);
+      assert.match(cmd, /source ~\/\.bashrc/);
+      assert.match(cmd, /exec codex/);
+      assert.match(cmd, /--model/);
+      assert.match(cmd, /gpt-5/);
+    } finally {
+      if (typeof prevShell === 'string') process.env.SHELL = prevShell;
+      else delete process.env.SHELL;
+    }
+  });
+
+  it('inherits bypass flag from process argv once', () => {
+    const prevArgv = process.argv;
+    const prevShell = process.env.SHELL;
+    process.env.SHELL = '/bin/bash';
+    process.argv = [...prevArgv, '--dangerously-bypass-approvals-and-sandbox'];
+    try {
+      const cmd = buildWorkerStartupCommand('alpha', 1, ['--dangerously-bypass-approvals-and-sandbox']);
+      const matches = cmd.match(/--dangerously-bypass-approvals-and-sandbox/g) || [];
+      assert.equal(matches.length, 1);
+    } finally {
+      process.argv = prevArgv;
+      if (typeof prevShell === 'string') process.env.SHELL = prevShell;
+      else delete process.env.SHELL;
+    }
+  });
+
+  it('maps --madmax to bypass flag in worker command', () => {
+    const prevArgv = process.argv;
+    const prevShell = process.env.SHELL;
+    process.env.SHELL = '/bin/bash';
+    process.argv = [...prevArgv, '--madmax'];
+    try {
+      const cmd = buildWorkerStartupCommand('alpha', 1);
+      const matches = cmd.match(/--dangerously-bypass-approvals-and-sandbox/g) || [];
+      assert.equal(matches.length, 1);
+    } finally {
+      process.argv = prevArgv;
+      if (typeof prevShell === 'string') process.env.SHELL = prevShell;
+      else delete process.env.SHELL;
+    }
   });
 });
 

@@ -11,6 +11,7 @@ import {
   generateTaskAssignmentInbox,
   generateShutdownInbox,
   generateTriggerMessage,
+  generateMailboxTriggerMessage,
 } from '../worker-bootstrap.js';
 import type { TeamTask } from '../state.js';
 
@@ -174,10 +175,11 @@ describe('worker bootstrap', () => {
     assert.match(inbox, /\.omx\/state\/team\/team-followup\/tasks\/task-42\.json/);
   });
 
-  it('generateShutdownInbox contains exit instruction', () => {
-    const inbox = generateShutdownInbox();
+  it('generateShutdownInbox contains exit instruction and concrete ack path', () => {
+    const inbox = generateShutdownInbox('team-x', 'worker-1');
 
     assert.match(inbox, /Shutdown Request/);
+    assert.match(inbox, /\.omx\/state\/team\/team-x\/workers\/worker-1\/shutdown-ack\.json/);
     assert.match(inbox, /Type `exit` or press Ctrl\+C/);
   });
 
@@ -194,5 +196,16 @@ describe('worker bootstrap', () => {
   it('generateTriggerMessage contains the inbox path', () => {
     const message = generateTriggerMessage('worker-9', 'team-path');
     assert.match(message, /\.omx\/state\/team\/team-path\/workers\/worker-9\/inbox\.md/);
+  });
+
+  it('generateMailboxTriggerMessage is always < 200 characters', () => {
+    const message = generateMailboxTriggerMessage('worker-long-name', 'team-with-long-name', 42);
+    assert.ok(message.length < 200);
+  });
+
+  it('generateMailboxTriggerMessage contains mailbox path and count', () => {
+    const message = generateMailboxTriggerMessage('worker-2', 'team-mail', 3);
+    assert.match(message, /3 new message/);
+    assert.match(message, /\.omx\/state\/team\/team-mail\/mailbox\/worker-2\.json/);
   });
 });

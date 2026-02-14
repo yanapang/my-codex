@@ -1,12 +1,26 @@
 import { spawnSync } from 'child_process';
 
 export interface TeamSession {
-  name: string; // tmux session name: "omx-team-{teamName}"
+  name: string; // tmux target in "session:window" form
   workerCount: number;
   cwd: string;
+  workerPaneIds: string[];
 }
 
 const INJECTION_MARKER = '[OMX_TMUX_INJECT]';
+const CODEX_BYPASS_FLAG = '--dangerously-bypass-approvals-and-sandbox';
+const MADMAX_FLAG = '--madmax';
+
+interface WorkerLaunchSpec {
+  shell: string;
+  rcFile: string | null;
+}
+
+interface TmuxPaneInfo {
+  paneId: string;
+  currentCommand: string;
+  startCommand: string;
+}
 
 function runTmux(args: string[]): { ok: true; stdout: string } | { ok: false; stderr: string } {
   const result = spawnSync('tmux', args, { encoding: 'utf-8' });
@@ -19,9 +33,79 @@ function runTmux(args: string[]): { ok: true; stdout: string } | { ok: false; st
   return { ok: true, stdout: (result.stdout || '').trim() };
 }
 
+function baseSessionName(target: string): string {
+  return target.split(':')[0] || target;
+}
+
+function listPanes(target: string): TmuxPaneInfo[] {
+  const result = runTmux(['list-panes', '-t', target, '-F', '#{pane_id}\t#{pane_current_command}\t#{pane_start_command}']);
+  if (!result.ok) return [];
+  return result.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const [paneId = '', currentCommand = '', startCommand = ''] = line.split('\t');
+      return { paneId, currentCommand, startCommand };
+    })
+    .filter((pane) => pane.paneId.startsWith('%'));
+}
+
+function findHudPaneId(target: string, leaderPaneId: string): string | null {
+  const panes = listPanes(target);
+  for (const pane of panes) {
+    if (pane.paneId === leaderPaneId) continue;
+    const start = pane.startCommand || '';
+    if (/\bomx\b.*\bhud\b.*--watch/i.test(start)) return pane.paneId;
+  }
+  return null;
+}
+
 function sleepSeconds(seconds: number): void {
   // shelling out keeps implementation consistent with the project's pattern
   spawnSync('sleep', [String(seconds)], { encoding: 'utf-8' });
+}
+
+function sleepFractionalSeconds(seconds: number): void {
+  if (!Number.isFinite(seconds) || seconds <= 0) return;
+  spawnSync('sleep', [String(seconds)], { encoding: 'utf-8' });
+}
+
+function shellQuoteSingle(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function buildWorkerLaunchSpec(shellPath: string | undefined): WorkerLaunchSpec {
+  if (shellPath && /\/zsh$/i.test(shellPath)) {
+    return { shell: shellPath, rcFile: '~/.zshrc' };
+  }
+  if (shellPath && /\/bash$/i.test(shellPath)) {
+    return { shell: shellPath, rcFile: '~/.bashrc' };
+  }
+  if (shellPath && shellPath.trim() !== '') {
+    return { shell: shellPath, rcFile: null };
+  }
+  return { shell: '/bin/sh', rcFile: null };
+}
+
+function resolveWorkerLaunchArgs(extraArgs: string[] = []): string[] {
+  const merged = [...extraArgs];
+  const wantsBypass = process.argv.includes(CODEX_BYPASS_FLAG) || process.argv.includes(MADMAX_FLAG);
+  if (wantsBypass && !merged.includes(CODEX_BYPASS_FLAG)) {
+    merged.push(CODEX_BYPASS_FLAG);
+  }
+  return merged;
+}
+
+export function buildWorkerStartupCommand(teamName: string, workerIndex: number, launchArgs: string[] = []): string {
+  const spec = buildWorkerLaunchSpec(process.env.SHELL);
+  const fullLaunchArgs = resolveWorkerLaunchArgs(launchArgs);
+  const codexArgs = fullLaunchArgs.map(shellQuoteSingle).join(' ');
+  const codexInvocation = codexArgs.length > 0 ? `exec codex ${codexArgs}` : 'exec codex';
+  const rcPrefix = spec.rcFile ? `if [ -f ${spec.rcFile} ]; then source ${spec.rcFile}; fi; ` : '';
+  const inner = `${rcPrefix}${codexInvocation}`;
+
+  return `env OMX_TEAM_WORKER=${teamName}/worker-${workerIndex} ${shellQuoteSingle(spec.shell)} -lc ${shellQuoteSingle(inner)}`;
 }
 
 // Sanitize team name: lowercase, alphanumeric + hyphens, max 30 chars
@@ -48,38 +132,88 @@ export function isTmuxAvailable(): boolean {
 }
 
 // Create tmux session with N worker windows
-// Window 0: "monitor" (for HUD)
-// Windows 1..N: "worker-{i}" each running codex.
+// Split the current tmux leader window into worker panes.
 // Returns TeamSession or throws if tmux not available
-export function createTeamSession(teamName: string, workerCount: number, cwd: string): TeamSession {
+export function createTeamSession(
+  teamName: string,
+  workerCount: number,
+  cwd: string,
+  workerLaunchArgs: string[] = [],
+): TeamSession {
   if (!isTmuxAvailable()) {
     throw new Error('tmux is not available');
   }
   if (!Number.isInteger(workerCount) || workerCount < 1) {
     throw new Error(`workerCount must be >= 1 (got ${workerCount})`);
   }
+  if (!process.env.TMUX) {
+    throw new Error('team mode requires running inside tmux leader pane');
+  }
 
   const safeTeamName = sanitizeTeamName(teamName);
-  const sessionName = `omx-team-${safeTeamName}`;
-
-  const session = runTmux(['new-session', '-d', '-s', sessionName, '-n', 'monitor', '-c', cwd]);
-  if (!session.ok) {
-    throw new Error(`failed to create tmux session: ${session.stderr}`);
+  const context = runTmux(['display-message', '-p', '#S:#I #{pane_id}']);
+  if (!context.ok) {
+    throw new Error(`failed to detect current tmux target: ${context.stderr}`);
   }
+  const [sessionAndWindow = '', leaderPaneId = ''] = context.stdout.split(' ');
+  const [sessionName, windowIndex] = (sessionAndWindow || '').split(':');
+  if (!sessionName || !windowIndex || !leaderPaneId || !leaderPaneId.startsWith('%')) {
+    throw new Error(`failed to parse current tmux target: ${context.stdout}`);
+  }
+  const teamTarget = `${sessionName}:${windowIndex}`;
+  const hudPaneId = findHudPaneId(teamTarget, leaderPaneId);
 
+  const workerPaneIds: string[] = [];
+  let rightStackRootPaneId: string | null = null;
   for (let i = 1; i <= workerCount; i++) {
-    const cmd = `env OMX_TEAM_WORKER=${safeTeamName}/worker-${i} codex`;
-    const win = runTmux(['new-window', '-t', sessionName, '-n', `worker-${i}`, '-c', cwd, cmd]);
-    if (!win.ok) {
-      throw new Error(`failed to create worker window ${i}: ${win.stderr}`);
+    const cmd = buildWorkerStartupCommand(safeTeamName, i, workerLaunchArgs);
+    // First split creates the right side from leader. Remaining splits stack on the right.
+    const splitDirection = i === 1 ? '-h' : '-v';
+    const splitTarget = i === 1 ? leaderPaneId : (rightStackRootPaneId ?? leaderPaneId);
+    const split = runTmux([
+      'split-window',
+      splitDirection,
+      '-t',
+      splitTarget,
+      '-d',
+      '-P',
+      '-F',
+      '#{pane_id}',
+      '-c',
+      cwd,
+      cmd,
+    ]);
+    if (!split.ok) {
+      throw new Error(`failed to create worker pane ${i}: ${split.stderr}`);
     }
-    sleepSeconds(0.5);
+    const paneId = split.stdout.split('\n')[0]?.trim();
+    if (!paneId || !paneId.startsWith('%')) {
+      throw new Error(`failed to capture worker pane id for worker ${i}`);
+    }
+    workerPaneIds.push(paneId);
+    if (i === 1) rightStackRootPaneId = paneId;
   }
 
-  return { name: sessionName, workerCount, cwd };
+  // Keep leader as full left/main pane; workers stay stacked on the right.
+  runTmux(['select-layout', '-t', teamTarget, 'main-vertical']);
+
+  // If HUD exists, ensure it remains attached under leader (not in worker stack).
+  if (hudPaneId) {
+    runTmux(['join-pane', '-v', '-s', hudPaneId, '-t', leaderPaneId]);
+    runTmux(['resize-pane', '-t', hudPaneId, '-y', '4']);
+  }
+
+  runTmux(['select-pane', '-t', leaderPaneId]);
+  sleepSeconds(0.5);
+
+  return { name: teamTarget, workerCount, cwd, workerPaneIds };
 }
 
-function paneTarget(sessionName: string, workerIndex: number): string {
+function paneTarget(sessionName: string, workerIndex: number, workerPaneId?: string): string {
+  if (workerPaneId && workerPaneId.startsWith('%')) return workerPaneId;
+  if (sessionName.includes(':')) {
+    return `${sessionName}.${workerIndex}`;
+  }
   return `${sessionName}:${workerIndex}`;
 }
 
@@ -95,6 +229,12 @@ function paneLooksReady(captured: string): boolean {
 
   const lastLine = lines.length > 0 ? lines[lines.length - 1] : '';
   if (/^\s*[›>]\s*/.test(lastLine)) return true;
+
+  // Codex TUI often renders a status bar/footer instead of a raw shell prompt.
+  // Treat common Codex UI markers as "ready enough" for inbox-trigger dispatch.
+  const hasCodexPromptLine = lines.some((line) => /^\s*›\s*/u.test(line));
+  const hasCodexStatus = lines.some((line) => /\bgpt-[\w.-]+\b/i.test(line) || /\b\d+% left\b/i.test(line));
+  if (hasCodexPromptLine || hasCodexStatus) return true;
 
   return false;
 }
@@ -113,18 +253,24 @@ function paneHasTrustPrompt(captured: string): boolean {
 // Poll tmux capture-pane for Codex prompt indicator (> or similar)
 // Uses exponential backoff: 1s, 2s, 4s, 8s (total ~15s)
 // Returns true if ready, false on timeout
-export function waitForWorkerReady(sessionName: string, workerIndex: number, timeoutMs: number = 15000): boolean {
-  const backoffMs = [1000, 2000, 4000, 8000];
+export function waitForWorkerReady(
+  sessionName: string,
+  workerIndex: number,
+  timeoutMs: number = 15000,
+  workerPaneId?: string,
+): boolean {
+  const initialBackoffMs = 300;
+  const maxBackoffMs = 8000;
   const startedAt = Date.now();
   let blockedByTrustPrompt = false;
 
   const check = (): boolean => {
-    const result = runTmux(['capture-pane', '-t', paneTarget(sessionName, workerIndex), '-p']);
+    const result = runTmux(['capture-pane', '-t', paneTarget(sessionName, workerIndex, workerPaneId), '-p']);
     if (!result.ok) return false;
     if (paneHasTrustPrompt(result.stdout)) {
       // Opt-in only: do not auto-trust directories unless explicitly configured.
       if (process.env.OMX_TEAM_AUTO_TRUST === '1') {
-        runTmux(['send-keys', '-t', paneTarget(sessionName, workerIndex), 'Enter']);
+        runTmux(['send-keys', '-t', paneTarget(sessionName, workerIndex, workerPaneId), 'Enter']);
         return false;
       }
       blockedByTrustPrompt = true;
@@ -133,27 +279,32 @@ export function waitForWorkerReady(sessionName: string, workerIndex: number, tim
     return paneLooksReady(result.stdout);
   };
 
-  if (check()) return true;
-  if (blockedByTrustPrompt) return false;
-
-  for (const delay of backoffMs) {
-    const elapsed = Date.now() - startedAt;
-    if (elapsed >= timeoutMs) return false;
-
-    const remaining = timeoutMs - elapsed;
-    sleepSeconds(Math.max(0, Math.min(delay, remaining)) / 1000);
-
+  let delayMs = initialBackoffMs;
+  while (Date.now() - startedAt < timeoutMs) {
     if (check()) return true;
     if (blockedByTrustPrompt) return false;
+    const remaining = timeoutMs - (Date.now() - startedAt);
+    if (remaining <= 0) break;
+    sleepSeconds(Math.max(0, Math.min(delayMs, remaining)) / 1000);
+    delayMs = Math.min(maxBackoffMs, delayMs * 2);
   }
 
   return false;
 }
 
+function paneTailContainsLiteralLine(target: string, text: string): boolean {
+  const result = runTmux(['capture-pane', '-t', target, '-p', '-S', '-30']);
+  if (!result.ok) return false;
+  const lines = result.stdout
+    .split('\n')
+    .map((line) => line.replace(/\r/g, '').trimEnd());
+  return lines.some((line) => line === text);
+}
+
 // Send SHORT text (<200 chars) to worker via tmux send-keys
 // Validates: text < 200 chars, no injection marker
 // Throws on violation
-export function sendToWorker(sessionName: string, workerIndex: number, text: string): void {
+export function sendToWorker(sessionName: string, workerIndex: number, text: string, workerPaneId?: string): void {
   if (text.length >= 200) {
     throw new Error('sendToWorker: text must be < 200 characters');
   }
@@ -161,22 +312,43 @@ export function sendToWorker(sessionName: string, workerIndex: number, text: str
     throw new Error('sendToWorker: injection marker is not allowed');
   }
 
-  const target = paneTarget(sessionName, workerIndex);
+  const target = paneTarget(sessionName, workerIndex, workerPaneId);
 
   const send = runTmux(['send-keys', '-t', target, '-l', '--', text]);
   if (!send.ok) {
     throw new Error(`sendToWorker: failed to send text: ${send.stderr}`);
   }
 
-  const enter = runTmux(['send-keys', '-t', target, 'Enter']);
-  if (!enter.ok) {
-    throw new Error(`sendToWorker: failed to send Enter: ${enter.stderr}`);
+  // Submit robustly: retry Enter while the literal input line is still visible.
+  // This avoids dropped-enter behavior in Codex TUI under tmux load.
+  const submitAttempts: Array<{ keys: string[]; delaySeconds: number }> = [
+    { keys: ['Enter'], delaySeconds: 0.12 },
+    { keys: ['C-m'], delaySeconds: 0.12 },
+    { keys: ['Enter'], delaySeconds: 0.12 },
+    { keys: ['C-j'], delaySeconds: 0.08 },
+  ];
+  for (const attempt of submitAttempts) {
+    const res = runTmux(['send-keys', '-t', target, ...attempt.keys]);
+    if (!res.ok) {
+      throw new Error(`sendToWorker: failed to send ${attempt.keys.join('+')}: ${res.stderr}`);
+    }
+    sleepFractionalSeconds(attempt.delaySeconds);
+    if (!paneTailContainsLiteralLine(target, text)) break;
   }
 }
 
+export function notifyLeaderStatus(sessionName: string, message: string): boolean {
+  if (!isTmuxAvailable()) return false;
+  const trimmed = message.trim();
+  if (!trimmed) return false;
+  const capped = trimmed.length > 180 ? `${trimmed.slice(0, 177)}...` : trimmed;
+  const result = runTmux(['display-message', '-t', sessionName, '--', capped]);
+  return result.ok;
+}
+
 // Get PID of the shell process in a worker's tmux pane
-export function getWorkerPanePid(sessionName: string, workerIndex: number): number | null {
-  const result = runTmux(['list-panes', '-t', paneTarget(sessionName, workerIndex), '-F', '#{pane_pid}']);
+export function getWorkerPanePid(sessionName: string, workerIndex: number, workerPaneId?: string): number | null {
+  const result = runTmux(['list-panes', '-t', paneTarget(sessionName, workerIndex, workerPaneId), '-F', '#{pane_pid}']);
   if (!result.ok) return null;
 
   const firstLine = result.stdout.split('\n')[0]?.trim();
@@ -188,11 +360,10 @@ export function getWorkerPanePid(sessionName: string, workerIndex: number): numb
 }
 
 // Check if worker's tmux pane has a running process
-export function isWorkerAlive(sessionName: string, workerIndex: number): boolean {
+export function isWorkerAlive(sessionName: string, workerIndex: number, workerPaneId?: string): boolean {
   const result = runTmux([
     'list-panes',
-    '-t',
-    paneTarget(sessionName, workerIndex),
+    '-t', paneTarget(sessionName, workerIndex, workerPaneId),
     '-F',
     '#{pane_dead} #{pane_current_command} #{pane_pid}',
   ]);
@@ -220,14 +391,24 @@ export function isWorkerAlive(sessionName: string, workerIndex: number): boolean
   }
 }
 
-// Kill a specific worker: send C-c, wait, then kill-window if still alive
-export function killWorker(sessionName: string, workerIndex: number): void {
-  runTmux(['send-keys', '-t', paneTarget(sessionName, workerIndex), 'C-c']);
-  sleepSeconds(2);
+// Kill a specific worker: send C-c, then C-d, then kill-pane if still alive
+export function killWorker(sessionName: string, workerIndex: number, workerPaneId?: string): void {
+  runTmux(['send-keys', '-t', paneTarget(sessionName, workerIndex, workerPaneId), 'C-c']);
+  sleepSeconds(1);
 
-  if (isWorkerAlive(sessionName, workerIndex)) {
-    runTmux(['kill-window', '-t', paneTarget(sessionName, workerIndex)]);
+  if (isWorkerAlive(sessionName, workerIndex, workerPaneId)) {
+    runTmux(['send-keys', '-t', paneTarget(sessionName, workerIndex, workerPaneId), 'C-d']);
+    sleepSeconds(1);
   }
+
+  if (isWorkerAlive(sessionName, workerIndex, workerPaneId)) {
+    runTmux(['kill-pane', '-t', paneTarget(sessionName, workerIndex, workerPaneId)]);
+  }
+}
+
+export function killWorkerByPaneId(workerPaneId: string): void {
+  if (!workerPaneId.startsWith('%')) return;
+  runTmux(['kill-pane', '-t', workerPaneId]);
 }
 
 // Kill entire tmux session. Tolerates already-dead sessions.
@@ -248,5 +429,5 @@ export function listTeamSessions(): string[] {
     .split('\n')
     .map(line => line.trim())
     .filter(Boolean)
-    .filter(name => name.startsWith('omx-team-'));
+    .map(baseSessionName);
 }
