@@ -162,6 +162,7 @@ Task ID rule (critical):
 
 - File path uses `task-<id>.json` (example `task-1.json`)
 - MCP API `task_id` uses bare id (example `"1"`, not `"task-1"`)
+- Never instruct workers to read `tasks/{id}.json`
 
 ## Environment Knobs
 
