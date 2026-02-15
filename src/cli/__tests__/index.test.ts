@@ -108,21 +108,28 @@ describe('buildTmuxSessionName', () => {
 });
 
 describe('team worker launch arg inheritance helpers', () => {
-  it('collectInheritableTeamWorkerArgs extracts bypass and reasoning overrides', () => {
+  it('collectInheritableTeamWorkerArgs extracts bypass, reasoning, and model overrides', () => {
     assert.deepEqual(
       collectInheritableTeamWorkerArgs(['--dangerously-bypass-approvals-and-sandbox', '-c', 'model_reasoning_effort="xhigh"', '--model', 'gpt-5']),
-      ['--dangerously-bypass-approvals-and-sandbox', '-c', 'model_reasoning_effort="xhigh"']
+      ['--dangerously-bypass-approvals-and-sandbox', '-c', 'model_reasoning_effort="xhigh"', '--model', 'gpt-5']
     );
   });
 
-  it('resolveTeamWorkerLaunchArgsEnv merges and normalizes with de-dupe + last reasoning wins', () => {
+  it('collectInheritableTeamWorkerArgs supports --model=<value> syntax', () => {
+    assert.deepEqual(
+      collectInheritableTeamWorkerArgs(['--model=gpt-5.3-codex-spark']),
+      ['--model', 'gpt-5.3-codex-spark']
+    );
+  });
+
+  it('resolveTeamWorkerLaunchArgsEnv merges and normalizes with de-dupe + last reasoning/model wins', () => {
     assert.equal(
       resolveTeamWorkerLaunchArgsEnv(
-        '--dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort="high" --no-alt-screen',
-        ['-c', 'model_reasoning_effort="xhigh"', '--dangerously-bypass-approvals-and-sandbox'],
+        '--dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort="high" --model old-a --no-alt-screen --model=old-b',
+        ['-c', 'model_reasoning_effort="xhigh"', '--dangerously-bypass-approvals-and-sandbox', '--model', 'gpt-5'],
         true
       ),
-      '--no-alt-screen --dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort="xhigh"'
+      '--no-alt-screen --dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort="xhigh" --model old-b'
     );
   });
 
@@ -134,6 +141,53 @@ describe('team worker launch arg inheritance helpers', () => {
         false
       ),
       '--no-alt-screen'
+    );
+  });
+
+  it('resolveTeamWorkerLaunchArgsEnv uses inherited model when env model is absent', () => {
+    assert.equal(
+      resolveTeamWorkerLaunchArgsEnv(
+        '--no-alt-screen',
+        ['--model=gpt-5.3-codex-spark'],
+        true
+      ),
+      '--no-alt-screen --model gpt-5.3-codex-spark'
+    );
+  });
+
+  it('resolveTeamWorkerLaunchArgsEnv uses default model when env and inherited models are absent', () => {
+    assert.equal(
+      resolveTeamWorkerLaunchArgsEnv(
+        '--no-alt-screen',
+        ['--dangerously-bypass-approvals-and-sandbox'],
+        true,
+        'gpt-5.3-codex-spark'
+      ),
+      '--no-alt-screen --dangerously-bypass-approvals-and-sandbox --model gpt-5.3-codex-spark'
+    );
+  });
+
+  it('resolveTeamWorkerLaunchArgsEnv keeps exactly one final model with precedence env > inherited > default', () => {
+    assert.equal(
+      resolveTeamWorkerLaunchArgsEnv(
+        '--model env-model --model=env-model-final',
+        ['--model', 'inherited-model'],
+        true,
+        'fallback-model'
+      ),
+      '--model env-model-final'
+    );
+  });
+
+  it('resolveTeamWorkerLaunchArgsEnv prefers inherited model over default when env model is absent', () => {
+    assert.equal(
+      resolveTeamWorkerLaunchArgsEnv(
+        '--no-alt-screen',
+        ['--model', 'inherited-model'],
+        true,
+        'fallback-model'
+      ),
+      '--no-alt-screen --model inherited-model'
     );
   });
 });

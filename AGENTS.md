@@ -234,6 +234,23 @@ Resume: detect existing team state and resume from the last incomplete stage.
 
 ---
 
+<team_model_resolution>
+Team/Swarm worker startup currently uses one shared `agentType` and one shared launch-arg set for all workers in a team run.
+
+For worker model selection, apply this precedence (highest to lowest):
+1. Explicit model already present in `OMX_TEAM_WORKER_LAUNCH_ARGS`
+2. Inherited leader `--model` (when inheritance is enabled)
+3. Injected low-complexity default model: `gpt-5.3-codex-spark` (only when 1+2 are absent and team `agentType` is low-complexity)
+
+Model flag normalization contract:
+- Accept both `--model <value>` and `--model=<value>`
+- Remove duplicates/conflicts
+- Emit exactly one final canonical model flag: `--model <value>`
+- Preserve unrelated worker launch args
+</team_model_resolution>
+
+---
+
 <verification>
 Verify before claiming completion. The goal is evidence-backed confidence, not ceremony.
 

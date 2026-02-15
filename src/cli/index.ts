@@ -53,6 +53,7 @@ Options:
 
 const MADMAX_FLAG = '--madmax';
 const CODEX_BYPASS_FLAG = '--dangerously-bypass-approvals-and-sandbox';
+const MODEL_FLAG = '--model';
 const HIGH_REASONING_FLAG = '--high';
 const XHIGH_REASONING_FLAG = '--xhigh';
 const CONFIG_FLAG = '-c';
@@ -326,41 +327,48 @@ function splitWorkerLaunchArgs(raw: string | undefined): string[] {
     .filter(Boolean);
 }
 
-export function collectInheritableTeamWorkerArgs(codexArgs: string[]): string[] {
-  let wantsBypass = false;
-  let reasoningOverride: string | null = null;
-
-  for (let i = 0; i < codexArgs.length; i++) {
-    const arg = codexArgs[i];
-    if (arg === CODEX_BYPASS_FLAG || arg === MADMAX_FLAG) {
-      wantsBypass = true;
-      continue;
-    }
-
-    if (arg === CONFIG_FLAG) {
-      const maybeValue = codexArgs[i + 1];
-      if (typeof maybeValue === 'string' && isReasoningOverride(maybeValue)) {
-        reasoningOverride = maybeValue;
-        i += 1;
-      }
-    }
-  }
-
-  const inherited: string[] = [];
-  if (wantsBypass) inherited.push(CODEX_BYPASS_FLAG);
-  if (reasoningOverride) inherited.push(CONFIG_FLAG, reasoningOverride);
-  return inherited;
+interface ParsedTeamWorkerLaunchArgs {
+  passthrough: string[];
+  wantsBypass: boolean;
+  reasoningOverride: string | null;
+  modelOverride: string | null;
 }
 
-function normalizeTeamWorkerLaunchArgs(args: string[]): string[] {
+function isValidModelValue(value: string): boolean {
+  return value.trim().length > 0 && !value.startsWith('-');
+}
+
+function parseTeamWorkerLaunchArgs(args: string[]): ParsedTeamWorkerLaunchArgs {
   const passthrough: string[] = [];
   let wantsBypass = false;
   let reasoningOverride: string | null = null;
+  let modelOverride: string | null = null;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === CODEX_BYPASS_FLAG || arg === MADMAX_FLAG) {
       wantsBypass = true;
+      continue;
+    }
+
+    if (arg === MODEL_FLAG) {
+      const maybeValue = args[i + 1];
+      if (typeof maybeValue === 'string' && isValidModelValue(maybeValue)) {
+        modelOverride = maybeValue.trim();
+        i += 1;
+        continue;
+      }
+      passthrough.push(arg);
+      continue;
+    }
+
+    if (arg.startsWith(`${MODEL_FLAG}=`)) {
+      const inlineValue = arg.slice(`${MODEL_FLAG}=`.length).trim();
+      if (isValidModelValue(inlineValue)) {
+        modelOverride = inlineValue;
+        continue;
+      }
+      passthrough.push(arg);
       continue;
     }
 
@@ -376,15 +384,55 @@ function normalizeTeamWorkerLaunchArgs(args: string[]): string[] {
     passthrough.push(arg);
   }
 
-  if (wantsBypass) passthrough.push(CODEX_BYPASS_FLAG);
-  if (reasoningOverride) passthrough.push(CONFIG_FLAG, reasoningOverride);
-  return passthrough;
+  return {
+    passthrough,
+    wantsBypass,
+    reasoningOverride,
+    modelOverride,
+  };
 }
 
-export function resolveTeamWorkerLaunchArgsEnv(existingRaw: string | undefined, codexArgs: string[], inheritLeaderFlags = true): string | null {
-  const args = splitWorkerLaunchArgs(existingRaw);
-  if (inheritLeaderFlags) args.push(...collectInheritableTeamWorkerArgs(codexArgs));
-  const normalized = normalizeTeamWorkerLaunchArgs(args);
+export function collectInheritableTeamWorkerArgs(codexArgs: string[]): string[] {
+  const parsed = parseTeamWorkerLaunchArgs(codexArgs);
+
+  const inherited: string[] = [];
+  if (parsed.wantsBypass) inherited.push(CODEX_BYPASS_FLAG);
+  if (parsed.reasoningOverride) inherited.push(CONFIG_FLAG, parsed.reasoningOverride);
+  if (parsed.modelOverride) inherited.push(MODEL_FLAG, parsed.modelOverride);
+  return inherited;
+}
+
+function normalizeTeamWorkerLaunchArgs(args: string[], preferredModel?: string): string[] {
+  const parsed = parseTeamWorkerLaunchArgs(args);
+  const normalized = [...parsed.passthrough];
+
+  if (parsed.wantsBypass) normalized.push(CODEX_BYPASS_FLAG);
+  if (parsed.reasoningOverride) normalized.push(CONFIG_FLAG, parsed.reasoningOverride);
+
+  const selectedModel = preferredModel ?? parsed.modelOverride ?? undefined;
+  if (selectedModel) normalized.push(MODEL_FLAG, selectedModel);
+
+  return normalized;
+}
+
+export function resolveTeamWorkerLaunchArgsEnv(
+  existingRaw: string | undefined,
+  codexArgs: string[],
+  inheritLeaderFlags = true,
+  defaultModel?: string,
+): string | null {
+  const envArgs = splitWorkerLaunchArgs(existingRaw);
+  const inheritedArgs = inheritLeaderFlags ? collectInheritableTeamWorkerArgs(codexArgs) : [];
+  const allArgs = [...envArgs, ...inheritedArgs];
+
+  const envModel = parseTeamWorkerLaunchArgs(envArgs).modelOverride;
+  const inheritedModel = parseTeamWorkerLaunchArgs(inheritedArgs).modelOverride;
+  const fallbackModel = typeof defaultModel === 'string' && defaultModel.trim().length > 0
+    ? defaultModel.trim()
+    : undefined;
+  const selectedModel = envModel ?? inheritedModel ?? fallbackModel;
+
+  const normalized = normalizeTeamWorkerLaunchArgs(allArgs, selectedModel ?? undefined);
   if (normalized.length === 0) return null;
   return normalized.join(' ');
 }
