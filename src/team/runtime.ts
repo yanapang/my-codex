@@ -55,8 +55,8 @@ import {
 } from './mcp-comm.js';
 import {
   generateWorkerOverlay,
-  applyWorkerOverlay,
-  stripWorkerOverlay,
+  writeTeamWorkerInstructionsFile,
+  removeTeamWorkerInstructionsFile,
   generateInitialInbox,
   generateTaskAssignmentInbox,
   generateShutdownInbox,
@@ -195,9 +195,8 @@ export async function startTeam(
   // 2. Sanitize team name
   const sanitized = sanitizeTeamName(teamName);
   let sessionName = `omx-team-${sanitized}`;
-  const agentsMdPath = join(cwd, 'AGENTS.md');
   const overlay = generateWorkerOverlay(sanitized);
-  let overlayApplied = false;
+  let workerInstructionsPath: string | null = null;
   let sessionCreated = false;
   const createdWorkerPaneIds: string[] = [];
   const workerLaunchArgs = resolveWorkerLaunchArgsFromEnv(process.env, agentType);
@@ -227,9 +226,9 @@ export async function startTeam(
       }, cwd);
     }
 
-    // 5. Apply generic AGENTS.md overlay
-    await applyWorkerOverlay(agentsMdPath, overlay);
-    overlayApplied = true;
+    // 5. Write team-scoped worker instructions file (no mutation of project AGENTS.md)
+    workerInstructionsPath = await writeTeamWorkerInstructionsFile(sanitized, cwd, overlay);
+    process.env.OMX_MODEL_INSTRUCTIONS_FILE = workerInstructionsPath;
 
     // 6. Create tmux session with workers
     const createdSession = createTeamSession(sanitized, workerCount, cwd, workerLaunchArgs);
@@ -316,11 +315,12 @@ export async function startTeam(
       }
     }
 
-    if (overlayApplied) {
+    if (workerInstructionsPath) {
       try {
-        await stripWorkerOverlay(agentsMdPath);
+        await removeTeamWorkerInstructionsFile(sanitized, cwd);
+        delete process.env.OMX_MODEL_INSTRUCTIONS_FILE;
       } catch (cleanupError) {
-        rollbackErrors.push(`stripWorkerOverlay: ${String(cleanupError)}`);
+        rollbackErrors.push(`removeTeamWorkerInstructionsFile: ${String(cleanupError)}`);
       }
     }
 
@@ -638,9 +638,9 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
     try { destroyTeamSession(sessionName); } catch { /* ignore */ }
   }
 
-  // 5. Strip AGENTS.md overlay
-  const agentsMdPath = join(cwd, 'AGENTS.md');
-  try { await stripWorkerOverlay(agentsMdPath); } catch { /* ignore */ }
+  // 5. Remove team-scoped worker instructions file (no mutation of project AGENTS.md)
+  try { await removeTeamWorkerInstructionsFile(sanitized, cwd); } catch { /* ignore */ }
+  delete process.env.OMX_MODEL_INSTRUCTIONS_FILE;
 
   // 6. Cleanup state
   await cleanupTeamState(sanitized, cwd);
