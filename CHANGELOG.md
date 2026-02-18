@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.4.2] - 2026-02-18
+
+### Added
+- Added broader auto-nudge stall detection patterns (for example: "next I can", "say go", and "keep driving") with a focused last-lines hot zone.
+- Added worker-idle aggregation notifications so team leaders are alerted when all workers are idle/done (with cooldown and event logging).
+- Added automatic tmux mouse scrolling for team sessions (opt-out via `OMX_TEAM_MOUSE=0`).
+
+### Fixed
+- Fixed worker message submission reliability by adding settle/delay timing before and during submit key rounds.
+- Fixed CLI exit behavior by awaiting `main(...)` in `bin/omx.js` so `/exit` terminates cleanly.
+- Replaced deprecated `collab` feature references with `multi_agent` across generator logic, docs, and tests.
+
+### Tests
+- Added coverage for `all workers idle` notify-hook behavior and expanded auto-nudge pattern tests.
+- Added new unit suites for hook extensibility runtime, HUD rendering/types/colors, verifier, and utility helpers.
+- Added tests for tmux mouse-mode enablement behavior.
+
 ## [0.4.0] - 2026-02-17
 
 ### Added
