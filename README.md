@@ -14,6 +14,18 @@
 
 Multi-agent orchestration layer for [OpenAI Codex CLI](https://github.com/openai/codex).
 
+## Languages
+
+- [English](./README.md)
+- [한국어 (Korean)](./README.ko.md)
+- [日本語 (Japanese)](./README.ja.md)
+- [简体中文 (Chinese)](./README.zh.md)
+- [Tiếng Việt (Vietnamese)](./README.vi.md)
+- [Español (Spanish)](./README.es.md)
+- [Português (Portuguese)](./README.pt.md)
+- [Русский (Russian)](./README.ru.md)
+
+
 OMX turns Codex from a single-session agent into a coordinated system with:
 - Role prompts (`/prompts:name`) for specialized agents
 - Workflow skills (`$name`) for repeatable execution modes
