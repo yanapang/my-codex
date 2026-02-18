@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildWorkerStartupCommand,
   createTeamSession,
+  enableMouseScrolling,
   isTmuxAvailable,
   isWorkerAlive,
   listTeamSessions,
@@ -247,6 +248,22 @@ describe('isWorkerAlive', () => {
     // which caused workers to be treated as dead and the leader to clean up state too early.
     withEmptyPath(() => {
       assert.equal(isWorkerAlive('omx-team-x', 1), false);
+    });
+  });
+});
+
+describe('enableMouseScrolling', () => {
+  it('returns false when tmux is unavailable', () => {
+    // When tmux is not on PATH, enableMouseScrolling should gracefully return false
+    // rather than throwing, so callers do not need to guard against errors.
+    withEmptyPath(() => {
+      assert.equal(enableMouseScrolling('omx-team-x'), false);
+    });
+  });
+
+  it('returns false for empty session target when tmux unavailable', () => {
+    withEmptyPath(() => {
+      assert.equal(enableMouseScrolling(''), false);
     });
   });
 });

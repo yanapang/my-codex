@@ -276,7 +276,27 @@ export function createTeamSession(
   runTmux(['select-pane', '-t', leaderPaneId]);
   sleepSeconds(0.5);
 
+  // Enable mouse scrolling so agent output panes can be scrolled with the
+  // mouse wheel without conflicting with keyboard up/down arrow-key input
+  // history navigation in the Codex CLI input field. (issue #103)
+  // Opt-out: set OMX_TEAM_MOUSE=0 in the environment.
+  if (process.env.OMX_TEAM_MOUSE !== '0') {
+    enableMouseScrolling(sessionName);
+  }
+
   return { name: teamTarget, workerCount, cwd, workerPaneIds };
+}
+
+/**
+ * Enable tmux mouse mode for a session so users can scroll pane content
+ * (e.g. long agent output) with the mouse wheel instead of arrow keys.
+ * Arrow keys remain reserved for Codex CLI input-history navigation.
+ *
+ * Returns true if the option was set successfully, false otherwise.
+ */
+export function enableMouseScrolling(sessionTarget: string): boolean {
+  const result = runTmux(['set-option', '-t', sessionTarget, 'mouse', 'on']);
+  return result.ok;
 }
 
 function paneTarget(sessionName: string, workerIndex: number, workerPaneId?: string): string {
@@ -446,6 +466,9 @@ export function sendToWorker(sessionName: string, workerIndex: number, text: str
     throw new Error(`sendToWorker: failed to send text: ${send.stderr}`);
   }
 
+  // Allow the input buffer to settle before sending Enter
+  sleepFractionalSeconds(0.15);
+
   const shouldInterrupt = strategy === 'interrupt';
   const shouldQueueFirst = strategy === 'queue' || (strategy === 'auto' && paneBusy);
   if (shouldInterrupt) {
@@ -459,13 +482,14 @@ export function sendToWorker(sessionName: string, workerIndex: number, text: str
   // If that fails, fall back to legacy C-m-based submit rounds.
   const submitRounds = 6;
   for (let round = 0; round < submitRounds; round++) {
+    sleepFractionalSeconds(0.1);
     if (round === 0 && shouldQueueFirst) {
       sendKeyOrThrow(target, 'Tab', 'Tab');
       sleepFractionalSeconds(0.08);
       sendKeyOrThrow(target, 'C-m', 'C-m');
     } else {
       sendKeyOrThrow(target, 'C-m', 'C-m');
-      sleepFractionalSeconds(0.12);
+      sleepFractionalSeconds(0.2);
       sendKeyOrThrow(target, 'C-m', 'C-m');
     }
     sleepFractionalSeconds(0.14);
