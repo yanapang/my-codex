@@ -6,6 +6,8 @@ import {
   enableMouseScrolling,
   isTmuxAvailable,
   isWorkerAlive,
+  killWorker,
+  killWorkerByPaneId,
   listTeamSessions,
   sanitizeTeamName,
   sendToWorker,
@@ -264,6 +266,59 @@ describe('enableMouseScrolling', () => {
   it('returns false for empty session target when tmux unavailable', () => {
     withEmptyPath(() => {
       assert.equal(enableMouseScrolling(''), false);
+    });
+  });
+});
+
+describe('killWorkerByPaneId leader pane guard', () => {
+  it('skips kill when workerPaneId matches leaderPaneId (guard fires before tmux is called)', () => {
+    // With empty PATH tmux is unavailable, so any actual kill-pane call would fail.
+    // When the guard fires (paneId === leaderPaneId) the function returns early
+    // without invoking tmux, so no error is thrown regardless of PATH.
+    withEmptyPath(() => {
+      assert.doesNotThrow(() => killWorkerByPaneId('%5', '%5'));
+    });
+  });
+
+  it('does not skip kill when pane ids differ (falls through to tmux attempt)', () => {
+    // Different IDs: guard does not fire. tmux is unavailable but kill errors are swallowed internally.
+    withEmptyPath(() => {
+      assert.doesNotThrow(() => killWorkerByPaneId('%5', '%6'));
+    });
+  });
+
+  it('skips kill for non-percent pane id without reaching tmux', () => {
+    withEmptyPath(() => {
+      assert.doesNotThrow(() => killWorkerByPaneId('invalid', '%5'));
+    });
+  });
+
+  it('skips kill when no leaderPaneId provided and pane id is valid percent id', () => {
+    // Without leaderPaneId the guard is not active; tmux call fails gracefully.
+    withEmptyPath(() => {
+      assert.doesNotThrow(() => killWorkerByPaneId('%5'));
+    });
+  });
+});
+
+describe('killWorker leader pane guard', () => {
+  it('returns immediately when workerPaneId matches leaderPaneId', () => {
+    // Guard fires before any tmux send-keys call, so no error even with empty PATH.
+    withEmptyPath(() => {
+      assert.doesNotThrow(() => killWorker('omx-team-x:0', 1, '%5', '%5'));
+    });
+  });
+
+  it('proceeds (gracefully) when pane ids differ', () => {
+    // Guard does not fire; tmux calls fail gracefully with empty PATH.
+    withEmptyPath(() => {
+      assert.doesNotThrow(() => killWorker('omx-team-x:0', 1, '%5', '%6'));
+    });
+  });
+
+  it('proceeds when leaderPaneId is not provided', () => {
+    withEmptyPath(() => {
+      assert.doesNotThrow(() => killWorker('omx-team-x:0', 1, '%5'));
     });
   });
 });

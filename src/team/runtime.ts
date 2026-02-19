@@ -221,6 +221,7 @@ export async function startTeam(
   let workerInstructionsPath: string | null = null;
   let sessionCreated = false;
   const createdWorkerPaneIds: string[] = [];
+  let createdLeaderPaneId: string | undefined;
   const configuredModel = getModelForMode('team');
   const workerLaunchArgs = resolveWorkerLaunchArgsFromEnv(process.env, agentType, configuredModel);
   const workerReadyTimeoutMs = resolveWorkerReadyTimeoutMs(process.env);
@@ -257,7 +258,10 @@ export async function startTeam(
     const createdSession = createTeamSession(sanitized, workerCount, cwd, workerLaunchArgs);
     sessionName = createdSession.name;
     createdWorkerPaneIds.push(...createdSession.workerPaneIds);
+    createdLeaderPaneId = createdSession.leaderPaneId;
     config.tmux_session = sessionName;
+    config.leader_pane_id = createdSession.leaderPaneId;
+    if (createdSession.hudPaneId) config.hud_pane_id = createdSession.hudPaneId;
     await saveTeamConfig(config, cwd);
     sessionCreated = true;
 
@@ -328,7 +332,7 @@ export async function startTeam(
         // In split-pane topology, we must not kill the entire tmux session; kill only created panes.
         if (sessionName.includes(':')) {
           for (const paneId of createdWorkerPaneIds) {
-            try { killWorkerByPaneId(paneId); } catch { /* ignore */ }
+            try { killWorkerByPaneId(paneId, createdLeaderPaneId); } catch { /* ignore */ }
           }
         } else {
           destroyTeamSession(sessionName);
@@ -658,10 +662,15 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
   }
 
   // 3. Force kill remaining workers
+  const leaderPaneId = config.leader_pane_id;
+  const hudPaneId = config.hud_pane_id;
   for (const w of config.workers) {
     try {
+      // Guard: never kill the leader's own pane or the HUD pane.
+      if (leaderPaneId && w.pane_id === leaderPaneId) continue;
+      if (hudPaneId && w.pane_id === hudPaneId) continue;
       if (isWorkerAlive(sessionName, w.index, w.pane_id)) {
-        killWorker(sessionName, w.index, w.pane_id);
+        killWorker(sessionName, w.index, w.pane_id, leaderPaneId);
       }
     } catch { /* ignore */ }
   }

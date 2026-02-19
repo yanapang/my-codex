@@ -6,6 +6,10 @@ export interface TeamSession {
   workerCount: number;
   cwd: string;
   workerPaneIds: string[];
+  /** Leader's own pane ID — must never be targeted by worker cleanup routines. */
+  leaderPaneId: string;
+  /** HUD pane spawned below the leader column, or null if creation failed. */
+  hudPaneId: string | null;
 }
 
 const INJECTION_MARKER = '[OMX_TMUX_INJECT]';
@@ -267,10 +271,16 @@ export function createTeamSession(
 
   // Re-create a single HUD pane under the leader column for team visibility.
   // Keep this after layout sizing so HUD does not get mixed into worker stack.
+  // Capture the HUD pane ID so it can be tracked and excluded from worker cleanup.
+  let hudPaneId: string | null = null;
   const omxEntry = process.argv[1];
   if (omxEntry && omxEntry.trim() !== '') {
     const hudCmd = `node ${shellQuoteSingle(omxEntry)} hud --watch`;
-    runTmux(['split-window', '-v', '-l', '4', '-t', leaderPaneId, '-d', '-c', cwd, hudCmd]);
+    const hudResult = runTmux(['split-window', '-v', '-l', '4', '-t', leaderPaneId, '-d', '-P', '-F', '#{pane_id}', '-c', cwd, hudCmd]);
+    if (hudResult.ok) {
+      const id = hudResult.stdout.split('\n')[0]?.trim() ?? '';
+      if (id.startsWith('%')) hudPaneId = id;
+    }
   }
 
   runTmux(['select-pane', '-t', leaderPaneId]);
@@ -284,7 +294,7 @@ export function createTeamSession(
     enableMouseScrolling(sessionName);
   }
 
-  return { name: teamTarget, workerCount, cwd, workerPaneIds };
+  return { name: teamTarget, workerCount, cwd, workerPaneIds, leaderPaneId, hudPaneId };
 }
 
 /**
@@ -562,8 +572,12 @@ export function isWorkerAlive(sessionName: string, workerIndex: number, workerPa
   }
 }
 
-// Kill a specific worker: send C-c, then C-d, then kill-pane if still alive
-export function killWorker(sessionName: string, workerIndex: number, workerPaneId?: string): void {
+// Kill a specific worker: send C-c, then C-d, then kill-pane if still alive.
+// leaderPaneId: when provided, the kill is skipped entirely if workerPaneId matches it.
+export function killWorker(sessionName: string, workerIndex: number, workerPaneId?: string, leaderPaneId?: string): void {
+  // Guard: never kill the leader's own pane.
+  if (leaderPaneId && workerPaneId === leaderPaneId) return;
+
   runTmux(['send-keys', '-t', paneTarget(sessionName, workerIndex, workerPaneId), 'C-c']);
   sleepSeconds(1);
 
@@ -577,8 +591,11 @@ export function killWorker(sessionName: string, workerIndex: number, workerPaneI
   }
 }
 
-export function killWorkerByPaneId(workerPaneId: string): void {
+// leaderPaneId: when provided, the kill is skipped if workerPaneId matches it.
+export function killWorkerByPaneId(workerPaneId: string, leaderPaneId?: string): void {
   if (!workerPaneId.startsWith('%')) return;
+  // Guard: never kill the leader's own pane.
+  if (leaderPaneId && workerPaneId === leaderPaneId) return;
   runTmux(['kill-pane', '-t', workerPaneId]);
 }
 
