@@ -15,6 +15,7 @@ import { hudCommand } from '../hud/index.js';
 import { teamCommand } from './team.js';
 import { getAllScopedStateDirs, getBaseStateDir, getStateDir } from '../mcp/state-paths.js';
 import { maybeCheckAndPromptUpdate } from './update.js';
+import { maybePromptGithubStar } from './star-prompt.js';
 import {
   generateOverlay,
   writeSessionModelInstructionsFile,
@@ -142,10 +143,14 @@ export function findHudWatchPaneIds(panes: TmuxPaneSnapshot[], currentPaneId?: s
     .map((pane) => pane.paneId);
 }
 
-export function buildHudPaneCleanupTargets(existingPaneIds: string[], createdPaneId: string | null): string[] {
+export function buildHudPaneCleanupTargets(existingPaneIds: string[], createdPaneId: string | null, leaderPaneId?: string): string[] {
   const targets = new Set<string>(existingPaneIds.filter((id) => id.startsWith('%')));
   if (createdPaneId && createdPaneId.startsWith('%')) {
     targets.add(createdPaneId);
+  }
+  // Guard: never kill the leader's own pane under any circumstances.
+  if (leaderPaneId && leaderPaneId.startsWith('%')) {
+    targets.delete(leaderPaneId);
   }
   return [...targets];
 }
@@ -294,6 +299,12 @@ async function launchWithHud(args: string[]): Promise<void> {
     await maybeCheckAndPromptUpdate(cwd);
   } catch {
     // Non-fatal: update checks must never block launch
+  }
+
+  try {
+    await maybePromptGithubStar();
+  } catch {
+    // Non-fatal: star prompt must never block launch
   }
 
   // ── Phase 1: preLaunch ──────────────────────────────────────────────────
@@ -732,7 +743,8 @@ function runCodex(cwd: string, args: string[], sessionId: string): void {
     } finally {
       const cleanupPaneIds = buildHudPaneCleanupTargets(
         listHudWatchPaneIdsInCurrentWindow(currentPaneId),
-        hudPaneId
+        hudPaneId,
+        currentPaneId
       );
       for (const paneId of cleanupPaneIds) {
         killTmuxPane(paneId);
