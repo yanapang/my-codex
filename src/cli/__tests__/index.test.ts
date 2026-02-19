@@ -138,6 +138,20 @@ describe('tmux HUD pane helpers', () => {
   it('buildHudPaneCleanupTargets de-dupes pane ids and includes created pane', () => {
     assert.deepEqual(buildHudPaneCleanupTargets(['%3', '%3', 'invalid'], '%4'), ['%3', '%4']);
   });
+
+  it('buildHudPaneCleanupTargets excludes leader pane from existing ids', () => {
+    // %5 is the leader pane — it must not be included even if findHudWatchPaneIds let it through.
+    assert.deepEqual(buildHudPaneCleanupTargets(['%3', '%5'], '%4', '%5'), ['%3', '%4']);
+  });
+
+  it('buildHudPaneCleanupTargets excludes leader pane even when it matches the created HUD pane id', () => {
+    // Defensive edge case: if createHudWatchPane somehow returned the leader pane id, guard protects it.
+    assert.deepEqual(buildHudPaneCleanupTargets(['%3'], '%5', '%5'), ['%3']);
+  });
+
+  it('buildHudPaneCleanupTargets is a no-op guard when leaderPaneId is absent', () => {
+    assert.deepEqual(buildHudPaneCleanupTargets(['%3'], '%4'), ['%3', '%4']);
+  });
 });
 
 describe('buildTmuxShellCommand', () => {

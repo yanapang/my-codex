@@ -14,6 +14,10 @@ export interface TeamConfig {
   created_at: string;
   tmux_session: string; // "omx-team-{name}"
   next_task_id: number;
+  /** Leader's own tmux pane ID — must never be killed during worker cleanup. */
+  leader_pane_id?: string;
+  /** HUD pane spawned below the leader column — excluded from worker pane cleanup. */
+  hud_pane_id?: string;
 }
 
 export interface WorkerInfo {
