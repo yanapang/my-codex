@@ -13,6 +13,8 @@
 import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
+import { AGENT_DEFINITIONS } from '../agents/definitions.js';
+import { omxAgentsConfigDir } from '../utils/paths.js';
 
 interface MergeOptions {
   verbose?: boolean;
@@ -102,6 +104,14 @@ function upsertFeatureFlags(config: string): string {
     }
   }
 
+  // Remove deprecated 'collab' key (superseded by multi_agent)
+  for (let i = sectionEnd - 1; i > featuresStart; i--) {
+    if (/^\s*collab\s*=/.test(lines[i])) {
+      lines.splice(i, 1);
+      sectionEnd -= 1;
+    }
+  }
+
   let multiAgentIdx = -1;
   let childAgentsIdx = -1;
   for (let i = featuresStart + 1; i < sectionEnd; i++) {
@@ -171,6 +181,35 @@ function stripExistingOmxBlocks(config: string): { cleaned: string; removed: num
 }
 
 /**
+ * Generate [agents.<name>] entries for Codex native multi-agent support.
+ * Each agent gets a description and config_file pointing to ~/.omx/agents/<name>.toml
+ */
+function getAgentEntries(): string[] {
+  const SKIP_AGENTS = new Set(['deep-executor']);
+  const entries: string[] = [
+    '',
+    '# OMX Native Agent Roles (Codex multi-agent)',
+  ];
+
+  for (const [name, agent] of Object.entries(AGENT_DEFINITIONS)) {
+    if (SKIP_AGENTS.has(name)) continue;
+
+    // TOML table headers with special chars need quoting
+    const tableKey = name.includes('-') ? `agents."${name}"` : `agents.${name}`;
+    const configFile = join(omxAgentsConfigDir(), `${name}.toml`)
+      .replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"');
+
+    entries.push('');
+    entries.push(`[${tableKey}]`);
+    entries.push(`description = "${agent.description}"`);
+    entries.push(`config_file = "${configFile}"`);
+  }
+
+  return entries;
+}
+
+/**
  * OMX table-section block (MCP servers, TUI).
  * Contains ONLY [table] sections — no bare keys.
  */
@@ -214,6 +253,7 @@ function getOmxTablesBlock(pkgRoot: string): string {
     `args = ["${traceServerPath}"]`,
     'enabled = true',
     'startup_timeout_sec = 5',
+    ...getAgentEntries(),
     '',
     '# OMX TUI StatusLine (Codex CLI v0.101.0+)',
     '[tui]',

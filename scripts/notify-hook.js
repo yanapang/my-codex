@@ -764,7 +764,12 @@ async function maybeNudgeTeamLeader({ cwd, stateDir, logsDir, preComputedLeaderS
     // New condition: worker panes alive + leader stale = always nudge
     const stalePanesNudge = paneStatus.alive && leaderStale;
 
-    if (!hasNewMessage && !dueByTime && !stalePanesNudge) continue;
+    // stalePanesNudge is intentionally NOT an independent trigger: it must respect the
+    // same dueByTime rate limit as the periodic check. If stalePanesNudge bypassed
+    // dueByTime, a nudge would fire on every agent turn while the leader is stale,
+    // causing message spam (issue #116). stalePanesNudge still controls the nudge
+    // message/reason below, but never bypasses the 2-minute interval guard.
+    if (!hasNewMessage && !dueByTime) continue;
 
     // Build contextual nudge message
     const msgCount = messages.length;
@@ -1536,6 +1541,36 @@ async function main() {
     await maybeAutoNudge({ cwd, stateDir, logsDir, payload });
   } catch {
     // Non-critical
+  }
+
+  // 10. Code simplifier: delegate recently modified files for simplification.
+  //     Opt-in via ~/.omx/config.json: { "codeSimplifier": { "enabled": true } }
+  //     Uses a trigger marker in .omx/state/ to prevent infinite loops.
+  if (!isTeamWorker) {
+    try {
+      const { processCodeSimplifier } = await import('../dist/hooks/code-simplifier/index.js');
+      const csResult = processCodeSimplifier(cwd, stateDir);
+      if (csResult.triggered) {
+        const csPaneId = await resolveNudgePaneTarget(stateDir);
+        if (csPaneId) {
+          const csText = `${csResult.message} ${DEFAULT_MARKER}`;
+          await runProcess('tmux', ['send-keys', '-t', csPaneId, '-l', csText], 3000);
+          await new Promise(r => setTimeout(r, 100));
+          await runProcess('tmux', ['send-keys', '-t', csPaneId, 'C-m'], 3000);
+          await new Promise(r => setTimeout(r, 100));
+          await runProcess('tmux', ['send-keys', '-t', csPaneId, 'C-m'], 3000);
+
+          await logTmuxHookEvent(logsDir, {
+            timestamp: new Date().toISOString(),
+            type: 'code_simplifier_triggered',
+            pane_id: csPaneId,
+            file_count: csResult.message.split('\n').filter(l => l.trimStart().startsWith('- ')).length,
+          });
+        }
+      }
+    } catch {
+      // Non-critical: code-simplifier module may not be built yet
+    }
   }
 }
 
