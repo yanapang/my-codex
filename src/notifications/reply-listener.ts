@@ -7,7 +7,7 @@
  * Security considerations:
  * - State/PID/log files use restrictive permissions (0600)
  * - Bot tokens stored in state file, NOT in environment variables
- * - Two-layer input sanitization (sanitizeReplyInput + sanitizeForTmux)
+ * - Two-layer input sanitization (sanitizeReplyInput + newline stripping in buildSendPaneArgvs)
  * - Pane verification via analyzePaneContent before every injection
  * - Authorization: only configured user IDs (Discord) / chat ID (Telegram) can inject
  * - Rate limiting to prevent spam/abuse

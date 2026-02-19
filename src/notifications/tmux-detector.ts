@@ -5,7 +5,7 @@
  * Codex CLI, and inject text into panes. Used by the reply-listener daemon.
  */
 
-import { execSync } from 'child_process';
+import { execSync, spawnSync } from 'child_process';
 
 export function isTmuxAvailable(): boolean {
   try {
@@ -64,32 +64,54 @@ export function analyzePaneContent(content: string): PaneAnalysis {
 }
 
 /**
- * Sanitize text for safe injection into tmux via send-keys.
+ * Builds the ordered list of tmux send-keys argv arrays needed to type text
+ * into a pane and optionally submit it.
+ *
+ * Enter (C-m) is always sent in its own dedicated send-keys call, never
+ * bundled with the text payload. This prevents Shift+Enter injection: without
+ * this isolation a C-m (or any other tmux key name) embedded in the text
+ * could be interpreted as a key press by tmux when sent without -l (issue #107).
+ *
+ * @param paneId     tmux pane identifier, e.g. "%3"
+ * @param text       text to type; embedded newlines are replaced with spaces
+ *                   to prevent them from acting as Enter when sent literally
+ * @param pressEnter when true, appends two isolated C-m submit calls
+ * @returns          array of argv arrays, one per send-keys invocation
  */
-function sanitizeForTmux(text: string): string {
-  return text
-    .replace(/\\/g, '\\\\')
-    .replace(/"/g, '\\"')
-    .replace(/'/g, "\\'")
-    .replace(/;/g, '\\;')
-    .replace(/\n/g, ' ');
+export function buildSendPaneArgvs(
+  paneId: string,
+  text: string,
+  pressEnter: boolean = true,
+): string[][] {
+  // Replace newlines with spaces so they cannot act as Enter when the text
+  // is delivered byte-for-byte via -l (literal) mode.
+  const safe = text.replace(/\r?\n/g, ' ');
+
+  // Use -l (literal) so tmux key names inside the text are never interpreted
+  // as key presses. Use -- to prevent text starting with '-' from being
+  // parsed as tmux flags.
+  const argvs: string[][] = [['send-keys', '-t', paneId, '-l', '--', safe]];
+
+  if (pressEnter) {
+    // Codex CLI uses raw input mode where 'Enter' key name is unreliable;
+    // send C-m (carriage return) twice for reliable prompt submission.
+    // Each C-m is an isolated send-keys call — never bundled with the text
+    // above (issue #107).
+    argvs.push(['send-keys', '-t', paneId, 'C-m']);
+    argvs.push(['send-keys', '-t', paneId, 'C-m']);
+  }
+
+  return argvs;
 }
 
 export function sendToPane(paneId: string, text: string, pressEnter: boolean = true): boolean {
-  try {
-    const sanitized = sanitizeForTmux(text);
-    execSync(`tmux send-keys -t ${paneId} "${sanitized}"`, {
+  for (const argv of buildSendPaneArgvs(paneId, text, pressEnter)) {
+    const result = spawnSync('tmux', argv, {
       timeout: 3000,
       stdio: ['pipe', 'pipe', 'pipe'],
+      encoding: 'utf-8',
     });
-    if (pressEnter) {
-      // Codex CLI uses raw input mode where 'Enter' key name is unreliable;
-      // send 'C-m' (carriage return) twice for reliable prompt submission.
-      execSync(`tmux send-keys -t ${paneId} C-m`, { timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'] });
-      execSync(`tmux send-keys -t ${paneId} C-m`, { timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'] });
-    }
-    return true;
-  } catch {
-    return false;
+    if (result.error || result.status !== 0) return false;
   }
+  return true;
 }
