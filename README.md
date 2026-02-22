@@ -212,7 +212,7 @@ Important rule: do not shutdown while tasks are still `in_progress` unless abort
 
 Examples:
 - Agents: `architect`, `planner`, `executor`, `debugger`, `verifier`, `security-reviewer`
-- Skills: `autopilot`, `plan`, `team`, `ralph`, `ultrawork`, `research`, `cancel`
+- Skills: `autopilot`, `plan`, `team`, `ralph`, `ultrawork`, `cancel`
 
 ## Project Layout
 

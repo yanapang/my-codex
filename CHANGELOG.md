@@ -4,8 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
-### Deprecated
-- Deprecated `/research` skill; use `/scientist` for data and codebase analysis, or `/external-context` for external documentation lookup.
+### Removed
+- Hard-removed the `research` skill (`$research` / `skills/research/SKILL.md`). The skill file, keyword detection entry, and all manifest/catalog references have been deleted. Closes #148.
 
 ## [0.5.0] - 2026-02-21
 
