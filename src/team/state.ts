@@ -1023,10 +1023,12 @@ export async function listTasks(teamName: string, cwd: string): Promise<TeamTask
   const files = await readdir(tasksRoot);
   const tasks: TeamTaskV2[] = [];
 
-  for (const f of files) {
+  const matched = files.flatMap((f: string) => {
     const m = /^task-(\d+)\.json$/.exec(f);
-    if (!m) continue;
-    const t = await readTask(teamName, m[1], cwd);
+    return m ? [m[1]] : [];
+  });
+  const results = await Promise.all(matched.map((id: string) => readTask(teamName, id, cwd)));
+  for (const t of results) {
     if (t) tasks.push(normalizeTask(t));
   }
 

@@ -613,6 +613,24 @@ describe('team state', () => {
     }
   });
 
+  it('listTasks reads task files in parallel', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-team-list-parallel-'));
+    try {
+      await initTeamState('team-parallel', 't', 'executor', 1, cwd);
+      const N = 20;
+      for (let i = 0; i < N; i++) {
+        await createTask('team-parallel', { subject: `task-${i}`, description: 'd', status: 'pending' }, cwd);
+      }
+      const tasks = await listTasks('team-parallel', cwd);
+      assert.equal(tasks.length, N);
+      // IDs should be consecutive strings '1'..'N' in sorted order
+      const ids = tasks.map((t) => t.id);
+      assert.deepEqual(ids, Array.from({ length: N }, (_, i) => String(i + 1)));
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('readTask returns null for non-existent task', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-team-state-'));
     try {
