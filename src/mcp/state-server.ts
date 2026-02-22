@@ -15,6 +15,9 @@ import { existsSync } from 'fs';
 import { dirname, join } from 'path';
 import {
   getAllScopedStatePaths,
+  getReadScopedStateDirs,
+  getReadScopedStatePaths,
+  resolveStateScope,
   getStateDir,
   getStatePath,
   resolveWorkingDirectoryForState,
@@ -22,6 +25,8 @@ import {
 } from './state-paths.js';
 import { withModeRuntimeContext } from '../state/mode-state-context.js';
 import { ensureTmuxHookInitialized } from '../cli/tmux-hook.js';
+import { RALPH_PHASES, validateAndNormalizeRalphState } from '../ralph/contract.js';
+import { ensureCanonicalRalphArtifacts } from '../ralph/persistence.js';
 import {
   teamSendMessage as sendDirectMessage,
   teamBroadcast as broadcastMessage,
@@ -617,9 +622,9 @@ export async function handleStateToolCall(request: {
   const wd = (args as Record<string, unknown>)?.workingDirectory as string | undefined;
   const normalizedWd = resolveWorkingDirectoryForState(wd);
   let cwd = normalizedWd;
-  let sessionId: string | undefined;
+  let explicitSessionId: string | undefined;
   try {
-    sessionId = validateSessionId((args as Record<string, unknown>)?.session_id);
+    explicitSessionId = validateSessionId((args as Record<string, unknown>)?.session_id);
   } catch (error) {
     return {
       content: [{ type: 'text', text: JSON.stringify({ error: (error as Error).message }) }],
@@ -627,8 +632,16 @@ export async function handleStateToolCall(request: {
     };
   }
 
+  const stateScope = STATE_TOOL_NAMES.has(name)
+    ? await resolveStateScope(cwd, explicitSessionId)
+    : undefined;
+  const effectiveSessionId = stateScope?.sessionId;
+
   if (STATE_TOOL_NAMES.has(name)) {
-    await mkdir(getStateDir(cwd, sessionId), { recursive: true });
+    await mkdir(getStateDir(cwd), { recursive: true });
+    if (effectiveSessionId) {
+      await mkdir(getStateDir(cwd, effectiveSessionId), { recursive: true });
+    }
     await ensureTmuxHookInitialized(cwd);
   }
 
@@ -637,14 +650,15 @@ export async function handleStateToolCall(request: {
     if (teamName) {
       cwd = resolveTeamWorkingDirectory(teamName, cwd);
     }
-    await mkdir(getStateDir(cwd, sessionId), { recursive: true });
+    await mkdir(getStateDir(cwd, explicitSessionId), { recursive: true });
   }
 
   switch (name) {
     case 'state_read': {
       const mode = (args as Record<string, unknown>).mode as string;
-      const path = getStatePath(mode, cwd, sessionId);
-      if (!existsSync(path)) {
+      const paths = await getReadScopedStatePaths(mode, cwd, explicitSessionId);
+      const path = paths.find((candidate) => existsSync(candidate));
+      if (!path) {
         return { content: [{ type: 'text', text: JSON.stringify({ exists: false, mode }) }] };
       }
       const data = await readFile(path, 'utf-8');
@@ -653,7 +667,7 @@ export async function handleStateToolCall(request: {
 
     case 'state_write': {
       const mode = (args as Record<string, unknown>).mode as string;
-      const path = getStatePath(mode, cwd, sessionId);
+      const path = getStatePath(mode, cwd, effectiveSessionId);
 
       let existing: Record<string, unknown> = {};
       if (existsSync(path)) {
@@ -670,6 +684,32 @@ export async function handleStateToolCall(request: {
         ...fields
       } = args as Record<string, unknown>;
       const mergedRaw = { ...existing, ...fields, ...(customState as Record<string, unknown> || {}) } as Record<string, unknown>;
+
+      if (mode === 'ralph') {
+        const originalPhase = mergedRaw.current_phase;
+        const validation = validateAndNormalizeRalphState(mergedRaw);
+        if (!validation.ok || !validation.state) {
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                error: validation.error || `ralph.current_phase must be one of: ${RALPH_PHASES.join(', ')}`,
+              }),
+            }],
+            isError: true,
+          };
+        }
+        if (
+          typeof originalPhase === 'string'
+          && typeof validation.state.current_phase === 'string'
+          && validation.state.current_phase !== originalPhase
+        ) {
+          validation.state.ralph_phase_normalized_from = originalPhase;
+        }
+        Object.assign(mergedRaw, validation.state);
+        await ensureCanonicalRalphArtifacts(cwd, effectiveSessionId);
+      }
+
       const merged = withModeRuntimeContext(existing, mergedRaw);
 
       await writeFile(path, JSON.stringify(merged, null, 2));
@@ -681,7 +721,7 @@ export async function handleStateToolCall(request: {
       const allSessions = (args as Record<string, unknown>).all_sessions === true;
 
       if (!allSessions) {
-        const path = getStatePath(mode, cwd, sessionId);
+        const path = getStatePath(mode, cwd, effectiveSessionId);
         if (existsSync(path)) {
           await unlink(path);
         }
@@ -712,16 +752,21 @@ export async function handleStateToolCall(request: {
     }
 
     case 'state_list_active': {
-      const stateDir = getStateDir(cwd, sessionId);
+      const stateDirs = await getReadScopedStateDirs(cwd, explicitSessionId);
       const active: string[] = [];
-      if (existsSync(stateDir)) {
+      const seenModes = new Set<string>();
+      for (const stateDir of stateDirs) {
+        if (!existsSync(stateDir)) continue;
         const files = await readdir(stateDir);
         for (const f of files) {
           if (!f.endsWith('-state.json')) continue;
+          const mode = f.replace('-state.json', '');
+          if (seenModes.has(mode)) continue;
+          seenModes.add(mode);
           try {
             const data = JSON.parse(await readFile(join(stateDir, f), 'utf-8'));
             if (data.active) {
-              active.push(f.replace('-state.json', ''));
+              active.push(mode);
             }
           } catch { /* skip malformed */ }
         }
@@ -731,23 +776,25 @@ export async function handleStateToolCall(request: {
 
     case 'state_get_status': {
       const mode = (args as Record<string, unknown>)?.mode as string | undefined;
-      const stateDir = getStateDir(cwd, sessionId);
+      const stateDirs = await getReadScopedStateDirs(cwd, explicitSessionId);
       const statuses: Record<string, unknown> = {};
+      const seenModes = new Set<string>();
 
-      if (!existsSync(stateDir)) {
-        return { content: [{ type: 'text', text: JSON.stringify({ statuses: {} }) }] };
-      }
-
-      const files = await readdir(stateDir);
-      for (const f of files) {
-        if (!f.endsWith('-state.json')) continue;
-        const m = f.replace('-state.json', '');
-        if (mode && m !== mode) continue;
-        try {
-          const data = JSON.parse(await readFile(join(stateDir, f), 'utf-8'));
-          statuses[m] = { active: data.active, phase: data.current_phase, path: join(stateDir, f), data };
-        } catch {
-          statuses[m] = { error: 'malformed state file' };
+      for (const stateDir of stateDirs) {
+        if (!existsSync(stateDir)) continue;
+        const files = await readdir(stateDir);
+        for (const f of files) {
+          if (!f.endsWith('-state.json')) continue;
+          const m = f.replace('-state.json', '');
+          if (mode && m !== mode) continue;
+          if (seenModes.has(m)) continue;
+          seenModes.add(m);
+          try {
+            const data = JSON.parse(await readFile(join(stateDir, f), 'utf-8'));
+            statuses[m] = { active: data.active, phase: data.current_phase, path: join(stateDir, f), data };
+          } catch {
+            statuses[m] = { error: 'malformed state file' };
+          }
         }
       }
       return { content: [{ type: 'text', text: JSON.stringify({ statuses }) }] };
