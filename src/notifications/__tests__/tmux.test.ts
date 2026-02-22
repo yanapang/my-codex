@@ -152,50 +152,6 @@ describe('getTeamTmuxSessions - session matching', () => {
   });
 });
 
-describe('getTeamTmuxSessions - session matching', () => {
-  const originalPath = process.env.PATH;
-  const tmpDirs: string[] = [];
-
-  afterEach(() => {
-    process.env.PATH = originalPath;
-    for (const dir of tmpDirs.splice(0)) {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  function makeFakeTmux(sessions: string[]): void {
-    const fakeBinDir = mkdtempSync(join(tmpdir(), 'omx-tmux-team-test-'));
-    tmpDirs.push(fakeBinDir);
-    const tmuxPath = join(fakeBinDir, 'tmux');
-    writeFileSync(
-      tmuxPath,
-      ['#!/bin/sh', `printf '%s\n' ${sessions.map(s => `'${s}'`).join(' ')}`].join('\n'),
-    );
-    chmodSync(tmuxPath, 0o755);
-    process.env.PATH = `${fakeBinDir}:${originalPath ?? ''}`;
-  }
-
-  it('returns canonical session name (omx-team-alpha) for team "alpha"', () => {
-    makeFakeTmux(['omx-team-alpha', 'other-session']);
-    assert.deepEqual(getTeamTmuxSessions('alpha'), ['omx-team-alpha']);
-  });
-
-  it('returns prefixed worker sessions (omx-team-alpha-worker1)', () => {
-    makeFakeTmux(['omx-team-alpha-worker1', 'omx-team-alpha-worker2']);
-    assert.deepEqual(getTeamTmuxSessions('alpha'), ['omx-team-alpha-worker1', 'omx-team-alpha-worker2']);
-  });
-
-  it('does NOT return sessions for a different team', () => {
-    makeFakeTmux(['omx-team-beta', 'omx-team-beta-worker1']);
-    assert.deepEqual(getTeamTmuxSessions('alpha'), []);
-  });
-
-  it('returns empty array when no matching sessions exist', () => {
-    makeFakeTmux(['unrelated-session']);
-    assert.deepEqual(getTeamTmuxSessions('alpha'), []);
-  });
-});
-
 describe('captureTmuxPane', () => {
   const originalPath = process.env.PATH;
   const originalTmux = process.env.TMUX;
