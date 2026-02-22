@@ -31,7 +31,6 @@ const KEYWORD_MAP: Array<{ pattern: RegExp; skill: string; priority: number }> =
   // Coordination
   { pattern: /\bteam\b|\bcoordinated\s+team\b/i, skill: 'team', priority: 8 },
   { pattern: /\bswarm\b|\bcoordinated\s+swarm\b/i, skill: 'team', priority: 8 },
-  { pattern: /\bresearch\b/i, skill: 'research', priority: 7 },
 
   // Shortcuts
   { pattern: /\banalyze\b|\bdebug\b|\binvestigate\b/i, skill: 'analyze', priority: 6 },

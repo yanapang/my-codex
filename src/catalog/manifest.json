@@ -29,7 +29,6 @@
     { "name": "note", "category": "utility", "status": "active" },
     { "name": "trace", "category": "utility", "status": "active" },
     { "name": "skill", "category": "utility", "status": "active" },
-    { "name": "research", "category": "utility", "status": "merged", "canonical": "researcher" },
     { "name": "hud", "category": "utility", "status": "active" },
     { "name": "omx-setup", "category": "utility", "status": "active" },
     { "name": "configure-telegram", "category": "utility", "status": "merged", "canonical": "omx-setup" },

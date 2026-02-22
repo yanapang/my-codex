@@ -197,14 +197,6 @@
       "internalRequired": false
     },
     {
-      "name": "research",
-      "category": "utility",
-      "status": "merged",
-      "canonical": "researcher",
-      "core": false,
-      "internalRequired": false
-    },
-    {
       "name": "hud",
       "category": "utility",
       "status": "active",
@@ -447,10 +439,6 @@
     {
       "name": "review",
       "canonical": "plan --review"
-    },
-    {
-      "name": "research",
-      "canonical": "researcher"
     },
     {
       "name": "configure-telegram",

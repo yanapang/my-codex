@@ -8,7 +8,7 @@
 | Category | OMC Features | OMX Implemented | Coverage |
 |----------|-------------|-----------------|----------|
 | Agent Definitions | 29 | 29 | 100% |
-| Skills/Commands | 31 | 31 | 100% |
+| Skills/Commands | 30 | 30 | 100% |
 | AGENTS.md (CLAUDE.md equiv) | 1 | 1 | 100% |
 | CLI (setup/doctor/help/etc) | 7 | 7 | 100% |
 | Config Generation | 1 | 1 | 100% |
@@ -20,7 +20,7 @@
 | Trace | 2 tools | 2 tools | 100% |
 | Verification Protocol | 1 | 1 | 100% |
 | Notification System | 3 channels | 3 channels | 100% |
-| Keyword Detection | 17 keywords | 17 keywords | 100% |
+| Keyword Detection | 16 keywords | 16 keywords | 100% |
 | Hook Pipeline | 9 events | 6 full + 3 partial | ~89% |
 | HUD/Status Line | 1 | 1 (built-in + CLI) | 100% |
 | Subagent Tracking | 1 | partial (via multi_agent) | 50% |
@@ -65,7 +65,7 @@
 | vision | DONE | ~/.codex/prompts/vision.md |
 | writer | DONE | ~/.codex/prompts/writer.md |
 
-### Skills (31/31 = 100%)
+### Skills (30/30 = 100%)
 
 | OMC Skill | OMX Status | Mechanism |
 |-----------|-----------|-----------|
@@ -79,7 +79,7 @@
 | ~~pipeline~~ | REMOVED (v0.5.0) | — |
 | ultraqa | DONE | ~/.agents/skills/ultraqa/SKILL.md |
 | ~~ultrapilot~~ | REMOVED (v0.5.0) | — |
-| research | DONE | ~/.agents/skills/research/SKILL.md |
+| ~~research~~ | REMOVED (post-v0.5.0) | — |
 | code-review | DONE | ~/.agents/skills/code-review/SKILL.md |
 | security-review | DONE | ~/.agents/skills/security-review/SKILL.md |
 | tdd | DONE | ~/.agents/skills/tdd/SKILL.md |
