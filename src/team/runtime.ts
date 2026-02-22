@@ -456,6 +456,7 @@ export async function monitorTeam(teamName: string, cwd: string): Promise<TeamSn
         workerTurnCountByName: Object.fromEntries(workers.map((w) => [w.name, w.heartbeat?.turn_count ?? 0])),
         workerTaskIdByName: Object.fromEntries(workers.map((w) => [w.name, w.status.current_task_id ?? ''])),
         mailboxNotifiedByMessageId,
+        completedEventTaskIds: previousSnapshot?.completedEventTaskIds ?? {},
       },
       cwd
   );
@@ -750,6 +751,8 @@ async function emitMonitorDerivedEvents(
   for (const task of tasks) {
     const prevStatus = previous.taskStatusById[task.id];
     if (prevStatus && prevStatus !== 'completed' && task.status === 'completed') {
+      // Skip if a task_completed event was already emitted by transitionTaskStatus (issue #161).
+      if (previous.completedEventTaskIds?.[task.id]) continue;
       await appendTeamEvent(
         teamName,
         {

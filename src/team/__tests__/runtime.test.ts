@@ -14,6 +14,8 @@ import {
   writeAtomic,
   readTask,
   readMonitorSnapshot,
+  claimTask,
+  transitionTaskStatus,
 } from '../state.js';
 import {
   monitorTeam,
@@ -657,6 +659,35 @@ describe('runtime', () => {
         diskSnap3.mailboxNotifiedByMessageId['msg-unnotified'],
         'notified message must remain in snapshot on third poll (no duplicate notification)',
       );
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('monitorTeam does not emit duplicate task_completed when transitionTaskStatus completed the task first (issue #161)', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-no-dup-'));
+    try {
+      await initTeamState('team-no-dup', 'dedup test', 'executor', 1, cwd);
+      const t = await createTask('team-no-dup', { subject: 'task', description: 'd', status: 'pending' }, cwd);
+
+      // Establish a baseline snapshot (task is pending).
+      await monitorTeam('team-no-dup', cwd);
+
+      // Complete the task via the claim-safe path — this emits the first task_completed event
+      // and records the task ID in the monitor snapshot.
+      const claim = await claimTask('team-no-dup', t.id, 'worker-1', null, cwd);
+      assert.ok(claim.ok);
+      if (!claim.ok) throw new Error('claim failed');
+      await transitionTaskStatus('team-no-dup', t.id, 'in_progress', 'completed', claim.claimToken, cwd);
+
+      // Run monitorTeam again — it must NOT emit a second task_completed event.
+      await monitorTeam('team-no-dup', cwd);
+
+      const eventsPath = join(cwd, '.omx', 'state', 'team', 'team-no-dup', 'events', 'events.ndjson');
+      const content = await readFile(eventsPath, 'utf-8');
+      const events = content.trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
+      const completedEvents = events.filter((e: { type: string }) => e.type === 'task_completed');
+      assert.equal(completedEvents.length, 1, 'should have exactly one task_completed event');
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
