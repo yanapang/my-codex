@@ -608,20 +608,25 @@ async function logTmuxHookEvent(logsDir, event) {
   await appendFile(file, JSON.stringify(event) + '\n').catch(() => {});
 }
 
-async function getScopedStateDirsForCurrentSession(baseStateDir) {
-  const scopedDirs = [baseStateDir];
+async function getScopedStateDirsForCurrentSession(baseStateDir, payloadSessionId) {
+  const explicitSessionId = safeString(payloadSessionId || '');
+  if (SESSION_ID_PATTERN.test(explicitSessionId)) {
+    const sessionDir = join(baseStateDir, 'sessions', explicitSessionId);
+    return [sessionDir];
+  }
+
   const sessionPath = join(baseStateDir, 'session.json');
   try {
     const session = JSON.parse(await readFile(sessionPath, 'utf-8'));
     const sessionId = safeString(session && session.session_id ? session.session_id : '');
     if (SESSION_ID_PATTERN.test(sessionId)) {
       const sessionDir = join(baseStateDir, 'sessions', sessionId);
-      if (existsSync(sessionDir)) scopedDirs.push(sessionDir);
+      if (existsSync(sessionDir)) return [sessionDir];
     }
   } catch {
     // No session file or malformed - fall back to global only
   }
-  return scopedDirs;
+  return [baseStateDir];
 }
 
 function resolveLeaderNudgeIntervalMs() {
@@ -1089,21 +1094,10 @@ async function syncLinkedRalphOnTeamTerminalInDir(stateDir, nowIso) {
   }
 }
 
-async function syncLinkedRalphOnTeamTerminal(stateRootDir, nowIso) {
-  await syncLinkedRalphOnTeamTerminalInDir(stateRootDir, nowIso);
-
-  const sessionsDir = join(stateRootDir, 'sessions');
-  if (!existsSync(sessionsDir)) return;
-
-  try {
-    const entries = await readdir(sessionsDir);
-    for (const sessionId of entries) {
-      // Session IDs are controlled by state-server validation; this check avoids accidental traversal.
-      if (!/^[A-Za-z0-9_-]{1,64}$/.test(sessionId)) continue;
-      await syncLinkedRalphOnTeamTerminalInDir(join(sessionsDir, sessionId), nowIso);
-    }
-  } catch {
-    // Non-critical
+async function syncLinkedRalphOnTeamTerminal(stateRootDir, nowIso, payloadSessionId) {
+  const scopedDirs = await getScopedStateDirsForCurrentSession(stateRootDir, payloadSessionId);
+  for (const scopedDir of scopedDirs) {
+    await syncLinkedRalphOnTeamTerminalInDir(scopedDir, nowIso);
   }
 }
 
@@ -1271,6 +1265,7 @@ async function main() {
   }
 
   const cwd = payload.cwd || payload['cwd'] || process.cwd();
+  const payloadSessionId = safeString(payload.session_id || payload['session-id'] || '');
   const omxDir = join(cwd, '.omx');
   const logsDir = join(omxDir, 'logs');
   const stateDir = join(omxDir, 'state');
@@ -1327,7 +1322,7 @@ async function main() {
   // GUARD: Skip when running inside a team worker to prevent state corruption
   if (!isTeamWorker) {
     try {
-      const scopedDirs = await getScopedStateDirsForCurrentSession(stateDir);
+      const scopedDirs = await getScopedStateDirsForCurrentSession(stateDir, payloadSessionId);
       for (const scopedDir of scopedDirs) {
         const stateFiles = await readdir(scopedDir).catch(() => []);
         for (const f of stateFiles) {
@@ -1348,7 +1343,7 @@ async function main() {
 
   // If linked team reaches terminal state, mark linked ralph terminal/inactive too.
   if (!isTeamWorker) {
-    await syncLinkedRalphOnTeamTerminal(stateDir, new Date().toISOString());
+    await syncLinkedRalphOnTeamTerminal(stateDir, new Date().toISOString(), payloadSessionId);
   }
 
   // 3. Track subagent metrics (lead session only)
