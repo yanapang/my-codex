@@ -1149,7 +1149,24 @@ export async function transitionTaskStatus(
   });
 
   if (!lock.ok) return { ok: false, error: 'claim_conflict' };
-  void emittedEvent;
+  // If a task_completed event was emitted via this claim-safe path, record the task ID in
+  // the monitor snapshot so that emitMonitorDerivedEvents does not emit a duplicate event
+  // on the next monitorTeam poll (issue #161).
+  if (to === 'completed') {
+    const existingSnap = await readMonitorSnapshot(teamName, cwd);
+    const updatedSnap: TeamMonitorSnapshotState = existingSnap
+      ? { ...existingSnap, completedEventTaskIds: { ...(existingSnap.completedEventTaskIds ?? {}), [taskId]: true } }
+      : {
+          taskStatusById: {},
+          workerAliveByName: {},
+          workerStateByName: {},
+          workerTurnCountByName: {},
+          workerTaskIdByName: {},
+          mailboxNotifiedByMessageId: {},
+          completedEventTaskIds: { [taskId]: true },
+        };
+    await writeMonitorSnapshot(teamName, updatedSnap, cwd);
+  }
   return lock.value;
 }
 
@@ -1495,6 +1512,8 @@ export interface TeamMonitorSnapshotState {
   workerTurnCountByName: Record<string, number>;
   workerTaskIdByName: Record<string, string>;
   mailboxNotifiedByMessageId: Record<string, string>;
+  /** Task IDs for which a task_completed event has already been emitted (from any path). */
+  completedEventTaskIds: Record<string, boolean>;
 }
 
 export interface TeamPhaseState {
@@ -1530,6 +1549,7 @@ export async function readMonitorSnapshot(
       workerTurnCountByName: parsed.workerTurnCountByName ?? {},
       workerTaskIdByName: parsed.workerTaskIdByName ?? {},
       mailboxNotifiedByMessageId: parsed.mailboxNotifiedByMessageId ?? {},
+      completedEventTaskIds: parsed.completedEventTaskIds ?? {},
     };
   } catch {
     return null;
