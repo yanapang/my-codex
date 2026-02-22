@@ -165,7 +165,7 @@ export type ClaimTaskResult =
 
 export type TransitionTaskResult =
   | { ok: true; task: TeamTaskV2 }
-  | { ok: false; error: 'claim_conflict' | 'invalid_transition' | 'task_not_found' | 'already_terminal' };
+  | { ok: false; error: 'claim_conflict' | 'invalid_transition' | 'task_not_found' | 'already_terminal' | 'lease_expired' };
 
 export type ReleaseTaskClaimResult =
   | { ok: true; task: TeamTaskV2 }
@@ -1126,6 +1126,7 @@ export async function transitionTaskStatus(
     }
     if (v.status !== from) return { ok: false as const, error: 'invalid_transition' as const };
     if (!v.claim || v.claim.token !== claimToken) return { ok: false as const, error: 'claim_conflict' as const };
+    if (new Date(v.claim.leased_until) <= new Date()) return { ok: false as const, error: 'lease_expired' as const };
 
     const isTerminal = to === 'completed' || to === 'failed';
     const updated: TeamTaskV2 = {
@@ -1205,7 +1206,8 @@ export async function releaseTaskClaim(
       return { ok: false as const, error: 'already_terminal' as const };
     }
 
-    const tokenMatches = Boolean(v.claim && v.claim.token === claimToken);
+    const leaseActive = Boolean(v.claim && new Date(v.claim.leased_until) > new Date());
+    const tokenMatches = Boolean(v.claim && v.claim.token === claimToken && leaseActive);
     const ownerMatches = v.status === 'in_progress' && v.owner === workerName;
     if (!tokenMatches && !ownerMatches) {
       return { ok: false as const, error: 'claim_conflict' as const };
