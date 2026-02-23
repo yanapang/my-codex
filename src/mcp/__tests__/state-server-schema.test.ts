@@ -15,14 +15,16 @@ const ALL_EVENT_TYPES = [
 ] as const;
 
 describe('team_append_event schema validation', () => {
-  it('schema enum contains exactly 8 event types including team_leader_nudge', async () => {
+  it('schema enum is sourced from TEAM_EVENT_TYPES and contains expected values', async () => {
     const src = await readFile(join(process.cwd(), 'src/mcp/state-server.ts'), 'utf8');
 
-    // Find the enum array for the team_append_event type field
-    const match = src.match(/name:\s*'team_append_event'[\s\S]*?enum:\s*\[([^\]]+)\]/);
-    assert.ok(match, 'Expected to find team_append_event enum in state-server.ts');
+    const constMatch = src.match(/const TEAM_EVENT_TYPES = \[([\s\S]*?)\] as const;/);
+    assert.ok(constMatch, 'Expected to find TEAM_EVENT_TYPES constant in state-server.ts');
 
-    const enumValues = match[1]
+    const enumRefMatch = src.match(/name:\s*'team_append_event'[\s\S]*?enum:\s*\[\.\.\.TEAM_EVENT_TYPES\]/);
+    assert.ok(enumRefMatch, 'Expected team_append_event schema to reference TEAM_EVENT_TYPES');
+
+    const enumValues = constMatch[1]
       .split(',')
       .map((s: string) => s.trim().replace(/^'|'$/g, ''))
       .filter(Boolean);

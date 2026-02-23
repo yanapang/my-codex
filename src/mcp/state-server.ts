@@ -107,6 +107,46 @@ const TEAM_COMM_TOOL_NAMES = new Set([
 const TEAM_NAME_SAFE_PATTERN = /^[a-z0-9][a-z0-9-]{0,29}$/;
 const WORKER_NAME_SAFE_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const TASK_ID_SAFE_PATTERN = /^\d{1,20}$/;
+const TEAM_TASK_STATUSES = ['pending', 'blocked', 'in_progress', 'completed', 'failed'] as const;
+const TEAM_EVENT_TYPES = [
+  'task_completed',
+  'task_failed',
+  'worker_idle',
+  'worker_stopped',
+  'message_received',
+  'shutdown_ack',
+  'approval_decision',
+  'team_leader_nudge',
+] as const;
+const TEAM_TASK_APPROVAL_STATUSES = ['pending', 'approved', 'rejected'] as const;
+const TEAM_UPDATE_TASK_MUTABLE_FIELDS = new Set(['subject', 'description', 'blocked_by', 'requires_code_change']);
+const TEAM_UPDATE_TASK_REQUEST_FIELDS = new Set(['team_name', 'task_id', 'workingDirectory', ...TEAM_UPDATE_TASK_MUTABLE_FIELDS]);
+
+type TeamTaskStatus = typeof TEAM_TASK_STATUSES[number];
+type TeamEventType = typeof TEAM_EVENT_TYPES[number];
+type TeamTaskApprovalStatus = typeof TEAM_TASK_APPROVAL_STATUSES[number];
+
+function isFiniteInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && Number.isFinite(value);
+}
+
+function parseValidatedTaskIdArray(value: unknown, fieldName: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${fieldName} must be an array of task IDs (strings)`);
+  }
+  const taskIds: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string') {
+      throw new Error(`${fieldName} entries must be strings`);
+    }
+    const normalized = item.trim();
+    if (!TASK_ID_SAFE_PATTERN.test(normalized)) {
+      throw new Error(`${fieldName} contains invalid task ID: "${item}"`);
+    }
+    taskIds.push(normalized);
+  }
+  return taskIds;
+}
 
 function teamStateExists(teamName: string, candidateCwd: string): boolean {
   if (!TEAM_NAME_SAFE_PATTERN.test(teamName)) return false;
@@ -425,8 +465,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           team_name: { type: 'string', description: 'Sanitized team name' },
           task_id: { type: 'string', description: 'Task ID to transition' },
-          from: { type: 'string', enum: ['pending', 'blocked', 'in_progress', 'completed', 'failed'] },
-          to: { type: 'string', enum: ['pending', 'blocked', 'in_progress', 'completed', 'failed'] },
+          from: { type: 'string', enum: [...TEAM_TASK_STATUSES] },
+          to: { type: 'string', enum: [...TEAM_TASK_STATUSES] },
           claim_token: { type: 'string', description: 'Claim token from team_claim_task' },
           workingDirectory: { type: 'string' },
         },
@@ -558,7 +598,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: 'object',
         properties: {
           team_name: { type: 'string', description: 'Sanitized team name' },
-          type: { type: 'string', enum: ['task_completed', 'task_failed', 'worker_idle', 'worker_stopped', 'message_received', 'shutdown_ack', 'approval_decision', 'team_leader_nudge'] },
+          type: { type: 'string', enum: [...TEAM_EVENT_TYPES] },
           worker: { type: 'string', description: 'Worker name associated with the event' },
           task_id: { type: 'string', description: 'Related task ID (optional)' },
           message_id: { type: 'string', description: 'Related message ID (optional)' },
@@ -667,7 +707,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           team_name: { type: 'string', description: 'Sanitized team name' },
           task_id: { type: 'string', description: 'Task ID' },
           required: { type: 'boolean', description: 'Whether approval was required' },
-          status: { type: 'string', enum: ['pending', 'approved', 'rejected'] },
+          status: { type: 'string', enum: [...TEAM_TASK_APPROVAL_STATUSES] },
           reviewer: { type: 'string', description: 'Reviewer identity' },
           decision_reason: { type: 'string', description: 'Reason for the decision' },
           workingDirectory: { type: 'string' },
@@ -1021,7 +1061,47 @@ export async function handleStateToolCall(request: {
           isError: true,
         };
       }
-      const { team_name: _tn, task_id: _ti, workingDirectory: _wd, ...updates } = args as Record<string, unknown>;
+      const unexpectedFields = Object.keys(args as Record<string, unknown>).filter((field) => !TEAM_UPDATE_TASK_REQUEST_FIELDS.has(field));
+      if (unexpectedFields.length > 0) {
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              error: `team_update_task received unsupported fields: ${unexpectedFields.join(', ')}. Allowed mutable fields: subject, description, blocked_by, requires_code_change.`,
+            }),
+          }],
+          isError: true,
+        };
+      }
+      const updates: Record<string, unknown> = {};
+      if ('subject' in (args as Record<string, unknown>)) {
+        const subject = (args as Record<string, unknown>).subject;
+        if (typeof subject !== 'string') {
+          return { content: [{ type: 'text', text: JSON.stringify({ error: 'subject must be a string when provided' }) }], isError: true };
+        }
+        updates.subject = subject.trim();
+      }
+      if ('description' in (args as Record<string, unknown>)) {
+        const description = (args as Record<string, unknown>).description;
+        if (typeof description !== 'string') {
+          return { content: [{ type: 'text', text: JSON.stringify({ error: 'description must be a string when provided' }) }], isError: true };
+        }
+        updates.description = description.trim();
+      }
+      if ('requires_code_change' in (args as Record<string, unknown>)) {
+        const requiresCodeChange = (args as Record<string, unknown>).requires_code_change;
+        if (typeof requiresCodeChange !== 'boolean') {
+          return { content: [{ type: 'text', text: JSON.stringify({ error: 'requires_code_change must be a boolean when provided' }) }], isError: true };
+        }
+        updates.requires_code_change = requiresCodeChange;
+      }
+      if ('blocked_by' in (args as Record<string, unknown>)) {
+        try {
+          updates.blocked_by = parseValidatedTaskIdArray((args as Record<string, unknown>).blocked_by, 'blocked_by');
+        } catch (error) {
+          return { content: [{ type: 'text', text: JSON.stringify({ error: (error as Error).message }) }], isError: true };
+        }
+      }
       const task = await teamUpdateTask(teamName, taskId, updates, cwd);
       if (!task) return { content: [{ type: 'text', text: JSON.stringify({ ok: false, error: 'task_not_found' }) }] };
       return { content: [{ type: 'text', text: JSON.stringify({ ok: true, task }) }] };
@@ -1034,7 +1114,14 @@ export async function handleStateToolCall(request: {
       if (!teamName || !taskId || !worker) {
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'team_name, task_id, worker are required' }) }], isError: true };
       }
-      const expectedVersion = (args as Record<string, unknown>).expected_version as number | undefined;
+      const rawExpectedVersion = (args as Record<string, unknown>).expected_version;
+      if (rawExpectedVersion !== undefined && (!isFiniteInteger(rawExpectedVersion) || rawExpectedVersion < 1)) {
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ error: 'expected_version must be a positive integer when provided' }) }],
+          isError: true,
+        };
+      }
+      const expectedVersion = rawExpectedVersion as number | undefined;
       const result = await teamClaimTask(teamName, taskId, worker, expectedVersion ?? null, cwd);
       return { content: [{ type: 'text', text: JSON.stringify(result) }] };
     }
@@ -1048,15 +1135,15 @@ export async function handleStateToolCall(request: {
       if (!teamName || !taskId || !from || !to || !claimToken) {
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'team_name, task_id, from, to, claim_token are required' }) }], isError: true };
       }
-      const allowed = new Set(['pending', 'blocked', 'in_progress', 'completed', 'failed']);
+      const allowed = new Set<string>(TEAM_TASK_STATUSES);
       if (!allowed.has(from) || !allowed.has(to)) {
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'from and to must be valid task statuses' }) }], isError: true };
       }
       const result = await teamTransitionTaskStatus(
         teamName,
         taskId,
-        from as 'pending' | 'blocked' | 'in_progress' | 'completed' | 'failed',
-        to as 'pending' | 'blocked' | 'in_progress' | 'completed' | 'failed',
+        from as TeamTaskStatus,
+        to as TeamTaskStatus,
         claimToken,
         cwd
       );
@@ -1178,8 +1265,17 @@ export async function handleStateToolCall(request: {
       if (!teamName || !eventType || !worker) {
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'team_name, type, worker are required' }) }], isError: true };
       }
+      if (!TEAM_EVENT_TYPES.includes(eventType as TeamEventType)) {
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ error: `type must be one of: ${TEAM_EVENT_TYPES.join(', ')}` }),
+          }],
+          isError: true,
+        };
+      }
       const event = await teamAppendEvent(teamName, {
-        type: eventType as 'task_completed' | 'task_failed' | 'worker_idle' | 'worker_stopped' | 'message_received' | 'shutdown_ack' | 'approval_decision' | 'team_leader_nudge',
+        type: eventType as TeamEventType,
         worker,
         task_id: (args as Record<string, unknown>).task_id as string | undefined,
         message_id: ((args as Record<string, unknown>).message_id as string | undefined) ?? null,
@@ -1267,11 +1363,24 @@ export async function handleStateToolCall(request: {
       if (!teamName || !taskId || !status || !reviewer || !decisionReason) {
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'team_name, task_id, status, reviewer, decision_reason are required' }) }], isError: true };
       }
-      const required = (args as Record<string, unknown>).required !== false;
+      if (!TEAM_TASK_APPROVAL_STATUSES.includes(status as TeamTaskApprovalStatus)) {
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ error: `status must be one of: ${TEAM_TASK_APPROVAL_STATUSES.join(', ')}` }),
+          }],
+          isError: true,
+        };
+      }
+      const rawRequired = (args as Record<string, unknown>).required;
+      if (rawRequired !== undefined && typeof rawRequired !== 'boolean') {
+        return { content: [{ type: 'text', text: JSON.stringify({ error: 'required must be a boolean when provided' }) }], isError: true };
+      }
+      const required = rawRequired !== false;
       await teamWriteTaskApproval(teamName, {
         task_id: taskId,
         required,
-        status: status as 'pending' | 'approved' | 'rejected',
+        status: status as TeamTaskApprovalStatus,
         reviewer,
         decision_reason: decisionReason,
         decided_at: new Date().toISOString(),

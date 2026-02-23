@@ -349,4 +349,189 @@ describe('state-server team comm tools', () => {
       await rm(wd, { recursive: true, force: true });
     }
   });
+
+  it('team_update_task rejects unsupported fields and invalid blocked_by entries', async () => {
+    process.env.OMX_STATE_SERVER_DISABLE_AUTO_START = '1';
+    const { handleStateToolCall } = await import('../state-server.js');
+
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-team-tools-'));
+    try {
+      await initTeamState('update-guard-team', 'update guard test', 'executor', 1, wd);
+
+      const createResp = await handleStateToolCall({
+        params: {
+          name: 'team_create_task',
+          arguments: {
+            team_name: 'update-guard-team',
+            subject: 'task',
+            description: 'task desc',
+            workingDirectory: wd,
+          },
+        },
+      });
+      const createJson = JSON.parse(createResp.content[0]?.text || '{}') as { task?: { id?: string } };
+      const taskId = createJson.task?.id ?? '1';
+
+      const unsupportedResp = await handleStateToolCall({
+        params: {
+          name: 'team_update_task',
+          arguments: {
+            team_name: 'update-guard-team',
+            task_id: taskId,
+            claim: { owner: 'worker-1' },
+            workingDirectory: wd,
+          },
+        },
+      });
+      assert.equal(unsupportedResp.isError, true);
+      const unsupportedJson = JSON.parse(unsupportedResp.content[0]?.text || '{}') as { error?: string };
+      assert.match(unsupportedJson.error ?? '', /unsupported fields/i);
+
+      const invalidDepsResp = await handleStateToolCall({
+        params: {
+          name: 'team_update_task',
+          arguments: {
+            team_name: 'update-guard-team',
+            task_id: taskId,
+            blocked_by: ['../oops'],
+            workingDirectory: wd,
+          },
+        },
+      });
+      assert.equal(invalidDepsResp.isError, true);
+      const invalidDepsJson = JSON.parse(invalidDepsResp.content[0]?.text || '{}') as { error?: string };
+      assert.match(invalidDepsJson.error ?? '', /blocked_by contains invalid task ID/i);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('team_claim_task validates expected_version as a positive integer', async () => {
+    process.env.OMX_STATE_SERVER_DISABLE_AUTO_START = '1';
+    const { handleStateToolCall } = await import('../state-server.js');
+
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-team-tools-'));
+    try {
+      await initTeamState('claim-guard-team', 'claim guard test', 'executor', 1, wd);
+
+      await handleStateToolCall({
+        params: {
+          name: 'team_create_task',
+          arguments: {
+            team_name: 'claim-guard-team',
+            subject: 'task',
+            description: 'task desc',
+            workingDirectory: wd,
+          },
+        },
+      });
+
+      const badTypeResp = await handleStateToolCall({
+        params: {
+          name: 'team_claim_task',
+          arguments: {
+            team_name: 'claim-guard-team',
+            task_id: '1',
+            worker: 'worker-1',
+            expected_version: '1',
+            workingDirectory: wd,
+          },
+        },
+      });
+      assert.equal(badTypeResp.isError, true);
+      const badTypeJson = JSON.parse(badTypeResp.content[0]?.text || '{}') as { error?: string };
+      assert.match(badTypeJson.error ?? '', /expected_version must be a positive integer/i);
+
+      const badValueResp = await handleStateToolCall({
+        params: {
+          name: 'team_claim_task',
+          arguments: {
+            team_name: 'claim-guard-team',
+            task_id: '1',
+            worker: 'worker-1',
+            expected_version: 0,
+            workingDirectory: wd,
+          },
+        },
+      });
+      assert.equal(badValueResp.isError, true);
+      const badValueJson = JSON.parse(badValueResp.content[0]?.text || '{}') as { error?: string };
+      assert.match(badValueJson.error ?? '', /expected_version must be a positive integer/i);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('team_append_event rejects unknown event types', async () => {
+    process.env.OMX_STATE_SERVER_DISABLE_AUTO_START = '1';
+    const { handleStateToolCall } = await import('../state-server.js');
+
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-team-tools-'));
+    try {
+      await initTeamState('event-guard-team', 'event guard test', 'executor', 1, wd);
+      const resp = await handleStateToolCall({
+        params: {
+          name: 'team_append_event',
+          arguments: {
+            team_name: 'event-guard-team',
+            type: 'not-a-real-event',
+            worker: 'worker-1',
+            workingDirectory: wd,
+          },
+        },
+      });
+      assert.equal(resp.isError, true);
+      const json = JSON.parse(resp.content[0]?.text || '{}') as { error?: string };
+      assert.match(json.error ?? '', /type must be one of/i);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('team_write_task_approval validates status enum and required type', async () => {
+    process.env.OMX_STATE_SERVER_DISABLE_AUTO_START = '1';
+    const { handleStateToolCall } = await import('../state-server.js');
+
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-team-tools-'));
+    try {
+      await initTeamState('approval-guard-team', 'approval guard test', 'executor', 1, wd);
+
+      const badStatusResp = await handleStateToolCall({
+        params: {
+          name: 'team_write_task_approval',
+          arguments: {
+            team_name: 'approval-guard-team',
+            task_id: '1',
+            status: 'accepted',
+            reviewer: 'reviewer-1',
+            decision_reason: 'bad status test',
+            workingDirectory: wd,
+          },
+        },
+      });
+      assert.equal(badStatusResp.isError, true);
+      const badStatusJson = JSON.parse(badStatusResp.content[0]?.text || '{}') as { error?: string };
+      assert.match(badStatusJson.error ?? '', /status must be one of/i);
+
+      const badRequiredResp = await handleStateToolCall({
+        params: {
+          name: 'team_write_task_approval',
+          arguments: {
+            team_name: 'approval-guard-team',
+            task_id: '1',
+            status: 'approved',
+            reviewer: 'reviewer-1',
+            decision_reason: 'bad required type test',
+            required: 'true',
+            workingDirectory: wd,
+          },
+        },
+      });
+      assert.equal(badRequiredResp.isError, true);
+      const badRequiredJson = JSON.parse(badRequiredResp.content[0]?.text || '{}') as { error?: string };
+      assert.match(badRequiredJson.error ?? '', /required must be a boolean/i);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
 });
