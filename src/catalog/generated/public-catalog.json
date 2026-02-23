@@ -2,7 +2,7 @@
   "generatedAt": "2026-02-20T14:01:36.185Z",
   "version": "2026.02.20.1",
   "counts": {
-    "skillCount": 31,
+    "skillCount": 30,
     "promptCount": 29,
     "activeSkillCount": 16,
     "activeAgentCount": 18
@@ -193,14 +193,6 @@
       "name": "skill",
       "category": "utility",
       "status": "active",
-      "core": false,
-      "internalRequired": false
-    },
-    {
-      "name": "research",
-      "category": "utility",
-      "status": "merged",
-      "canonical": "researcher",
       "core": false,
       "internalRequired": false
     },
@@ -447,10 +439,6 @@
     {
       "name": "review",
       "canonical": "plan --review"
-    },
-    {
-      "name": "research",
-      "canonical": "researcher"
     },
     {
       "name": "configure-telegram",

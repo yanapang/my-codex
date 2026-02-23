@@ -184,14 +184,6 @@
       "internalRequired": false
     },
     {
-      "name": "research",
-      "category": "utility",
-      "status": "merged",
-      "canonical": "researcher",
-      "core": false,
-      "internalRequired": false
-    },
-    {
       "name": "hud",
       "category": "utility",
       "status": "active",

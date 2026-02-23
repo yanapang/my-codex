@@ -47,6 +47,21 @@ describe('state-server team comm tools', () => {
       const msgId = listJson.messages?.[0]?.message_id;
       assert.ok(msgId);
 
+      const notifyResp = await handleStateToolCall({
+        params: {
+          name: 'team_mailbox_mark_notified',
+          arguments: {
+            team_name: 'alpha-team',
+            worker: 'leader-fixed',
+            message_id: msgId,
+            workingDirectory: wd,
+          },
+        },
+      });
+      const notifyJson = JSON.parse(notifyResp.content[0]?.text || '{}') as { ok?: boolean; notified?: boolean };
+      assert.equal(notifyJson.ok, true);
+      assert.equal(notifyJson.notified, true);
+
       const markResp = await handleStateToolCall({
         params: {
           name: 'team_mailbox_mark_delivered',

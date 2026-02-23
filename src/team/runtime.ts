@@ -72,6 +72,7 @@ import {
   TEAM_LOW_COMPLEXITY_DEFAULT_MODEL,
 } from './model-contract.js';
 import { inferPhaseTargetFromTaskCounts, reconcilePhaseStateForMonitor } from './phase-controller.js';
+import { getTeamTmuxSessions } from '../notifications/tmux.js';
 import {
   ensureWorktree,
   planWorktreeTarget,
@@ -568,6 +569,7 @@ export async function monitorTeam(teamName: string, cwd: string): Promise<TeamSn
         workerTurnCountByName: Object.fromEntries(workers.map((w) => [w.name, w.heartbeat?.turn_count ?? 0])),
         workerTaskIdByName: Object.fromEntries(workers.map((w) => [w.name, w.status.current_task_id ?? ''])),
         mailboxNotifiedByMessageId,
+        completedEventTaskIds: previousSnapshot?.completedEventTaskIds ?? {},
       },
       cwd
   );
@@ -794,9 +796,9 @@ export async function resumeTeam(teamName: string, cwd: string): Promise<TeamRun
   if (!config) return null;
 
   // Check if tmux session still exists
-  const sessions = listTeamSessions();
   const baseSession = config.tmux_session.split(':')[0];
-  if (!sessions.includes(baseSession)) return null;
+  const teamSessions = getTeamTmuxSessions(sanitized);
+  if (!teamSessions.includes(baseSession)) return null;
 
   return {
     teamName: sanitized,
@@ -862,6 +864,8 @@ async function emitMonitorDerivedEvents(
   for (const task of tasks) {
     const prevStatus = previous.taskStatusById[task.id];
     if (prevStatus && prevStatus !== 'completed' && task.status === 'completed') {
+      // Skip if a task_completed event was already emitted by transitionTaskStatus (issue #161).
+      if (previous.completedEventTaskIds?.[task.id]) continue;
       await appendTeamEvent(
         teamName,
         {

@@ -15,6 +15,9 @@ import { existsSync, readFileSync } from 'fs';
 import { dirname, join, resolve as resolvePath } from 'path';
 import {
   getAllScopedStatePaths,
+  getReadScopedStateDirs,
+  getReadScopedStatePaths,
+  resolveStateScope,
   getStateDir,
   getStatePath,
   resolveWorkingDirectoryForState,
@@ -22,6 +25,8 @@ import {
 } from './state-paths.js';
 import { withModeRuntimeContext } from '../state/mode-state-context.js';
 import { ensureTmuxHookInitialized } from '../cli/tmux-hook.js';
+import { RALPH_PHASES, validateAndNormalizeRalphState } from '../ralph/contract.js';
+import { ensureCanonicalRalphArtifacts } from '../ralph/persistence.js';
 import {
   teamSendMessage as sendDirectMessage,
   teamBroadcast as broadcastMessage,
@@ -33,6 +38,7 @@ import {
   teamListTasks,
   teamUpdateTask,
   teamClaimTask,
+  teamTransitionTaskStatus,
   teamReleaseTaskClaim,
   teamReadConfig,
   teamReadManifest,
@@ -78,6 +84,7 @@ const TEAM_COMM_TOOL_NAMES = new Set([
   'team_list_tasks',
   'team_update_task',
   'team_claim_task',
+  'team_transition_task_status',
   'team_release_task_claim',
   'team_read_config',
   'team_read_manifest',
@@ -97,7 +104,12 @@ const TEAM_COMM_TOOL_NAMES = new Set([
   'team_write_task_approval',
 ]);
 
+const TEAM_NAME_SAFE_PATTERN = /^[a-z0-9][a-z0-9-]{0,29}$/;
+const WORKER_NAME_SAFE_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const TASK_ID_SAFE_PATTERN = /^\d{1,20}$/;
+
 function teamStateExists(teamName: string, candidateCwd: string): boolean {
+  if (!TEAM_NAME_SAFE_PATTERN.test(teamName)) return false;
   const teamRoot = join(candidateCwd, '.omx', 'state', 'team', teamName);
   return (
     existsSync(join(teamRoot, 'config.json')) ||
@@ -375,16 +387,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'team_update_task',
-      description: 'Update task fields (status, owner, result, error, etc.).',
+      description: 'Update non-lifecycle task metadata (subject, description, blocked_by, requires_code_change). Status/owner/result/error are lifecycle fields that must be changed via team_claim_task + team_transition_task_status.',
       inputSchema: {
         type: 'object',
         properties: {
           team_name: { type: 'string', description: 'Sanitized team name' },
           task_id: { type: 'string', description: 'Task ID to update' },
-          status: { type: 'string', enum: ['pending', 'blocked', 'in_progress', 'completed', 'failed'] },
-          owner: { type: 'string', description: 'Worker name' },
-          result: { type: 'string', description: 'Completion summary' },
-          error: { type: 'string', description: 'Failure reason' },
+          subject: { type: 'string', description: 'Task subject/title' },
+          description: { type: 'string', description: 'Task description' },
+          blocked_by: { type: 'array', items: { type: 'string' }, description: 'Task IDs this task depends on' },
+          requires_code_change: { type: 'boolean', description: 'Whether this task requires a code change' },
           workingDirectory: { type: 'string' },
         },
         required: ['team_name', 'task_id'],
@@ -399,10 +411,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           team_name: { type: 'string', description: 'Sanitized team name' },
           task_id: { type: 'string', description: 'Task ID to claim' },
           worker: { type: 'string', description: 'Worker name claiming the task' },
-          expected_version: { type: 'number', description: 'Expected task version for optimistic locking (null to skip)' },
+          expected_version: { type: 'number', description: 'Expected task version for optimistic locking. Omitting does not allow claiming an already in-progress task.' },
           workingDirectory: { type: 'string' },
         },
         required: ['team_name', 'task_id', 'worker'],
+      },
+    },
+    {
+      name: 'team_transition_task_status',
+      description: 'Atomically transition task status with claim token validation.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          team_name: { type: 'string', description: 'Sanitized team name' },
+          task_id: { type: 'string', description: 'Task ID to transition' },
+          from: { type: 'string', enum: ['pending', 'blocked', 'in_progress', 'completed', 'failed'] },
+          to: { type: 'string', enum: ['pending', 'blocked', 'in_progress', 'completed', 'failed'] },
+          claim_token: { type: 'string', description: 'Claim token from team_claim_task' },
+          workingDirectory: { type: 'string' },
+        },
+        required: ['team_name', 'task_id', 'from', 'to', 'claim_token'],
       },
     },
     {
@@ -530,7 +558,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: 'object',
         properties: {
           team_name: { type: 'string', description: 'Sanitized team name' },
-          type: { type: 'string', enum: ['task_completed', 'worker_idle', 'worker_stopped', 'message_received', 'shutdown_ack', 'approval_decision'] },
+          type: { type: 'string', enum: ['task_completed', 'task_failed', 'worker_idle', 'worker_stopped', 'message_received', 'shutdown_ack', 'approval_decision', 'team_leader_nudge'] },
           worker: { type: 'string', description: 'Worker name associated with the event' },
           task_id: { type: 'string', description: 'Related task ID (optional)' },
           message_id: { type: 'string', description: 'Related message ID (optional)' },
@@ -657,9 +685,9 @@ export async function handleStateToolCall(request: {
   const wd = (args as Record<string, unknown>)?.workingDirectory as string | undefined;
   const normalizedWd = resolveWorkingDirectoryForState(wd);
   let cwd = normalizedWd;
-  let sessionId: string | undefined;
+  let explicitSessionId: string | undefined;
   try {
-    sessionId = validateSessionId((args as Record<string, unknown>)?.session_id);
+    explicitSessionId = validateSessionId((args as Record<string, unknown>)?.session_id);
   } catch (error) {
     return {
       content: [{ type: 'text', text: JSON.stringify({ error: (error as Error).message }) }],
@@ -667,24 +695,56 @@ export async function handleStateToolCall(request: {
     };
   }
 
+  try {
+  const stateScope = STATE_TOOL_NAMES.has(name)
+    ? await resolveStateScope(cwd, explicitSessionId)
+    : undefined;
+  const effectiveSessionId = stateScope?.sessionId;
+
   if (STATE_TOOL_NAMES.has(name)) {
-    await mkdir(getStateDir(cwd, sessionId), { recursive: true });
+    await mkdir(getStateDir(cwd), { recursive: true });
+    if (effectiveSessionId) {
+      await mkdir(getStateDir(cwd, effectiveSessionId), { recursive: true });
+    }
     await ensureTmuxHookInitialized(cwd);
   }
 
   if (TEAM_COMM_TOOL_NAMES.has(name)) {
     const teamName = String((args as Record<string, unknown>)?.team_name || '').trim();
+    if (teamName && !TEAM_NAME_SAFE_PATTERN.test(teamName)) {
+      return {
+        content: [{ type: 'text', text: JSON.stringify({ error: `Invalid team_name: "${teamName}". Must match /^[a-z0-9][a-z0-9-]{0,29}$/ (lowercase alphanumeric + hyphens, max 30 chars).` }) }],
+        isError: true,
+      };
+    }
+    for (const workerField of ['worker', 'from_worker', 'to_worker']) {
+      const workerVal = String((args as Record<string, unknown>)?.[workerField] || '').trim();
+      if (workerVal && !WORKER_NAME_SAFE_PATTERN.test(workerVal)) {
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ error: `Invalid ${workerField}: "${workerVal}". Must match /^[a-z0-9][a-z0-9-]{0,63}$/ (lowercase alphanumeric + hyphens, max 64 chars).` }) }],
+          isError: true,
+        };
+      }
+    }
+    const rawTaskId = String((args as Record<string, unknown>)?.task_id || '').trim();
+    if (rawTaskId && !TASK_ID_SAFE_PATTERN.test(rawTaskId)) {
+      return {
+        content: [{ type: 'text', text: JSON.stringify({ error: `Invalid task_id: "${rawTaskId}". Must be a positive integer (digits only, max 20 digits).` }) }],
+        isError: true,
+      };
+    }
     if (teamName) {
       cwd = resolveTeamWorkingDirectory(teamName, cwd);
     }
-    await mkdir(getStateDir(cwd, sessionId), { recursive: true });
+    await mkdir(getStateDir(cwd, explicitSessionId), { recursive: true });
   }
 
   switch (name) {
     case 'state_read': {
       const mode = (args as Record<string, unknown>).mode as string;
-      const path = getStatePath(mode, cwd, sessionId);
-      if (!existsSync(path)) {
+      const paths = await getReadScopedStatePaths(mode, cwd, explicitSessionId);
+      const path = paths.find((candidate) => existsSync(candidate));
+      if (!path) {
         return { content: [{ type: 'text', text: JSON.stringify({ exists: false, mode }) }] };
       }
       const data = await readFile(path, 'utf-8');
@@ -693,7 +753,7 @@ export async function handleStateToolCall(request: {
 
     case 'state_write': {
       const mode = (args as Record<string, unknown>).mode as string;
-      const path = getStatePath(mode, cwd, sessionId);
+      const path = getStatePath(mode, cwd, effectiveSessionId);
 
       let existing: Record<string, unknown> = {};
       if (existsSync(path)) {
@@ -710,6 +770,32 @@ export async function handleStateToolCall(request: {
         ...fields
       } = args as Record<string, unknown>;
       const mergedRaw = { ...existing, ...fields, ...(customState as Record<string, unknown> || {}) } as Record<string, unknown>;
+
+      if (mode === 'ralph') {
+        const originalPhase = mergedRaw.current_phase;
+        const validation = validateAndNormalizeRalphState(mergedRaw);
+        if (!validation.ok || !validation.state) {
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                error: validation.error || `ralph.current_phase must be one of: ${RALPH_PHASES.join(', ')}`,
+              }),
+            }],
+            isError: true,
+          };
+        }
+        if (
+          typeof originalPhase === 'string'
+          && typeof validation.state.current_phase === 'string'
+          && validation.state.current_phase !== originalPhase
+        ) {
+          validation.state.ralph_phase_normalized_from = originalPhase;
+        }
+        Object.assign(mergedRaw, validation.state);
+        await ensureCanonicalRalphArtifacts(cwd, effectiveSessionId);
+      }
+
       const merged = withModeRuntimeContext(existing, mergedRaw);
 
       await writeFile(path, JSON.stringify(merged, null, 2));
@@ -721,7 +807,7 @@ export async function handleStateToolCall(request: {
       const allSessions = (args as Record<string, unknown>).all_sessions === true;
 
       if (!allSessions) {
-        const path = getStatePath(mode, cwd, sessionId);
+        const path = getStatePath(mode, cwd, effectiveSessionId);
         if (existsSync(path)) {
           await unlink(path);
         }
@@ -752,16 +838,21 @@ export async function handleStateToolCall(request: {
     }
 
     case 'state_list_active': {
-      const stateDir = getStateDir(cwd, sessionId);
+      const stateDirs = await getReadScopedStateDirs(cwd, explicitSessionId);
       const active: string[] = [];
-      if (existsSync(stateDir)) {
+      const seenModes = new Set<string>();
+      for (const stateDir of stateDirs) {
+        if (!existsSync(stateDir)) continue;
         const files = await readdir(stateDir);
         for (const f of files) {
           if (!f.endsWith('-state.json')) continue;
+          const mode = f.replace('-state.json', '');
+          if (seenModes.has(mode)) continue;
+          seenModes.add(mode);
           try {
             const data = JSON.parse(await readFile(join(stateDir, f), 'utf-8'));
             if (data.active) {
-              active.push(f.replace('-state.json', ''));
+              active.push(mode);
             }
           } catch { /* skip malformed */ }
         }
@@ -771,23 +862,25 @@ export async function handleStateToolCall(request: {
 
     case 'state_get_status': {
       const mode = (args as Record<string, unknown>)?.mode as string | undefined;
-      const stateDir = getStateDir(cwd, sessionId);
+      const stateDirs = await getReadScopedStateDirs(cwd, explicitSessionId);
       const statuses: Record<string, unknown> = {};
+      const seenModes = new Set<string>();
 
-      if (!existsSync(stateDir)) {
-        return { content: [{ type: 'text', text: JSON.stringify({ statuses: {} }) }] };
-      }
-
-      const files = await readdir(stateDir);
-      for (const f of files) {
-        if (!f.endsWith('-state.json')) continue;
-        const m = f.replace('-state.json', '');
-        if (mode && m !== mode) continue;
-        try {
-          const data = JSON.parse(await readFile(join(stateDir, f), 'utf-8'));
-          statuses[m] = { active: data.active, phase: data.current_phase, path: join(stateDir, f), data };
-        } catch {
-          statuses[m] = { error: 'malformed state file' };
+      for (const stateDir of stateDirs) {
+        if (!existsSync(stateDir)) continue;
+        const files = await readdir(stateDir);
+        for (const f of files) {
+          if (!f.endsWith('-state.json')) continue;
+          const m = f.replace('-state.json', '');
+          if (mode && m !== mode) continue;
+          if (seenModes.has(m)) continue;
+          seenModes.add(m);
+          try {
+            const data = JSON.parse(await readFile(join(stateDir, f), 'utf-8'));
+            statuses[m] = { active: data.active, phase: data.current_phase, path: join(stateDir, f), data };
+          } catch {
+            statuses[m] = { error: 'malformed state file' };
+          }
         }
       }
       return { content: [{ type: 'text', text: JSON.stringify({ statuses }) }] };
@@ -915,6 +1008,19 @@ export async function handleStateToolCall(request: {
       if (!teamName || !taskId) {
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'team_name and task_id are required' }) }], isError: true };
       }
+      const lifecycleFields = ['status', 'owner', 'result', 'error'] as const;
+      const presentLifecycleFields = lifecycleFields.filter((f) => f in (args as Record<string, unknown>));
+      if (presentLifecycleFields.length > 0) {
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              error: `team_update_task cannot mutate lifecycle fields: ${presentLifecycleFields.join(', ')}. Use team_claim_task + team_transition_task_status to change task status/owner/result/error.`,
+            }),
+          }],
+          isError: true,
+        };
+      }
       const { team_name: _tn, task_id: _ti, workingDirectory: _wd, ...updates } = args as Record<string, unknown>;
       const task = await teamUpdateTask(teamName, taskId, updates, cwd);
       if (!task) return { content: [{ type: 'text', text: JSON.stringify({ ok: false, error: 'task_not_found' }) }] };
@@ -930,6 +1036,30 @@ export async function handleStateToolCall(request: {
       }
       const expectedVersion = (args as Record<string, unknown>).expected_version as number | undefined;
       const result = await teamClaimTask(teamName, taskId, worker, expectedVersion ?? null, cwd);
+      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+    }
+
+    case 'team_transition_task_status': {
+      const teamName = String((args as Record<string, unknown>).team_name || '').trim();
+      const taskId = String((args as Record<string, unknown>).task_id || '').trim();
+      const from = String((args as Record<string, unknown>).from || '').trim();
+      const to = String((args as Record<string, unknown>).to || '').trim();
+      const claimToken = String((args as Record<string, unknown>).claim_token || '').trim();
+      if (!teamName || !taskId || !from || !to || !claimToken) {
+        return { content: [{ type: 'text', text: JSON.stringify({ error: 'team_name, task_id, from, to, claim_token are required' }) }], isError: true };
+      }
+      const allowed = new Set(['pending', 'blocked', 'in_progress', 'completed', 'failed']);
+      if (!allowed.has(from) || !allowed.has(to)) {
+        return { content: [{ type: 'text', text: JSON.stringify({ error: 'from and to must be valid task statuses' }) }], isError: true };
+      }
+      const result = await teamTransitionTaskStatus(
+        teamName,
+        taskId,
+        from as 'pending' | 'blocked' | 'in_progress' | 'completed' | 'failed',
+        to as 'pending' | 'blocked' | 'in_progress' | 'completed' | 'failed',
+        claimToken,
+        cwd
+      );
       return { content: [{ type: 'text', text: JSON.stringify(result) }] };
     }
 
@@ -1049,7 +1179,7 @@ export async function handleStateToolCall(request: {
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'team_name, type, worker are required' }) }], isError: true };
       }
       const event = await teamAppendEvent(teamName, {
-        type: eventType as 'task_completed' | 'worker_idle' | 'worker_stopped' | 'message_received' | 'shutdown_ack' | 'approval_decision',
+        type: eventType as 'task_completed' | 'task_failed' | 'worker_idle' | 'worker_stopped' | 'message_received' | 'shutdown_ack' | 'approval_decision' | 'team_leader_nudge',
         worker,
         task_id: (args as Record<string, unknown>).task_id as string | undefined,
         message_id: ((args as Record<string, unknown>).message_id as string | undefined) ?? null,
@@ -1151,6 +1281,12 @@ export async function handleStateToolCall(request: {
 
     default:
       return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
+  }
+  } catch (error) {
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ error: (error as Error).message }) }],
+      isError: true,
+    };
   }
 }
 server.setRequestHandler(CallToolRequestSchema, handleStateToolCall);

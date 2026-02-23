@@ -153,7 +153,6 @@ Do not ask for confirmation — just read the skill file and follow its instruct
 | "ralplan", "consensus plan" | `$ralplan` | Read `~/.agents/skills/ralplan/SKILL.md`, start consensus planning |
 | "team", "swarm", "coordinated team", "coordinated swarm" | `$team` | Read `~/.agents/skills/team/SKILL.md`, start team orchestration (swarm compatibility alias) |
 | "ecomode", "eco", "budget" | `$ecomode` | Read `~/.agents/skills/ecomode/SKILL.md`, enable token-efficient mode |
-| "research", "analyze data" | `$research` | Read `~/.agents/skills/research/SKILL.md`, start parallel research |
 | "cancel", "stop", "abort" | `$cancel` | Read `~/.agents/skills/cancel/SKILL.md`, cancel active modes |
 | "tdd", "test first" | `$tdd` | Read `~/.agents/skills/tdd/SKILL.md`, start test-driven workflow |
 | "fix build", "type errors" | `$build-fix` | Read `~/.agents/skills/build-fix/SKILL.md`, fix build errors |
@@ -182,7 +181,6 @@ Workflow Skills:
 - `ultraqa`: QA cycling -- test, verify, fix, repeat
 - `plan`: Strategic planning with optional consensus mode
 - `ralplan`: Iterative consensus planning (planner + architect + critic)
-- `research`: Parallel research agents for comprehensive analysis
 
 Agent Shortcuts:
 - `analyze` -> debugger: Investigation and root-cause analysis

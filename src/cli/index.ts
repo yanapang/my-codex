@@ -13,7 +13,13 @@ import { tmuxHookCommand } from './tmux-hook.js';
 import { hooksCommand } from './hooks.js';
 import { hudCommand } from '../hud/index.js';
 import { teamCommand } from './team.js';
-import { getAllScopedStateDirs, getBaseStateDir, getStateDir } from '../mcp/state-paths.js';
+import { ralphCommand } from './ralph.js';
+import {
+  getBaseStateDir,
+  getStateDir,
+  listModeStateFilesWithScopePreference,
+  resolveStateScope,
+} from '../mcp/state-paths.js';
 import { maybeCheckAndPromptUpdate } from './update.js';
 import { maybePromptGithubStar } from './star-prompt.js';
 import {
@@ -49,6 +55,7 @@ Usage:
   omx doctor    Check installation health
   omx doctor --team  Check team/swarm runtime health diagnostics
   omx team      Spawn parallel worker panes in tmux and bootstrap inbox/task state
+  omx ralph     Launch Codex with ralph persistence mode active
   omx version   Show version information
   omx tmux-hook Manage tmux prompt injection workaround (init|status|validate|test)
   omx hooks     Manage hook plugins (init|status|validate|test)
@@ -223,7 +230,7 @@ export function buildHudPaneCleanupTargets(existingPaneIds: string[], createdPan
 
 export async function main(args: string[]): Promise<void> {
   const knownCommands = new Set([
-    'launch', 'setup', 'doctor', 'team', 'version', 'tmux-hook', 'hooks', 'hud', 'status', 'cancel', 'help', '--help', '-h',
+    'launch', 'setup', 'doctor', 'team', 'ralph', 'version', 'tmux-hook', 'hooks', 'hud', 'status', 'cancel', 'help', '--help', '-h',
   ]);
   const firstArg = args[0];
   const { command, launchArgs } = resolveCliInvocation(args);
@@ -253,6 +260,9 @@ export async function main(args: string[]): Promise<void> {
         break;
       case 'team':
         await teamCommand(args.slice(1), options);
+        break;
+      case 'ralph':
+        await ralphCommand(args.slice(1));
         break;
       case 'version':
         version();
@@ -296,18 +306,11 @@ export async function main(args: string[]): Promise<void> {
 }
 
 async function showStatus(): Promise<void> {
-  const { readdir, readFile } = await import('fs/promises');
+  const { readFile } = await import('fs/promises');
   const cwd = process.cwd();
   try {
-    const scopedDirs = await getAllScopedStateDirs(cwd);
-    const states: string[] = [];
-    for (const stateDir of scopedDirs) {
-      const files = await readdir(stateDir).catch(() => [] as string[]);
-      for (const file of files) {
-        if (!file.endsWith('-state.json') || file === 'session.json') continue;
-        states.push(join(stateDir, file));
-      }
-    }
+    const refs = await listModeStateFilesWithScopePreference(cwd);
+    const states = refs.map((ref) => ref.path);
     if (states.length === 0) {
       console.log('No active modes.');
       return;
@@ -361,7 +364,7 @@ async function reasoningCommand(args: string[]): Promise<void> {
   console.log(`Set ${REASONING_KEY}="${mode}" in ${configPath}`);
 }
 
-async function launchWithHud(args: string[]): Promise<void> {
+export async function launchWithHud(args: string[]): Promise<void> {
   const launchCwd = process.cwd();
   const parsedWorktree = parseWorktreeMode(args);
   const workerSparkModel = resolveWorkerSparkModel(parsedWorktree.remainingArgs);
@@ -1146,29 +1149,86 @@ async function flushHookDerivedWatcherOnce(cwd: string): Promise<void> {
 }
 
 async function cancelModes(): Promise<void> {
-  const { readdir, writeFile, readFile } = await import('fs/promises');
+  const { writeFile, readFile } = await import('fs/promises');
   const cwd = process.cwd();
+  const nowIso = new Date().toISOString();
   try {
-    const scopedDirs = await getAllScopedStateDirs(cwd);
-    let cancelled = 0;
-    for (const stateDir of scopedDirs) {
-      const files = await readdir(stateDir).catch(() => [] as string[]);
-      for (const file of files) {
-        if (!file.endsWith('-state.json') || file === 'session.json') continue;
-        const path = join(stateDir, file);
-        const content = await readFile(path, 'utf-8');
-        const state = JSON.parse(content);
-        if (state.active) {
-          state.active = false;
-          state.current_phase = 'cancelled';
-          state.completed_at = new Date().toISOString();
-          await writeFile(path, JSON.stringify(state, null, 2));
-          cancelled++;
-          console.log(`Cancelled: ${file.replace('-state.json', '')}`);
-        }
+    const refs = await listModeStateFilesWithScopePreference(cwd);
+    const states = new Map<string, { path: string; scope: 'root' | 'session'; state: Record<string, unknown> }>();
+
+    for (const ref of refs) {
+      const content = await readFile(ref.path, 'utf-8');
+      states.set(ref.mode, {
+        path: ref.path,
+        scope: ref.scope,
+        state: JSON.parse(content) as Record<string, unknown>,
+      });
+    }
+
+    const changed = new Set<string>();
+    const reported = new Set<string>();
+
+    const cancelMode = (mode: string, phase: string = 'cancelled', reportIfWasActive: boolean = true): void => {
+      const entry = states.get(mode);
+      if (!entry) return;
+      const wasActive = entry.state.active === true;
+      const needsChange =
+        entry.state.active !== false
+        || entry.state.current_phase !== phase
+        || typeof entry.state.completed_at !== 'string'
+        || String(entry.state.completed_at).trim() === '';
+      if (!needsChange) return;
+      entry.state.active = false;
+      entry.state.current_phase = phase;
+      entry.state.completed_at = nowIso;
+      entry.state.last_turn_at = nowIso;
+      changed.add(mode);
+      if (reportIfWasActive && wasActive) reported.add(mode);
+    };
+
+    const ralphLinksUltrawork = (state: Record<string, unknown>): boolean =>
+      state.linked_ultrawork === true || state.linked_mode === 'ultrawork';
+    const ralphLinksEcomode = (state: Record<string, unknown>): boolean =>
+      state.linked_ecomode === true || state.linked_mode === 'ecomode';
+
+    const team = states.get('team');
+    const ralph = states.get('ralph');
+    const hadActiveRalph = !!(ralph && ralph.state.active === true);
+
+    if (team && team.state.active === true && team.state.linked_ralph === true) {
+      cancelMode('team', 'cancelled', true);
+      if (ralph && ralph.state.linked_team === true) {
+        cancelMode('ralph', 'cancelled', true);
+        ralph.state.linked_team_terminal_phase = 'cancelled';
+        ralph.state.linked_team_terminal_at = nowIso;
+        changed.add('ralph');
+        if (ralphLinksUltrawork(ralph.state)) cancelMode('ultrawork', 'cancelled', true);
+        if (ralphLinksEcomode(ralph.state)) cancelMode('ecomode', 'cancelled', true);
       }
     }
-    if (cancelled === 0) {
+
+    if (ralph && ralph.state.active === true) {
+      cancelMode('ralph', 'cancelled', true);
+      if (ralphLinksUltrawork(ralph.state)) cancelMode('ultrawork', 'cancelled', true);
+      if (ralphLinksEcomode(ralph.state)) cancelMode('ecomode', 'cancelled', true);
+    }
+
+    if (!hadActiveRalph) {
+      for (const [mode, entry] of states.entries()) {
+        if (entry.state.active === true) cancelMode(mode, 'cancelled', true);
+      }
+    }
+
+    for (const [mode, entry] of states.entries()) {
+      if (!changed.has(mode)) continue;
+      await writeFile(entry.path, JSON.stringify(entry.state, null, 2));
+    }
+
+    for (const mode of reported) {
+      console.log(`Cancelled: ${mode}`);
+    }
+
+    if (reported.size === 0) {
       console.log('No active modes to cancel.');
     }
   } catch {
