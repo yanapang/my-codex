@@ -4,6 +4,23 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-02-23
+
+### Added
+- Mixed team worker CLI routing via `OMX_TEAM_WORKER_CLI_MAP` so a single `$team` run can launch Codex and Claude workers together (e.g. `codex,codex,claude,claude`).
+- Leader-side all-workers-idle nudge fallback for Claude teams, so leader notifications still fire even when worker-side Codex hooks are unavailable.
+- Adaptive trigger submit retry guard helper and tests to reduce false-positive resend escalation.
+
+### Changed
+- Team trigger fallback now uses a safer ready-prompt + non-active-task gate before adaptive resend.
+- Adaptive retry fallback behavior now uses clear-line + resend instead of interrupt escalation in auto mode.
+
+### Fixed
+- Pre-assigned worker tasks can now be claimed by their assigned owner in `pending` state, unblocking Codex worker bootstrap claim flow.
+- `OMX_TEAM_WORKER_CLI_MAP` parsing now rejects empty entries and reports map-specific validation errors.
+- `OMX_TEAM_WORKER_CLI_MAP=auto` now resolves from launch args/model detection and no longer inherits `OMX_TEAM_WORKER_CLI` overrides unexpectedly.
+- Team leader nudge targeting now prioritizes `leader_pane_id`, improving reliability with mixed/Claude worker setups.
+
 ## [0.5.1] - 2026-02-23
 
 ### Added
