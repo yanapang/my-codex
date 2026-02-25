@@ -131,6 +131,56 @@ describe('team state', () => {
     }
   });
 
+  it('resolves task/mailbox/approval paths under explicit OMX_TEAM_STATE_ROOT from a worker cwd (worker-env contamination regression)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'omx-team-explicit-root-'));
+    const leaderCwd = join(root, 'leader');
+    const workerCwd = join(root, 'worker-worktree');
+    const explicitStateRoot = join(leaderCwd, '.omx', 'state');
+    const prevRoot = process.env.OMX_TEAM_STATE_ROOT;
+    try {
+      await mkdir(leaderCwd, { recursive: true });
+      await mkdir(workerCwd, { recursive: true });
+      await initTeamState('team-explicit-root', 't', 'executor', 1, leaderCwd);
+      process.env.OMX_TEAM_STATE_ROOT = explicitStateRoot;
+
+      const task = await createTask(
+        'team-explicit-root',
+        { subject: 'explicit root task', description: 'regression guard', status: 'pending' },
+        workerCwd,
+      );
+      const claim = await claimTask('team-explicit-root', task.id, 'worker-1', task.version ?? 1, workerCwd);
+      assert.equal(claim.ok, true);
+
+      await sendDirectMessage('team-explicit-root', 'worker-1', 'leader-fixed', 'hello from worker cwd', workerCwd);
+      const messages = await listMailboxMessages('team-explicit-root', 'leader-fixed', workerCwd);
+      assert.equal(messages.length, 1);
+      assert.equal(messages[0]?.body, 'hello from worker cwd');
+
+      const approvalRecord = {
+        task_id: task.id,
+        required: true,
+        status: 'approved' as const,
+        reviewer: 'leader-fixed',
+        decision_reason: 'path guard uses resolved team state root',
+        decided_at: new Date().toISOString(),
+      };
+      await writeTaskApproval('team-explicit-root', approvalRecord, workerCwd);
+      const approval = await readTaskApproval('team-explicit-root', task.id, workerCwd);
+      assert.equal(approval?.status, 'approved');
+      assert.equal(approval?.reviewer, 'leader-fixed');
+
+      const explicitTeamRoot = join(explicitStateRoot, 'team', 'team-explicit-root');
+      assert.equal(existsSync(join(explicitTeamRoot, 'tasks', `task-${task.id}.json`)), true);
+      assert.equal(existsSync(join(explicitTeamRoot, 'mailbox', 'leader-fixed.json')), true);
+      assert.equal(existsSync(join(explicitTeamRoot, 'approvals', `task-${task.id}.json`)), true);
+      assert.equal(existsSync(join(workerCwd, '.omx', 'state', 'team', 'team-explicit-root')), false);
+    } finally {
+      if (typeof prevRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = prevRoot;
+      else delete process.env.OMX_TEAM_STATE_ROOT;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('claimTask enforces dependency readiness (blocked_dependency)', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-team-claim-'));
     try {

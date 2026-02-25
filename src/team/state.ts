@@ -415,7 +415,7 @@ function teamManifestV2Path(teamName: string, cwd: string): string {
 function taskClaimLockDir(teamName: string, taskId: string, cwd: string): string {
   validateTaskId(taskId);
   const p = join(teamDir(teamName, cwd), 'claims', `task-${taskId}.lock`);
-  assertPathWithinDir(p, omxStateDir(cwd));
+  assertPathWithinDir(p, resolveTeamStateRoot(cwd));
   return p;
 }
 
@@ -426,21 +426,21 @@ function eventLogPath(teamName: string, cwd: string): string {
 function mailboxPath(teamName: string, workerName: string, cwd: string): string {
   validateWorkerName(workerName);
   const p = join(teamDir(teamName, cwd), 'mailbox', `${workerName}.json`);
-  assertPathWithinDir(p, omxStateDir(cwd));
+  assertPathWithinDir(p, resolveTeamStateRoot(cwd));
   return p;
 }
 
 function mailboxLockDir(teamName: string, workerName: string, cwd: string): string {
   validateWorkerName(workerName);
   const p = join(teamDir(teamName, cwd), 'mailbox', `.lock-${workerName}`);
-  assertPathWithinDir(p, omxStateDir(cwd));
+  assertPathWithinDir(p, resolveTeamStateRoot(cwd));
   return p;
 }
 
 function approvalPath(teamName: string, taskId: string, cwd: string): string {
   validateTaskId(taskId);
   const p = join(teamDir(teamName, cwd), 'approvals', `task-${taskId}.json`);
-  assertPathWithinDir(p, omxStateDir(cwd));
+  assertPathWithinDir(p, resolveTeamStateRoot(cwd));
   return p;
 }
 
@@ -896,7 +896,7 @@ export async function writeWorkerInbox(
 function taskFilePath(teamName: string, taskId: string, cwd: string): string {
   validateTaskId(taskId);
   const p = join(teamDir(teamName, cwd), 'tasks', `task-${taskId}.json`);
-  assertPathWithinDir(p, omxStateDir(cwd));
+  assertPathWithinDir(p, resolveTeamStateRoot(cwd));
   return p;
 }
 
