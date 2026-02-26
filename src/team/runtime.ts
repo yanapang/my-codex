@@ -1857,16 +1857,24 @@ export async function sendWorkerMessage(
   const manifest = await readTeamManifestV2(sanitized, cwd);
   const dispatchPolicy = resolveDispatchPolicy(manifest?.policy, config.worker_launch_mode);
   if (toWorker === 'leader-fixed') {
+    const leaderTransportPreference = dispatchPolicy.dispatch_mode === 'transport_direct'
+      ? 'transport_direct'
+      : 'hook_preferred_with_fallback';
     const outcome = await queueDirectMailboxMessage({
       teamName: sanitized,
       fromWorker,
       toWorker,
+      toPaneId: config.leader_pane_id ?? undefined,
       body,
       triggerMessage: `Team ${sanitized}: new worker message for leader from ${fromWorker}`,
       cwd,
-      transportPreference: 'transport_direct',
-      fallbackAllowed: false,
-      notify: (_target, message) => ({ ok: notifyLeader(config, message), transport: 'tmux_send_keys', reason: 'leader_notified' }),
+      transportPreference: leaderTransportPreference,
+      fallbackAllowed: leaderTransportPreference === 'hook_preferred_with_fallback',
+      notify: (_target, message) => (
+        leaderTransportPreference === 'hook_preferred_with_fallback'
+          ? { ok: true, transport: 'hook', reason: 'queued_for_hook_dispatch' }
+          : { ok: notifyLeader(config, message), transport: 'tmux_send_keys', reason: 'leader_notified' }
+      ),
     });
     if (!outcome.ok) throw new Error(`mailbox_notify_failed:${outcome.reason}`);
     return;
