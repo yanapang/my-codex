@@ -5,9 +5,7 @@
  */
 
 import type { HudRenderContext, HudPreset } from './types.js';
-import { green, yellow, cyan, dim, bold, getRalphColor, RESET } from './colors.js';
-
-const SEP = dim(' | ');
+import { green, yellow, cyan, dim, bold, getRalphColor, RESET, isColorEnabled } from './colors.js';
 
 function elapsedSeconds(timestamp: string): number | null {
   const at = new Date(timestamp).getTime();
@@ -45,6 +43,9 @@ function renderGitBranch(ctx: HudRenderContext): string | null {
 function renderRalph(ctx: HudRenderContext): string | null {
   if (!ctx.ralph) return null;
   const { iteration, max_iterations } = ctx.ralph;
+  if (!isColorEnabled()) {
+    return `ralph:${iteration}/${max_iterations}`;
+  }
   const color = getRalphColor(iteration, max_iterations);
   return `${color}ralph:${iteration}/${max_iterations}${RESET}`;
 }
@@ -203,6 +204,7 @@ export function renderHud(ctx: HudRenderContext, preset: HudPreset): string {
   const parts = elements
     .map(fn => fn(ctx))
     .filter((s): s is string => s !== null);
+  const separator = dim(' | ');
 
   const ver = ctx.version ? `#${ctx.version.replace(/^v/, '')}` : '';
   const label = bold(`[OMX${ver}]`);
@@ -211,5 +213,5 @@ export function renderHud(ctx: HudRenderContext, preset: HudPreset): string {
     return label + ' ' + dim('No active modes.');
   }
 
-  return label + ' ' + parts.join(SEP);
+  return label + ' ' + parts.join(separator);
 }
