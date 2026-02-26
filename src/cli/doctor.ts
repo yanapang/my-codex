@@ -163,6 +163,7 @@ export async function doctor(options: DoctorOptions = {}): Promise<void> {
 interface TeamDoctorIssue {
   code: 'delayed_status_lag' | 'slow_shutdown' | 'orphan_tmux_session' | 'resume_blocker' | 'stale_leader';
   message: string;
+  severity: 'warn' | 'fail';
 }
 
 async function doctorTeam(): Promise<void> {
@@ -176,13 +177,17 @@ async function doctorTeam(): Promise<void> {
     return;
   }
 
+  const failureCount = issues.filter(issue => issue.severity === 'fail').length;
+  const warningCount = issues.length - failureCount;
+
   for (const issue of issues) {
-    console.log(`  [XX] ${issue.code}: ${issue.message}`);
+    const icon = issue.severity === 'warn' ? '[!!]' : '[XX]';
+    console.log(`  ${icon} ${issue.code}: ${issue.message}`);
   }
 
-  console.log(`\nResults: ${issues.length} failed`);
+  console.log(`\nResults: ${warningCount} warnings, ${failureCount} failed`);
   // Ensure non-zero exit for `omx doctor --team` failures.
-  process.exitCode = 1;
+  if (failureCount > 0) process.exitCode = 1;
 }
 
 async function collectTeamDoctorIssues(cwd: string): Promise<TeamDoctorIssue[]> {
@@ -241,6 +246,7 @@ async function collectTeamDoctorIssues(cwd: string): Promise<TeamDoctorIssue[]> 
       issues.push({
         code: 'resume_blocker',
         message: `${teamName} references missing tmux session ${tmuxSession}`,
+        severity: 'fail',
       });
     }
 
@@ -269,6 +275,7 @@ async function collectTeamDoctorIssues(cwd: string): Promise<TeamDoctorIssue[]> 
             issues.push({
               code: 'delayed_status_lag',
               message: `${teamName}/${worker.name} working with stale heartbeat`,
+              severity: 'fail',
             });
           }
         } catch {
@@ -285,6 +292,7 @@ async function collectTeamDoctorIssues(cwd: string): Promise<TeamDoctorIssue[]> 
             issues.push({
               code: 'slow_shutdown',
               message: `${teamName}/${worker.name} has stale shutdown request without ack`,
+              severity: 'fail',
             });
           }
         } catch {
@@ -313,6 +321,7 @@ async function collectTeamDoctorIssues(cwd: string): Promise<TeamDoctorIssue[]> 
           issues.push({
             code: 'stale_leader',
             message: `${teamName} has active tmux session but leader has no recent activity`,
+            severity: 'fail',
           });
         }
       }
@@ -327,7 +336,8 @@ async function collectTeamDoctorIssues(cwd: string): Promise<TeamDoctorIssue[]> 
       if (!knownTeamSessions.has(session)) {
         issues.push({
           code: 'orphan_tmux_session',
-          message: `${session} exists without matching team state`,
+          message: `${session} exists without matching team state (possibly external project)`,
+          severity: 'warn',
         });
       }
     }
