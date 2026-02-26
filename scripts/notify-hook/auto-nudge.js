@@ -201,7 +201,6 @@ export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
       skillState.updated_at = new Date().toISOString();
       await persistSkillActiveState(stateDir, skillState);
     }
-    if (skillState.phase === 'completing') return;
   }
 
   // Check nudge count against session limit
@@ -226,6 +225,11 @@ export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
     detected = detectStallPattern(captured, config.patterns);
     source = 'capture-pane';
   }
+
+  // Preserve completion quietness unless we explicitly see a stall phrase.
+  // This handles stale skill-state files that remain in "completing" while
+  // the assistant still asks for permission ("if you want", etc.).
+  if (skillState?.phase === 'completing' && !detected) return;
 
   if (!detected || !paneId) return;
 

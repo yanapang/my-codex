@@ -370,7 +370,7 @@ describe('notify-hook auto-nudge', () => {
     });
   });
 
-  it('does not auto-nudge when skill-active state is in completing phase', async () => {
+  it('still auto-nudges stall phrases when skill-active state is stale completing', async () => {
     await withTempWorkingDir(async (cwd) => {
       const omxDir = join(cwd, '.omx');
       const stateDir = join(omxDir, 'state');
@@ -402,13 +402,54 @@ describe('notify-hook auto-nudge', () => {
       await chmod(join(fakeBinDir, 'tmux'), 0o755);
 
       const result = runNotifyHook(cwd, fakeBinDir, codexHome, {
-        'last-assistant-message': 'Would you like me to continue?',
+        'last-assistant-message': 'I can finish the cleanup too, if you want.',
+      });
+      assert.equal(result.status, 0, `hook failed: ${result.stderr || result.stdout}`);
+
+      const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
+      assert.match(tmuxLog, /send-keys -t %99 -l yes, proceed \[OMX_TMUX_INJECT\]/, 'should still nudge when completion phase is stale but message has a stall phrase');
+    });
+  });
+
+  it('does not auto-nudge for true completion text when skill-active state is completing', async () => {
+    await withTempWorkingDir(async (cwd) => {
+      const omxDir = join(cwd, '.omx');
+      const stateDir = join(omxDir, 'state');
+      const logsDir = join(omxDir, 'logs');
+      const codexHome = join(cwd, 'codex-home');
+      const fakeBinDir = join(cwd, 'fake-bin');
+      const tmuxLogPath = join(cwd, 'tmux.log');
+
+      await mkdir(logsDir, { recursive: true });
+      await mkdir(stateDir, { recursive: true });
+      await mkdir(codexHome, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+
+      await writeJson(join(codexHome, '.omx-config.json'), {
+        autoNudge: { enabled: true, delaySec: 0 },
+      });
+      await writeJson(join(stateDir, 'skill-active-state.json'), {
+        version: 1,
+        active: false,
+        skill: 'autopilot',
+        keyword: 'autopilot',
+        phase: 'completing',
+        activated_at: '2026-02-25T00:00:00.000Z',
+        updated_at: '2026-02-25T00:00:00.000Z',
+        source: 'keyword-detector',
+      });
+
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+
+      const result = runNotifyHook(cwd, fakeBinDir, codexHome, {
+        'last-assistant-message': 'I completed the refactoring. All tests pass.',
       });
       assert.equal(result.status, 0, `hook failed: ${result.stderr || result.stdout}`);
 
       if (existsSync(tmuxLogPath)) {
         const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
-        assert.doesNotMatch(tmuxLog, /send-keys -t %99 -l/, 'should stop auto-continuation in completing phase');
+        assert.doesNotMatch(tmuxLog, /send-keys -t %99 -l/, 'should remain quiet for true completion text');
       }
     });
   });
