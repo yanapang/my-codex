@@ -67,7 +67,9 @@ export function isCodeSimplifierEnabled(): boolean {
 }
 
 /**
- * Get list of recently modified source files via `git diff HEAD --name-only`.
+ * Get list of changed source files via `git status --porcelain`.
+ * Includes modified, added, renamed-new-path, and untracked files.
+ * Excludes deleted entries and any path that no longer exists.
  * Returns an empty array if git is unavailable or no files are modified.
  */
 export function getModifiedFiles(
@@ -76,18 +78,41 @@ export function getModifiedFiles(
   maxFiles: number = DEFAULT_MAX_FILES,
 ): string[] {
   try {
-    const output = execSync('git diff HEAD --name-only', {
+    const output = execSync('git status --porcelain --untracked-files=all', {
       cwd,
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 5000,
     });
+    const trimmedOutput = output.trim();
+    if (trimmedOutput.length === 0) {
+      return [];
+    }
 
-    return output
-      .trim()
+    const candidates = trimmedOutput
       .split('\n')
-      .filter((file) => file.trim().length > 0)
+      .map((line) => line.trimEnd())
+      .filter((line) => line.length > 0)
+      .flatMap((line) => {
+        if (line.startsWith('?? ')) {
+          return [line.slice(3).trim()];
+        }
+
+        const status = line.slice(0, 2);
+        const rawPath = line.slice(3).trim();
+        if (status.includes('D')) {
+          return [];
+        }
+
+        const renamedParts = rawPath.split(' -> ');
+        const resolvedPath = renamedParts.length > 1 ? renamedParts[renamedParts.length - 1] : rawPath;
+        return [resolvedPath.trim()];
+      });
+
+    return candidates
+      .filter((file) => file.length > 0)
       .filter((file) => extensions.some((ext) => file.endsWith(ext)))
+      .filter((file) => existsSync(join(cwd, file)))
       .slice(0, maxFiles);
   } catch {
     return [];

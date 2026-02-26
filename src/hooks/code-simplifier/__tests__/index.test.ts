@@ -24,8 +24,12 @@ function initGitRepo(dir: string): void {
   execSync('git init', { cwd: dir, stdio: 'ignore' });
   execSync('git config user.email "omx-test@example.com"', { cwd: dir, stdio: 'ignore' });
   execSync('git config user.name "OMX Test"', { cwd: dir, stdio: 'ignore' });
-  writeFileSync(join(dir, 'tracked.ts'), 'export const initial = 1;\n', 'utf-8');
-  execSync('git add tracked.ts', { cwd: dir, stdio: 'ignore' });
+
+  writeFileSync(join(dir, 'tracked.ts'), 'export const tracked = 1;\n', 'utf-8');
+  writeFileSync(join(dir, 'deleted.ts'), 'export const removed = true;\n', 'utf-8');
+  writeFileSync(join(dir, 'rename-old.ts'), 'export const renamed = true;\n', 'utf-8');
+
+  execSync('git add tracked.ts deleted.ts rename-old.ts', { cwd: dir, stdio: 'ignore' });
   execSync('git commit -m "init"', { cwd: dir, stdio: 'ignore' });
 }
 
@@ -38,7 +42,6 @@ function writeEnabledCodeSimplifierConfig(homeDir: string): void {
     'utf-8',
   );
 }
-
 describe('code-simplifier trigger marker', () => {
   let stateDir: string;
 
@@ -131,11 +134,11 @@ describe('getModifiedFiles', () => {
   });
 
   it('filters by extension', () => {
-    // getModifiedFiles calls git internally; test the filter logic indirectly
-    // by checking that calling with empty extensions returns empty
     const dir = makeTmpDir();
     try {
-      const files = getModifiedFiles(dir, [], 10);
+      initGitRepo(dir);
+      writeFileSync(join(dir, 'tracked.ts'), 'export const tracked = 2;\n', 'utf-8');
+      const files = getModifiedFiles(dir, ['.py'], 10);
       assert.deepEqual(files, []);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -145,8 +148,34 @@ describe('getModifiedFiles', () => {
   it('respects maxFiles limit', () => {
     const dir = makeTmpDir();
     try {
-      const files = getModifiedFiles(dir, ['.ts'], 0);
-      assert.deepEqual(files, []);
+      initGitRepo(dir);
+      writeFileSync(join(dir, 'tracked.ts'), 'export const tracked = 2;\n', 'utf-8');
+      writeFileSync(join(dir, 'new-a.ts'), 'export const a = 1;\n', 'utf-8');
+      writeFileSync(join(dir, 'new-b.ts'), 'export const b = 2;\n', 'utf-8');
+      const files = getModifiedFiles(dir, ['.ts'], 2);
+      assert.equal(files.length, 2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('includes modified and untracked files, excludes deleted and rename-old paths', () => {
+    const dir = makeTmpDir();
+    try {
+      initGitRepo(dir);
+
+      writeFileSync(join(dir, 'tracked.ts'), 'export const tracked = 2;\n', 'utf-8'); // M
+      writeFileSync(join(dir, 'new-file.ts'), 'export const newFile = true;\n', 'utf-8'); // ??
+      execSync('git mv rename-old.ts rename-new.ts', { cwd: dir, stdio: 'ignore' }); // R old -> new
+      execSync('git rm deleted.ts', { cwd: dir, stdio: 'ignore' }); // D
+
+      const files = getModifiedFiles(dir, ['.ts'], 20);
+
+      assert.ok(files.includes('tracked.ts'));
+      assert.ok(files.includes('new-file.ts'));
+      assert.ok(files.includes('rename-new.ts'));
+      assert.ok(!files.includes('deleted.ts'));
+      assert.ok(!files.includes('rename-old.ts'));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
