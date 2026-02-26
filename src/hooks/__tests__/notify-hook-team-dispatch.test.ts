@@ -43,6 +43,43 @@ describe('notify-hook team dispatch consumer', () => {
     }
   });
 
+  it('uses explicit stateDir when marking mailbox notified_at', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
+    const stateDir = join(cwd, 'custom-state-root');
+    const previousStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+    try {
+      process.env.OMX_TEAM_STATE_ROOT = './custom-state-root';
+      await initTeamState('alpha', 'task', 'executor', 1, cwd);
+      const msg = await sendDirectMessage('alpha', 'worker-1', 'worker-1', 'hello', cwd);
+      const queued = await enqueueDispatchRequest('alpha', {
+        kind: 'mailbox',
+        to_worker: 'worker-1',
+        worker_index: 1,
+        message_id: msg.message_id,
+        trigger_message: 'check mailbox',
+      }, cwd);
+
+      const modulePath = new URL('../../../scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
+      const mod = await import(pathToFileURL(modulePath).href);
+      const result = await mod.drainPendingTeamDispatch({
+        cwd,
+        stateDir,
+        maxPerTick: 5,
+        injector: async () => ({ ok: true, reason: 'injected_for_test' }),
+      });
+
+      assert.equal(result.processed, 1);
+      const request = await readDispatchRequest('alpha', queued.request.request_id, cwd);
+      assert.equal(request?.status, 'notified');
+      const mailbox = await listMailboxMessages('alpha', 'worker-1', cwd);
+      assert.ok(mailbox[0]?.notified_at);
+    } finally {
+      if (typeof previousStateRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = previousStateRoot;
+      else delete process.env.OMX_TEAM_STATE_ROOT;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('is idempotent across repeated ticks (no duplicate processing)', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
     try {

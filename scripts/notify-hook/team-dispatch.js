@@ -12,10 +12,6 @@ function readJson(path, fallback) {
     .catch(() => fallback);
 }
 
-async function writeJson(path, value) {
-  await writeFile(path, JSON.stringify(value, null, 2));
-}
-
 async function writeJsonAtomic(path, value) {
   await mkdir(dirname(path), { recursive: true });
   const tmp = `${path}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -23,7 +19,8 @@ async function writeJsonAtomic(path, value) {
   await rename(tmp, path);
 }
 
-const DISPATCH_LOCK_STALE_MS = 10_000;
+// Keep stale-timeout semantics aligned with src/team/state.ts LOCK_STALE_MS.
+const DISPATCH_LOCK_STALE_MS = 5 * 60 * 1000;
 
 async function withDispatchLock(teamDirPath, fn) {
   const lockDir = join(teamDirPath, 'dispatch', '.lock');
@@ -54,6 +51,53 @@ async function withDispatchLock(teamDirPath, fn) {
         // best effort
       }
       if (Date.now() > deadline) throw new Error(`Timed out acquiring dispatch lock for ${teamDirPath}`);
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
+    }
+  }
+
+  try {
+    return await fn();
+  } finally {
+    try {
+      const currentOwner = await readFile(ownerPath, 'utf8');
+      if (currentOwner.trim() === ownerToken) {
+        await rm(lockDir, { recursive: true, force: true });
+      }
+    } catch {
+      // best effort
+    }
+  }
+}
+
+async function withMailboxLock(teamDirPath, workerName, fn) {
+  const lockDir = join(teamDirPath, 'mailbox', `.lock-${workerName}`);
+  const ownerPath = join(lockDir, 'owner');
+  const ownerToken = `${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`;
+  const deadline = Date.now() + 5_000;
+  await mkdir(dirname(lockDir), { recursive: true });
+
+  while (true) {
+    try {
+      await mkdir(lockDir, { recursive: false });
+      try {
+        await writeFile(ownerPath, ownerToken, 'utf8');
+      } catch (error) {
+        await rm(lockDir, { recursive: true, force: true });
+        throw error;
+      }
+      break;
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      try {
+        const info = await stat(lockDir);
+        if (Date.now() - info.mtimeMs > DISPATCH_LOCK_STALE_MS) {
+          await rm(lockDir, { recursive: true, force: true });
+          continue;
+        }
+      } catch {
+        // best effort
+      }
+      if (Date.now() > deadline) throw new Error(`Timed out acquiring mailbox lock for ${teamDirPath}/${workerName}`);
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
     }
   }
@@ -120,15 +164,18 @@ function shouldSkipRequest(request) {
   return request.transport_preference !== 'hook_preferred_with_fallback';
 }
 
-async function updateMailboxNotified(cwd, teamName, workerName, messageId) {
-  const mailboxPath = join(cwd, '.omx', 'state', 'team', teamName, 'mailbox', `${workerName}.json`);
-  const mailbox = await readJson(mailboxPath, { worker: workerName, messages: [] });
-  if (!mailbox || !Array.isArray(mailbox.messages)) return false;
-  const msg = mailbox.messages.find((candidate) => candidate?.message_id === messageId);
-  if (!msg) return false;
-  if (!msg.notified_at) msg.notified_at = new Date().toISOString();
-  await writeJson(mailboxPath, mailbox);
-  return true;
+async function updateMailboxNotified(stateDir, teamName, workerName, messageId) {
+  const teamDirPath = join(stateDir, 'team', teamName);
+  const mailboxPath = join(teamDirPath, 'mailbox', `${workerName}.json`);
+  return await withMailboxLock(teamDirPath, workerName, async () => {
+    const mailbox = await readJson(mailboxPath, { worker: workerName, messages: [] });
+    if (!mailbox || !Array.isArray(mailbox.messages)) return false;
+    const msg = mailbox.messages.find((candidate) => candidate?.message_id === messageId);
+    if (!msg) return false;
+    if (!msg.notified_at) msg.notified_at = new Date().toISOString();
+    await writeJsonAtomic(mailboxPath, mailbox);
+    return true;
+  });
 }
 
 async function appendDispatchLog(logsDir, event) {
@@ -187,7 +234,7 @@ export async function drainPendingTeamDispatch({
           request.notified_at = nowIso;
           request.last_reason = result.reason;
           if (request.kind === 'mailbox' && request.message_id) {
-            await updateMailboxNotified(cwd, teamName, request.to_worker, request.message_id).catch(() => {});
+            await updateMailboxNotified(stateDir, teamName, request.to_worker, request.message_id).catch(() => {});
           }
           processed += 1;
           mutated = true;

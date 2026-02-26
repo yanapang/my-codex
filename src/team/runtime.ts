@@ -1637,15 +1637,28 @@ async function finalizeHookPreferredMailboxDispatch(params: {
   teamName: string;
   requestId: string;
   workerName: string;
-  workerIndex: number;
+  workerIndex?: number;
   paneId?: string;
   messageId: string;
   triggerMessage: string;
   config: TeamConfig;
   dispatchPolicy: TeamPolicy;
   cwd: string;
+  fallbackNotify?: () => DispatchOutcome;
 }): Promise<DispatchOutcome> {
-  const { teamName, requestId, workerName, workerIndex, paneId, messageId, triggerMessage, config, dispatchPolicy, cwd } = params;
+  const {
+    teamName,
+    requestId,
+    workerName,
+    workerIndex,
+    paneId,
+    messageId,
+    triggerMessage,
+    config,
+    dispatchPolicy,
+    cwd,
+    fallbackNotify,
+  } = params;
   const receipt = await waitForDispatchReceipt(teamName, requestId, cwd, {
     timeoutMs: dispatchPolicy.dispatch_ack_timeout_ms,
     pollMs: 50,
@@ -1655,7 +1668,11 @@ async function finalizeHookPreferredMailboxDispatch(params: {
     return { ok: true, transport: 'hook', reason: `hook_receipt_${receipt.status}`, request_id: requestId, message_id: messageId };
   }
 
-  const fallback = notifyWorkerOutcome(config, workerIndex, triggerMessage, paneId);
+  const fallback: DispatchOutcome = fallbackNotify
+    ? fallbackNotify()
+    : (typeof workerIndex === 'number'
+      ? notifyWorkerOutcome(config, workerIndex, triggerMessage, paneId)
+      : { ok: false, transport: 'none', reason: 'missing_worker_index' });
   if (receipt?.status === 'failed') {
     if (fallback.ok) {
       await markMessageNotified(teamName, workerName, messageId, cwd).catch(() => false);
@@ -1857,6 +1874,7 @@ export async function sendWorkerMessage(
   const manifest = await readTeamManifestV2(sanitized, cwd);
   const dispatchPolicy = resolveDispatchPolicy(manifest?.policy, config.worker_launch_mode);
   if (toWorker === 'leader-fixed') {
+    const leaderTriggerMessage = `Team ${sanitized}: new worker message for leader from ${fromWorker}`;
     const leaderTransportPreference = dispatchPolicy.dispatch_mode === 'transport_direct'
       ? 'transport_direct'
       : 'hook_preferred_with_fallback';
@@ -1866,7 +1884,7 @@ export async function sendWorkerMessage(
       toWorker,
       toPaneId: config.leader_pane_id ?? undefined,
       body,
-      triggerMessage: `Team ${sanitized}: new worker message for leader from ${fromWorker}`,
+      triggerMessage: leaderTriggerMessage,
       cwd,
       transportPreference: leaderTransportPreference,
       fallbackAllowed: leaderTransportPreference === 'hook_preferred_with_fallback',
@@ -1876,7 +1894,30 @@ export async function sendWorkerMessage(
           : { ok: notifyLeader(config, message), transport: 'tmux_send_keys', reason: 'leader_notified' }
       ),
     });
-    if (!outcome.ok) throw new Error(`mailbox_notify_failed:${outcome.reason}`);
+    let finalOutcome = outcome;
+    const canLeaderFallbackDirectly = Boolean(config.tmux_session) && isTmuxAvailable();
+    if (leaderTransportPreference === 'hook_preferred_with_fallback' && canLeaderFallbackDirectly) {
+      if (!outcome.request_id || !outcome.message_id) {
+        throw new Error('mailbox_notify_failed:dispatch_request_missing_id');
+      }
+      finalOutcome = await finalizeHookPreferredMailboxDispatch({
+        teamName: sanitized,
+        requestId: outcome.request_id,
+        workerName: 'leader-fixed',
+        paneId: config.leader_pane_id ?? undefined,
+        messageId: outcome.message_id,
+        triggerMessage: leaderTriggerMessage,
+        config,
+        dispatchPolicy,
+        cwd,
+        fallbackNotify: () => ({
+          ok: notifyLeader(config, leaderTriggerMessage),
+          transport: 'tmux_send_keys',
+          reason: 'leader_notified',
+        }),
+      });
+    }
+    if (!finalOutcome.ok) throw new Error(`mailbox_notify_failed:${finalOutcome.reason}`);
     return;
   }
 
