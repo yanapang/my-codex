@@ -4,6 +4,105 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-02-26
+
+153 files changed, +12,852 / -1,044 lines. Major feature additions, comprehensive audit fixes, and hardened reliability.
+
+### Added
+
+#### Team & Scaling
+- Dynamic team worker scaling — Phase 1 manual `scale_up` / `scale_down` mid-session (#363).
+- Per-worker idle notification forwarded to leader pane (#335).
+- Prompt-mode worker launch transport for interactive team workflows (#264).
+- Worker model defaults resolved from config with `OMX_TEAM_WORKER_CLI_MAP` (#263).
+- Worker hard cap raised to 20 (#343).
+- Team shutdown gated on unresolved tasks to prevent premature teardown (#320, #322).
+- MSYS2 / Git Bash tmux worker support (#266).
+- Centralized team/state contracts module (`contracts.ts`) for shared type definitions (#319, #323).
+
+#### Planning & Execution
+- RALPLAN-DR structured deliberation for consensus planning — planner + architect + critic loop (#366).
+- Ralplan-first execution gate enforced: ralph blocks implementation until `prd-*.md` and `test-spec-*.md` exist (#261).
+- Task-size detector (`task-size-detector.ts`) for pre-execution scoping guidance with dedicated test suite.
+- Keyword trigger registry (`keyword-registry.ts`) as canonical single source of truth for all 31 keyword triggers.
+
+#### Notifications
+- Full notification engine overhaul from OMC 4.5.x (#373): template engine, idle cooldown, hook-config types, session registry.
+- Slack / Discord / Telegram env-var configuration via `buildConfigFromEnv()`.
+- Reply listener per-channel gating and credential isolation for disabled channels.
+- Skill-active lifecycle tracking in notify hook for auto-continuation (#262).
+- Language reminder injection for non-Latin user input (#260).
+
+#### OpenClaw
+- OpenClaw gateway integration (`src/openclaw/`) for waking external automations and AI agents on hook events — config, dispatcher, and full test suite.
+
+#### CLI & Setup
+- Star-prompt CLI command (`star-prompt.ts`) for prompt management with test coverage.
+- Setup simplified from 3 scopes to 2 (user, project) (#245).
+- Setup prompts before overwriting existing AGENTS.md (#242).
+- Setup `--force` overwrite controls for both agents and skills installation (#275).
+- Repo name included in tmux session name for worktree launches (#360, #362).
+
+#### MCP & Code Intelligence
+- MCP bootstrap module (`bootstrap.ts`) with auto-start guards (#317).
+- Memory validation layer (`memory-validation.ts`) for project memory writes.
+- `includeDeclaration` honored in `lsp_find_references` (#299, #327).
+
+#### HUD
+- HUD watch render serialization to prevent overlapping writes (#274).
+- Quota rendering (5-hour and weekly limit percentages) in focused preset.
+- Session duration rendering (seconds / minutes / hours format).
+- Last-activity rendering from hudNotify turn timestamps.
+
+#### Infrastructure
+- `tsconfig.no-unused.json` — dedicated config for unused-symbol CI gate (#312, #333).
+- Session lifecycle hooks with archive and overlay strip on exit.
+- Direct coverage for key production modules (#321, #324).
+- Dedicated hooks coverage for extensibility dispatcher and loader (#316).
+
+### Changed
+- `KEYWORD_TRIGGERS` derived from `KEYWORD_TRIGGER_DEFINITIONS` — template and runtime registry always in sync, eliminating drift.
+- Team/swarm keyword detection tightened with intent-aware matching to avoid false triggers on natural language (#292, #356).
+- Ralph contract enforces lifecycle invariants and integer counters (#355).
+- Ralph contract validation enforced in direct state writers (#296, #353).
+- State writes are atomic and serialized via file locking (#354).
+- Max-iteration termination enforced in notify hook (#345).
+- Canonical targets enforced for alias/merged catalog entries (#318, #344).
+- Doctor diagnostics downgrade unattributed tmux orphan warnings (#277).
+- HUD delayed reconcile fallback reduced from 10s to 2s.
+- Removed unused HUD color helper exports (#280).
+- Removed dead TS fallback path from CLI entrypoint (#283).
+- Removed production dead code and added unused-symbol CI gate (#312, #333).
+- `packageRoot` made ESM-safe without `require()` (#310, #330).
+- Tmux hook engine type declarations synced with runtime exports (#313, #328).
+
+### Fixed
+- **CI**: Resolved typecheck (6 unused imports) and 7 test failures — HUD NaN/future timestamp handling, state mode validation, slack config `deepStrictEqual`, keyword template-registry sync.
+- **Team**: Deterministic prompt worker teardown (#349). Verification protocol wired into runtime completion gates (#298, #351). False prompt-mode resume readiness prevented (#352). Shutdown continues when resize hook unregister fails (#302, #347). Team path guards for explicit state root.
+- **Ralph**: Exclusive lock checks fail on malformed state (#357). Lifecycle invariants enforced in direct state writers (#296, #353).
+- **Notifications**: Reply config validates and honors enabled channels (#281, #287). Notifier HTTP status and timeout checks enforced (#286). Slack config omits `mention` property when undefined.
+- **Hooks**: Plugin dispatch timeout resolution guaranteed (#269). Parent hook plugin import validation skipped correctly (#268). Keyword activation timestamp reset on skill switch (#290).
+- **Setup**: Skill overwrite skipped unless `--force` (#275).
+- **Code Intelligence**: AST-grep rewrites applied when `dryRun=false` (#295, #358).
+- **Code Simplifier**: Untracked files included in selection (#308). CI test failures from `trim()` and `homedir()` resolved.
+- **MCP**: Notepad `daysOld` bounds validated (#309, #334).
+- **Config**: Windows MCP server paths escaped in `mergeConfig` (#307, #337).
+- **Session**: PID-reuse false positives in stale detection fixed (#338).
+- **Trace**: Memory usage on large JSONL histories fixed (#336).
+- **Tmux**: Hook indices clamped to signed 32-bit range (#240, #241). HUD resize noise quieted on macOS. Signed 32-bit hook hash coercion enforced (#265).
+- **Misc**: Lifecycle best-effort failure warnings surfaced (#315, #346). Notify-hook cross-worktree tests isolated from inherited team env.
+
+### Security
+- MCP `workingDirectory` handling hardened with validation and allowlist policy (#289).
+- Path traversal prevention for state and team tool calls with mode allowlist enforcement.
+- HUD dynamic text sanitized to prevent terminal escape injection (#271).
+
+### Tests
+- 1,472 tests across 308 suites — all passing.
+- New test suites: `scaling.test.ts`, `task-size-detector.test.ts`, `session.test.ts`, `consensus-execution-handoff.test.ts`, `notify-hook-worker-idle.test.ts`, `template-engine.test.ts`, `hook-config.test.ts`, `idle-cooldown.test.ts`, `reply-config.test.ts`, `path-traversal.test.ts`, `memory-server.test.ts`, `memory-validation.test.ts`, `bootstrap.test.ts`, `code-intel-server.test.ts`, `openclaw/*.test.ts`, `star-prompt.test.ts`, `setup-agents-overwrite.test.ts`, `setup-skills-overwrite.test.ts`, `error-handling-warnings.test.ts`, `catalog-contract.test.ts`.
+- Code-simplifier hook coverage made deterministic (#311, #348).
+- Ralph persistence gate verification matrix in CI.
+
 ## [0.6.4] - 2026-02-24
 
 ### Fixed
