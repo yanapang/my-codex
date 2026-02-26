@@ -7,6 +7,7 @@ import {
   initTeamState,
   listMailboxMessages,
   listDispatchRequests,
+  readDispatchRequest,
 } from '../state.js';
 import {
   queueInboxInstruction,
@@ -146,6 +147,75 @@ describe('mcp-comm', () => {
       const allRequests = await listDispatchRequests('alpha', cwd, { kind: 'mailbox' });
       // second message has distinct message_id -> second request exists
       assert.equal(allRequests.length, 2);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('marks direct dispatch request failed when notify transport fails (prevents poisoned pending)', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-mcp-comm-'));
+    try {
+      await initTeamState('alpha', 't', 'executor', 1, cwd);
+
+      const first = await queueInboxInstruction({
+        teamName: 'alpha',
+        workerName: 'worker-1',
+        workerIndex: 1,
+        inbox: '# hi',
+        triggerMessage: 'trigger',
+        cwd,
+        transportPreference: 'transport_direct',
+        fallbackAllowed: false,
+        notify: async () => ({ ok: false, transport: 'tmux_send_keys', reason: 'tmux_unavailable' }),
+      });
+      assert.equal(first.ok, false);
+      assert.ok(first.request_id);
+      const firstReq = await readDispatchRequest('alpha', first.request_id!, cwd);
+      assert.equal(firstReq?.status, 'failed');
+      assert.equal(firstReq?.last_reason, 'tmux_unavailable');
+
+      const second = await queueInboxInstruction({
+        teamName: 'alpha',
+        workerName: 'worker-1',
+        workerIndex: 1,
+        inbox: '# hi again',
+        triggerMessage: 'trigger',
+        cwd,
+        transportPreference: 'transport_direct',
+        fallbackAllowed: false,
+        notify: async () => ({ ok: false, transport: 'tmux_send_keys', reason: 'tmux_unavailable' }),
+      });
+      assert.ok(second.request_id);
+      assert.notEqual(second.request_id, first.request_id);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('marks prompt dispatch request failed when notify throws (prevents poisoned pending)', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-mcp-comm-'));
+    try {
+      await initTeamState('alpha', 't', 'executor', 2, cwd);
+
+      const outcome = await queueDirectMailboxMessage({
+        teamName: 'alpha',
+        fromWorker: 'worker-1',
+        toWorker: 'worker-2',
+        toWorkerIndex: 2,
+        body: 'hello',
+        triggerMessage: 'check mailbox',
+        cwd,
+        transportPreference: 'prompt_stdin',
+        fallbackAllowed: false,
+        notify: async () => { throw new Error('stdin closed'); },
+      });
+      assert.equal(outcome.ok, false);
+      assert.match(outcome.reason, /^notify_exception:/);
+      assert.ok(outcome.request_id);
+
+      const request = await readDispatchRequest('alpha', outcome.request_id!, cwd);
+      assert.equal(request?.status, 'failed');
+      assert.match(request?.last_reason ?? '', /^notify_exception:/);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

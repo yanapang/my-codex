@@ -5,6 +5,7 @@ import {
   teamMarkMessageNotified as markMessageNotified,
   teamEnqueueDispatchRequest as enqueueDispatchRequest,
   teamReadDispatchRequest as readDispatchRequest,
+  teamTransitionDispatchRequest as transitionDispatchRequest,
   teamMarkDispatchRequestNotified as markDispatchRequestNotified,
   type TeamDispatchRequest,
   type TeamDispatchRequestInput,
@@ -37,6 +38,46 @@ function isConfirmedNotification(outcome: DispatchOutcome): boolean {
   if (!outcome.ok) return false;
   if (outcome.transport !== 'hook') return true;
   return outcome.reason !== 'queued_for_hook_dispatch';
+}
+
+function fallbackTransportForPreference(
+  preference: TeamDispatchRequestInput['transport_preference'],
+): DispatchTransport {
+  if (preference === 'prompt_stdin') return 'prompt_stdin';
+  if (preference === 'transport_direct') return 'tmux_send_keys';
+  return 'hook';
+}
+
+function notifyExceptionReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return `notify_exception:${message}`;
+}
+
+async function markImmediateDispatchFailure(params: {
+  teamName: string;
+  request: TeamDispatchRequest;
+  reason: string;
+  messageId?: string;
+  cwd: string;
+}): Promise<void> {
+  const { teamName, request, reason, messageId, cwd } = params;
+  if (request.transport_preference === 'hook_preferred_with_fallback') return;
+
+  const current = await readDispatchRequest(teamName, request.request_id, cwd);
+  if (!current) return;
+  if (current.status === 'failed' || current.status === 'notified' || current.status === 'delivered') return;
+
+  await transitionDispatchRequest(
+    teamName,
+    request.request_id,
+    current.status,
+    'failed',
+    {
+      message_id: messageId ?? current.message_id,
+      last_reason: reason,
+    },
+    cwd,
+  ).catch(() => {});
 }
 
 interface QueueInboxParams {
@@ -79,11 +120,15 @@ export async function queueInboxInstruction(params: QueueInboxParams): Promise<D
     };
   }
 
-  const notifyOutcome = await params.notify(
+  const notifyOutcome = await Promise.resolve(params.notify(
     { workerName: params.workerName, workerIndex: params.workerIndex, paneId: params.paneId },
     params.triggerMessage,
     { request: queued.request },
-  );
+  )).catch((error) => ({
+    ok: false,
+    transport: fallbackTransportForPreference(params.transportPreference),
+    reason: notifyExceptionReason(error),
+  } as DispatchOutcome));
   const outcome: DispatchOutcome = { ...notifyOutcome, request_id: queued.request.request_id };
 
   if (isConfirmedNotification(outcome)) {
@@ -93,6 +138,13 @@ export async function queueInboxInstruction(params: QueueInboxParams): Promise<D
       { last_reason: outcome.reason },
       params.cwd,
     );
+  } else {
+    await markImmediateDispatchFailure({
+      teamName: params.teamName,
+      request: queued.request,
+      reason: outcome.reason,
+      cwd: params.cwd,
+    });
   }
 
   return outcome;
@@ -139,11 +191,15 @@ export async function queueDirectMailboxMessage(params: QueueDirectMessageParams
     };
   }
 
-  const notifyOutcome = await params.notify(
+  const notifyOutcome = await Promise.resolve(params.notify(
     { workerName: params.toWorker, workerIndex: params.toWorkerIndex, paneId: params.toPaneId },
     params.triggerMessage,
     { request: queued.request, message_id: message.message_id },
-  );
+  )).catch((error) => ({
+    ok: false,
+    transport: fallbackTransportForPreference(params.transportPreference),
+    reason: notifyExceptionReason(error),
+  } as DispatchOutcome));
   const outcome: DispatchOutcome = {
     ...notifyOutcome,
     request_id: queued.request.request_id,
@@ -158,6 +214,14 @@ export async function queueDirectMailboxMessage(params: QueueDirectMessageParams
       { message_id: message.message_id, last_reason: outcome.reason },
       params.cwd,
     );
+  } else {
+    await markImmediateDispatchFailure({
+      teamName: params.teamName,
+      request: queued.request,
+      reason: outcome.reason,
+      messageId: message.message_id,
+      cwd: params.cwd,
+    });
   }
   return outcome;
 }
@@ -210,11 +274,15 @@ export async function queueBroadcastMailboxMessage(params: QueueBroadcastParams)
       continue;
     }
 
-    const notifyOutcome = await params.notify(
+    const notifyOutcome = await Promise.resolve(params.notify(
       { workerName: recipient.workerName, workerIndex: recipient.workerIndex, paneId: recipient.paneId },
       params.triggerFor(recipient.workerName),
       { request: queued.request, message_id: message.message_id },
-    );
+    )).catch((error) => ({
+      ok: false,
+      transport: fallbackTransportForPreference(params.transportPreference),
+      reason: notifyExceptionReason(error),
+    } as DispatchOutcome));
 
     const outcome: DispatchOutcome = {
       ...notifyOutcome,
@@ -232,6 +300,14 @@ export async function queueBroadcastMailboxMessage(params: QueueBroadcastParams)
         { message_id: message.message_id, last_reason: outcome.reason },
         params.cwd,
       );
+    } else {
+      await markImmediateDispatchFailure({
+        teamName: params.teamName,
+        request: queued.request,
+        reason: outcome.reason,
+        messageId: message.message_id,
+        cwd: params.cwd,
+      });
     }
   }
 
