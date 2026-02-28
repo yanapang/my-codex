@@ -52,7 +52,7 @@ function getOmxTopLevelLines(pkgRoot: string): string[] {
  * Remove any existing OMX-owned top-level keys so we can re-insert them
  * cleanly.  Also removes the comment line that precedes them.
  */
-function stripOmxTopLevelKeys(config: string): string {
+export function stripOmxTopLevelKeys(config: string): string {
   let lines = config.split(/\r?\n/);
 
   // Remove the OMX top-level comment line
@@ -141,11 +141,127 @@ function upsertFeatureFlags(config: string): string {
   return lines.join('\n');
 }
 
+/**
+ * Remove OMX-owned feature flags from the [features] section.
+ * If the section becomes empty after removal, remove the section header too.
+ */
+export function stripOmxFeatureFlags(config: string): string {
+  const lines = config.split(/\r?\n/);
+  const featuresStart = lines.findIndex((line) => /^\s*\[features\]\s*$/.test(line));
+
+  if (featuresStart < 0) return config;
+
+  let sectionEnd = lines.length;
+  for (let i = featuresStart + 1; i < lines.length; i++) {
+    if (/^\s*\[\[?[^\]]+\]?\]\s*$/.test(lines[i])) {
+      sectionEnd = i;
+      break;
+    }
+  }
+
+  const omxFlags = ['multi_agent', 'child_agents_md', 'collab'];
+  const filtered: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (i > featuresStart && i < sectionEnd) {
+      const isOmxFlag = omxFlags.some((f) =>
+        new RegExp(`^\\s*${f}\\s*=`).test(lines[i])
+      );
+      if (isOmxFlag) continue;
+    }
+    filtered.push(lines[i]);
+  }
+
+  // If [features] section is now empty, remove the header too
+  const newFeaturesStart = filtered.findIndex((l) => /^\s*\[features\]\s*$/.test(l));
+  if (newFeaturesStart >= 0) {
+    let newSectionEnd = filtered.length;
+    for (let i = newFeaturesStart + 1; i < filtered.length; i++) {
+      if (/^\s*\[\[?[^\]]+\]?\]\s*$/.test(filtered[i])) {
+        newSectionEnd = i;
+        break;
+      }
+    }
+    const sectionContent = filtered.slice(newFeaturesStart + 1, newSectionEnd);
+    if (sectionContent.every((l) => l.trim() === '')) {
+      filtered.splice(newFeaturesStart, newSectionEnd - newFeaturesStart);
+    }
+  }
+
+  return filtered.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Orphaned OMX table sections (no marker block)
+// ---------------------------------------------------------------------------
+
+/**
+ * Check whether a TOML table name belongs to an OMX-defined agent.
+ * Handles both `agents.name` and `agents."name"` forms.
+ */
+function isOmxAgentSection(tableName: string, agentNames: Set<string>): boolean {
+  const m = tableName.match(/^agents\.(?:"([^"]+)"|(\w[\w-]*))$/);
+  if (!m) return false;
+  return agentNames.has(m[1] || m[2]);
+}
+
+/**
+ * Strip OMX-owned table sections that exist outside the marker block.
+ * This covers legacy configs that were written before markers were added,
+ * or configs where the marker was accidentally removed.
+ *
+ * Targets: [mcp_servers.omx_*], [agents.<omx-agent>], [tui]
+ */
+function stripOrphanedOmxSections(config: string): string {
+  const lines = config.split(/\r?\n/);
+  const result: string[] = [];
+  const omxAgentNames = new Set(Object.keys(AGENT_DEFINITIONS));
+
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const tableMatch = line.match(/^\s*\[([^\]]+)\]\s*$/);
+
+    if (tableMatch) {
+      const tableName = tableMatch[1];
+      // Note: [tui] is NOT stripped here because it could be user-owned.
+      // The marker-based stripExistingOmxBlocks already handles [tui]
+      // when it lives inside the OMX marker block.
+      const isOmxSection =
+        /^mcp_servers\.omx_/.test(tableName) ||
+        isOmxAgentSection(tableName, omxAgentNames);
+
+      if (isOmxSection) {
+        // Remove preceding OMX comment lines and blank lines
+        while (result.length > 0) {
+          const last = result[result.length - 1];
+          if (last.trim() === '' || /^#\s*(OMX|oh-my-codex)/i.test(last)) {
+            result.pop();
+          } else {
+            break;
+          }
+        }
+
+        // Skip table header + all key=value / comment / blank lines until next section
+        i++;
+        while (i < lines.length && !/^\s*\[/.test(lines[i])) {
+          i++;
+        }
+        continue;
+      }
+    }
+
+    result.push(line);
+    i++;
+  }
+
+  return result.join('\n');
+}
+
 // ---------------------------------------------------------------------------
 // OMX [table] sections block (appended at end of file)
 // ---------------------------------------------------------------------------
 
-function stripExistingOmxBlocks(config: string): { cleaned: string; removed: number } {
+export function stripExistingOmxBlocks(config: string): { cleaned: string; removed: number } {
   const marker = 'oh-my-codex (OMX) Configuration';
   const endMarker = '# End oh-my-codex';
   let cleaned = config;
@@ -299,6 +415,10 @@ export async function mergeConfig(
 
   // Strip any stale OMX top-level keys (from previous runs or wrong positions)
   existing = stripOmxTopLevelKeys(existing);
+
+  // Strip orphaned OMX table sections that may exist outside the marker block
+  // (legacy configs, or configs where markers were accidentally removed)
+  existing = stripOrphanedOmxSections(existing);
 
   // Upsert [features] flags
   existing = upsertFeatureFlags(existing);

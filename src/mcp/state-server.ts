@@ -72,8 +72,8 @@ import {
 } from '../team/team-ops.js';
 
 const SUPPORTED_MODES = [
-  'autopilot', 'ultrapilot', 'team', 'pipeline',
-  'ralph', 'ultrawork', 'ultraqa', 'ecomode', 'ralplan',
+  'autopilot', 'team',
+  'ralph', 'ultrawork', 'ultraqa', 'ralplan',
 ] as const;
 
 const STATE_TOOL_NAMES = new Set([

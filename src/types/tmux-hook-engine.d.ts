@@ -43,10 +43,12 @@ declare module '*tmux-hook-engine.js' {
     now: number;
     state: Record<string, unknown>;
   }): { allow: boolean; reason: string; dedupeKey?: string };
+  export function buildCapturePaneArgv(paneTarget: string, tailLines?: number): string[];
   export function buildPaneInModeArgv(paneTarget: string): string[];
   export function buildSendKeysArgv(args: {
     paneTarget: string;
     prompt: string;
     dryRun: boolean;
+    submitKeyPresses?: number;
   }): { typeArgv: string[]; submitArgv: string[][] } | null;
 }

@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'path';
 import { safeString } from './utils.js';
 import { runProcess } from './process-runner.js';
 import { resolvePaneTarget } from './tmux-injection.js';
-import { buildPaneInModeArgv, buildSendKeysArgv } from '../tmux-hook-engine.js';
+import { buildCapturePaneArgv, buildPaneInModeArgv, buildSendKeysArgv } from '../tmux-hook-engine.js';
 
 function readJson(path, fallback) {
   return readFile(path, 'utf8')
@@ -129,6 +129,29 @@ function defaultInjectTarget(request, config) {
   return null;
 }
 
+function resolveWorkerCliForRequest(request, config) {
+  const workers = Array.isArray(config?.workers) ? config.workers : [];
+  const idx = Number.isFinite(request?.worker_index) ? Number(request.worker_index) : null;
+  if (idx !== null) {
+    const worker = workers.find((candidate) => Number(candidate?.index) === idx);
+    const workerCli = safeString(worker?.worker_cli).trim().toLowerCase();
+    if (workerCli === 'claude') return 'claude';
+  }
+  return 'codex';
+}
+
+function normalizeCaptureText(value) {
+  return safeString(value).replace(/\r/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function capturedPaneContainsTrigger(captured, trigger) {
+  if (!captured || !trigger) return false;
+  return normalizeCaptureText(captured).includes(normalizeCaptureText(trigger));
+}
+
+const INJECT_VERIFY_DELAY_MS = 250;
+const INJECT_VERIFY_ROUNDS = 3;
+
 async function injectDispatchRequest(request, config, cwd) {
   const target = defaultInjectTarget(request, config);
   if (!target) {
@@ -151,12 +174,35 @@ async function injectDispatchRequest(request, config, cwd) {
     paneTarget: resolution.paneTarget,
     prompt: request.trigger_message,
     dryRun: false,
+    submitKeyPresses: resolveWorkerCliForRequest(request, config) === 'claude' ? 1 : 2,
   });
   await runProcess('tmux', argv.typeArgv, 3000);
   for (const submit of argv.submitArgv) {
     await runProcess('tmux', submit, 3000);
   }
-  return { ok: true, reason: 'tmux_send_keys_sent', pane: resolution.paneTarget };
+
+  // Post-injection verification: confirm the trigger text was consumed.
+  // Fixes #391: without this, dispatch marks 'notified' even when the worker
+  // pane is sitting on an unsent draft (Enter was not effectively applied).
+  const captureArgv = buildCapturePaneArgv(resolution.paneTarget);
+  for (let round = 0; round < INJECT_VERIFY_ROUNDS; round++) {
+    await new Promise((r) => setTimeout(r, INJECT_VERIFY_DELAY_MS));
+    try {
+      const cap = await runProcess('tmux', captureArgv, 2000);
+      if (!capturedPaneContainsTrigger(cap.stdout, request.trigger_message)) {
+        return { ok: true, reason: 'tmux_send_keys_confirmed', pane: resolution.paneTarget };
+      }
+    } catch {
+      // capture failed; fall through to retry C-m
+    }
+    // Draft still visible — retry C-m
+    for (const submit of argv.submitArgv) {
+      await runProcess('tmux', submit, 3000).catch(() => {});
+    }
+  }
+
+  // Trigger text is still visible after all retry rounds.
+  return { ok: true, reason: 'tmux_send_keys_unconfirmed', pane: resolution.paneTarget };
 }
 
 function shouldSkipRequest(request) {
@@ -230,6 +276,41 @@ export async function drainPendingTeamDispatch({
         request.updated_at = nowIso;
 
         if (result.ok) {
+          // Unconfirmed sends: trigger text was still visible after retry
+          // rounds. Leave as pending for the next tick to retry (up to 3
+          // total attempts) rather than marking notified. Fixes #391.
+          const MAX_UNCONFIRMED_ATTEMPTS = 3;
+          if (result.reason === 'tmux_send_keys_unconfirmed' && request.attempt_count < MAX_UNCONFIRMED_ATTEMPTS) {
+            request.last_reason = result.reason;
+            mutated = true;
+            skipped += 1;
+            await appendDispatchLog(logsDir, {
+              type: 'dispatch_unconfirmed_retry',
+              team: teamName,
+              request_id: request.request_id,
+              worker: request.to_worker,
+              attempt: request.attempt_count,
+              reason: result.reason,
+            });
+            continue;
+          }
+          if (result.reason === 'tmux_send_keys_unconfirmed') {
+            request.status = 'failed';
+            request.failed_at = nowIso;
+            request.last_reason = 'unconfirmed_after_max_retries';
+            processed += 1;
+            failed += 1;
+            mutated = true;
+            await appendDispatchLog(logsDir, {
+              type: 'dispatch_failed',
+              team: teamName,
+              request_id: request.request_id,
+              worker: request.to_worker,
+              message_id: request.message_id || null,
+              reason: request.last_reason,
+            });
+            continue;
+          }
           request.status = 'notified';
           request.notified_at = nowIso;
           request.last_reason = result.reason;

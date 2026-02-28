@@ -32,6 +32,8 @@ const OMX_TEAM_WORKER_CLI_MAP_ENV = 'OMX_TEAM_WORKER_CLI_MAP';
 const OMX_TEAM_WORKER_LAUNCH_MODE_ENV = 'OMX_TEAM_WORKER_LAUNCH_MODE';
 const OMX_TEAM_AUTO_INTERRUPT_RETRY_ENV = 'OMX_TEAM_AUTO_INTERRUPT_RETRY';
 const CLAUDE_SKIP_PERMISSIONS_FLAG = '--dangerously-skip-permissions';
+const OMX_LEADER_NODE_PATH_ENV = 'OMX_LEADER_NODE_PATH';
+const OMX_LEADER_CLI_PATH_ENV = 'OMX_LEADER_CLI_PATH';
 
 export type TeamWorkerCli = 'codex' | 'claude';
 type TeamWorkerCliMode = 'auto' | TeamWorkerCli;
@@ -470,6 +472,30 @@ function commandExists(binary: string): boolean {
   return true;
 }
 
+/**
+ * Resolve the absolute path of a binary from the leader's current environment.
+ * Returns the absolute path or the bare command name as fallback.
+ */
+function resolveAbsoluteBinaryPath(binary: string): string {
+  const result = spawnSync('which', [binary], { encoding: 'utf-8', timeout: 5000 });
+  if (result.status === 0 && result.stdout.trim()) {
+    return result.stdout.trim();
+  }
+  return binary;
+}
+
+/**
+ * Resolve the leader's node binary path.
+ * Caches results for the process lifetime.
+ */
+let _leaderPaths: { node: string; } | null = null;
+function resolveLeaderNodePath(): string {
+  if (!_leaderPaths) {
+    _leaderPaths = { node: resolveAbsoluteBinaryPath('node') };
+  }
+  return _leaderPaths.node;
+}
+
 export function assertTeamWorkerCliBinaryAvailable(
   workerCli: TeamWorkerCli,
   existsImpl: (binary: string) => boolean = commandExists,
@@ -519,10 +545,12 @@ export function buildWorkerStartupCommand(
     workerCliOverride,
   );
   const launchSpec = buildWorkerLaunchSpec(process.env.SHELL);
+  const leaderNodeDir = resolveLeaderNodePath().replace(/\/[^/]+$/, ''); // dirname
+  const pathPrefix = leaderNodeDir ? `export PATH='${leaderNodeDir}':$PATH; ` : '';
   const quotedArgs = processSpec.args.map(shellQuoteSingle).join(' ');
   const cliInvocation = quotedArgs.length > 0 ? `exec ${processSpec.command} ${quotedArgs}` : `exec ${processSpec.command}`;
   const rcPrefix = launchSpec.rcFile ? `if [ -f ${launchSpec.rcFile} ]; then source ${launchSpec.rcFile}; fi; ` : '';
-  const inner = `${rcPrefix}${cliInvocation}`;
+  const inner = `${rcPrefix}${pathPrefix}${cliInvocation}`;
   const envParts = Object.entries(processSpec.env).map(([key, value]) => `${key}=${value}`);
 
   return `env ${envParts.map(shellQuoteSingle).join(' ')} ${shellQuoteSingle(launchSpec.shell)} -lc ${shellQuoteSingle(inner)}`;
@@ -540,8 +568,11 @@ export function buildWorkerProcessLaunchSpec(
   const workerCli = workerCliOverride ?? resolveTeamWorkerCli(fullLaunchArgs, process.env);
   const cliLaunchArgs = translateWorkerLaunchArgsForCli(workerCli, fullLaunchArgs);
 
+  const resolvedCliPath = resolveAbsoluteBinaryPath(workerCli);
   const workerEnv: Record<string, string> = {
     OMX_TEAM_WORKER: `${teamName}/worker-${workerIndex}`,
+    [OMX_LEADER_NODE_PATH_ENV]: resolveLeaderNodePath(),
+    [OMX_LEADER_CLI_PATH_ENV]: resolvedCliPath,
   };
   for (const [key, value] of Object.entries(extraEnv)) {
     if (typeof value !== 'string' || value.trim() === '') continue;
@@ -550,7 +581,7 @@ export function buildWorkerProcessLaunchSpec(
 
   return {
     workerCli,
-    command: workerCli,
+    command: resolvedCliPath,
     args: cliLaunchArgs,
     env: workerEnv,
   };
@@ -865,6 +896,14 @@ function paneTarget(sessionName: string, workerIndex: number, workerPaneId?: str
   return `${sessionName}:${workerIndex}`;
 }
 
+export function paneIsBootstrapping(lines: string[]): boolean {
+  return lines.some((line) =>
+    /\b(loading|initializing|starting up)\b/i.test(line) ||
+    /\bmodel:\s*loading\b/i.test(line) ||
+    /\bconnecting\s+to\b/i.test(line),
+  );
+}
+
 function paneLooksReady(captured: string): boolean {
   const content = captured.trimEnd();
   if (content === '') return false;
@@ -875,17 +914,24 @@ function paneLooksReady(captured: string): boolean {
     .map(l => l.trimEnd())
     .filter(l => l.trim() !== '');
 
+  // Negative gate: loading/startup states override all positive signals.
+  // Fixes #391: status bar markers (gpt-*, % left) can appear before the CLI
+  // is truly input-ready, causing typed triggers to sit as unsent drafts.
+  if (paneIsBootstrapping(lines)) return false;
+
   const lastLine = lines.length > 0 ? lines[lines.length - 1] : '';
+  // Strong positive: prompt character on last line means input-ready.
   if (/^\s*[›>❯]\s*/u.test(lastLine)) return true;
 
-  // Codex TUI often renders a status bar/footer instead of a raw shell prompt.
-  // Treat common Codex UI markers as "ready enough" for inbox-trigger dispatch.
+  // Prompt character anywhere in the captured output (e.g. Codex TUI renders
+  // the prompt line above a status footer).
   const hasCodexPromptLine = lines.some((line) => /^\s*›\s*/u.test(line));
-  const hasCodexStatus = lines.some((line) => /\bgpt-[\w.-]+\b/i.test(line) || /\b\d+% left\b/i.test(line));
   const hasClaudePromptLine = lines.some((line) => /^\s*❯\s*/u.test(line));
-  const hasClaudeStatus = lines.some((line) => /\bClaude Code v[\d.]+\b/i.test(line) || /\bclaude-[\w.-]+\b/i.test(line));
-  if (hasCodexPromptLine || hasCodexStatus || hasClaudePromptLine || hasClaudeStatus) return true;
+  if (hasCodexPromptLine || hasClaudePromptLine) return true;
 
+  // Status-only markers (model name in status bar, token budget) are NOT
+  // sufficient on their own — they can appear during bootstrap before the CLI
+  // accepts input.  Require an actual prompt character (checked above).
   return false;
 }
 
@@ -1058,6 +1104,7 @@ export function waitForWorkerReady(
   const maxBackoffMs = 8000;
   const startedAt = Date.now();
   let blockedByTrustPrompt = false;
+  let trustPromptDismissed = false;
 
   const sendRobustEnter = (): void => {
     const target = paneTarget(sessionName, workerIndex, workerPaneId);
@@ -1076,6 +1123,7 @@ export function waitForWorkerReady(
       // Opt-out by setting OMX_TEAM_AUTO_TRUST=0.
       if (process.env.OMX_TEAM_AUTO_TRUST !== '0') {
         sendRobustEnter();
+        trustPromptDismissed = true;
         return false;
       }
       blockedByTrustPrompt = true;
@@ -1088,6 +1136,12 @@ export function waitForWorkerReady(
   while (Date.now() - startedAt < timeoutMs) {
     if (check()) return true;
     if (blockedByTrustPrompt) return false;
+    // After dismissing a trust prompt, reset backoff so we re-check quickly
+    // instead of sleeping 2s/4s/8s while the worker is starting up.
+    if (trustPromptDismissed) {
+      delayMs = initialBackoffMs;
+      trustPromptDismissed = false;
+    }
     const remaining = timeoutMs - (Date.now() - startedAt);
     if (remaining <= 0) break;
     sleepSeconds(Math.max(0, Math.min(delayMs, remaining)) / 1000);
@@ -1095,6 +1149,29 @@ export function waitForWorkerReady(
   }
 
   return false;
+}
+
+/**
+ * Detect and auto-dismiss a Codex "Trust this directory?" prompt in a worker pane.
+ * Returns true if a trust prompt was found and dismissed, false otherwise.
+ * Opt-out: set OMX_TEAM_AUTO_TRUST=0 to disable auto-dismissal.
+ */
+export function dismissTrustPromptIfPresent(
+  sessionName: string,
+  workerIndex: number,
+  workerPaneId?: string,
+): boolean {
+  if (process.env.OMX_TEAM_AUTO_TRUST === '0') return false;
+  if (!isTmuxAvailable()) return false;
+  const target = paneTarget(sessionName, workerIndex, workerPaneId);
+  const result = runTmux(['capture-pane', '-t', target, '-p']);
+  if (!result.ok) return false;
+  if (!paneHasTrustPrompt(result.stdout)) return false;
+  // Trust prompt detected; send Enter twice to dismiss (trust + follow-up splash)
+  runTmux(['send-keys', '-t', target, 'C-m']);
+  sleepFractionalSeconds(0.12);
+  runTmux(['send-keys', '-t', target, 'C-m']);
+  return true;
 }
 
 function paneTailContainsLiteralLine(target: string, text: string): boolean {
@@ -1204,10 +1281,23 @@ export function sendToWorker(
     throw new Error('sendToWorker: submit_failed (trigger text still visible after retries)');
   }
 
-  // One last best-effort double C-m nudge, then continue.
+  // One last best-effort double C-m nudge, then verify.
   runTmux(['send-keys', '-t', target, 'C-m']);
   sleepFractionalSeconds(0.12);
   runTmux(['send-keys', '-t', target, 'C-m']);
+
+  // Post-submit verification: wait briefly and confirm the worker consumed the
+  // trigger (draft disappeared or active-task indicator appeared). Fixes #391.
+  sleepFractionalSeconds(0.3);
+  const verifyResult = runTmux(['capture-pane', '-t', target, '-p', '-S', '-80']);
+  if (verifyResult.ok) {
+    if (paneHasActiveTask(verifyResult.stdout)) return;
+    if (!paneTailContainsLiteralLine(target, text)) return;
+    // Draft still visible and no active task — one more C-m attempt.
+    sendKeyOrThrow(target, 'C-m', 'C-m');
+    sleepFractionalSeconds(0.15);
+    sendKeyOrThrow(target, 'C-m', 'C-m');
+  }
 }
 
 export function notifyLeaderStatus(sessionName: string, message: string): boolean {
