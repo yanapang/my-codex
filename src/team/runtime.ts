@@ -84,6 +84,8 @@ import {
   generateTriggerMessage,
   generateMailboxTriggerMessage,
 } from './worker-bootstrap.js';
+import { loadRolePrompt } from './role-router.js';
+import { codexPromptsDir } from '../utils/paths.js';
 import { type TeamPhase, type TerminalPhase } from './orchestrator.js';
 import {
   isLowComplexityAgentType,
@@ -670,11 +672,26 @@ export async function startTeam(
       // Get tasks assigned to this worker
       const workerTasks = allTasks.filter(t => t.owner === workerName);
 
+      // Resolve per-worker role from assigned task roles
+      const taskRoles = workerTasks.map(t => t.role).filter(Boolean) as string[];
+      const uniqueTaskRoles = new Set(taskRoles);
+      const workerRole = taskRoles.length > 0 && uniqueTaskRoles.size === 1
+        ? taskRoles[0]
+        : agentType;
+      if (uniqueTaskRoles.size > 1) {
+        console.log(`[omx:team] ${workerName}: mixed task roles [${[...uniqueTaskRoles].join(', ')}], falling back to ${agentType}`);
+      }
+
+      // Load role-specific prompt content if role differs from default
+      const rolePromptContent = workerRole !== agentType
+        ? await loadRolePrompt(workerRole, codexPromptsDir())
+        : null;
+
       // Write worker identity
       const identity: WorkerInfo = {
         name: workerName,
         index: i,
-        role: agentType,
+        role: workerRole,
         worker_cli: workerCliPlan[i - 1],
         assigned_tasks: workerTasks.map(t => t.id),
         working_dir: workerWorkspace.cwd,
@@ -718,6 +735,8 @@ export async function startTeam(
       const inbox = generateInitialInbox(workerName, sanitized, agentType, workerTasks, {
         teamStateRoot,
         leaderCwd,
+        workerRole,
+        rolePromptContent: rolePromptContent ?? undefined,
       });
       const trigger = generateTriggerMessage(workerName, sanitized);
       const maxStartupDispatchRetries = 3;

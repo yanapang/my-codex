@@ -50,6 +50,8 @@ import {
   generateInitialInbox,
   generateTriggerMessage,
 } from './worker-bootstrap.js';
+import { loadRolePrompt } from './role-router.js';
+import { codexPromptsDir } from '../utils/paths.js';
 import {
   resolveTeamWorkerLaunchArgs,
   isLowComplexityAgentType,
@@ -130,7 +132,7 @@ export async function scaleUp(
   teamName: string,
   count: number,
   agentType: string,
-  tasks: Array<{ subject: string; description: string; owner?: string; blocked_by?: string[] }>,
+  tasks: Array<{ subject: string; description: string; owner?: string; blocked_by?: string[]; role?: string }>,
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<ScaleUpResult | ScaleError> {
@@ -228,10 +230,20 @@ export async function scaleUp(
       // Get PID
       const panePid = getWorkerPanePid(sessionName, workerIndex, paneId);
 
+      // Resolve per-worker role from assigned task roles
+      const workerTaskRoles = tasks.filter(t => t.owner === workerName).map(t => t.role).filter(Boolean) as string[];
+      const uniqueTaskRoles = new Set(workerTaskRoles);
+      const workerRole = workerTaskRoles.length > 0 && uniqueTaskRoles.size === 1
+        ? workerTaskRoles[0]
+        : agentType;
+      if (uniqueTaskRoles.size > 1) {
+        console.log(`[omx:scaling] ${workerName}: mixed task roles [${[...uniqueTaskRoles].join(', ')}], falling back to ${agentType}`);
+      }
+
       const workerInfo: WorkerInfo = {
         name: workerName,
         index: workerIndex,
-        role: agentType,
+        role: workerRole,
         worker_cli: workerCliPlan[i],
         assigned_tasks: [],
         pid: panePid ?? undefined,
@@ -254,16 +266,25 @@ export async function scaleUp(
 
       // Get assigned tasks for this worker
       const workerTasks = tasks.filter(t => t.owner === workerName);
+
+      // Load role-specific prompt content if role differs from default
+      const rolePromptContent = workerRole !== agentType
+        ? await loadRolePrompt(workerRole, codexPromptsDir())
+        : null;
+
       const inbox = generateInitialInbox(workerName, sanitized, agentType, workerTasks.map((t, idx) => ({
         id: String(idx + 1),
         subject: t.subject,
         description: t.description,
         status: 'pending' as const,
         blocked_by: t.blocked_by,
+        role: t.role,
         created_at: new Date().toISOString(),
       })), {
         teamStateRoot,
         leaderCwd,
+        workerRole,
+        rolePromptContent: rolePromptContent ?? undefined,
       });
 
       const trigger = generateTriggerMessage(workerName, sanitized);

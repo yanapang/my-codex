@@ -251,6 +251,8 @@ export function generateInitialInbox(
   options: {
     teamStateRoot?: string;
     leaderCwd?: string;
+    workerRole?: string;
+    rolePromptContent?: string;
   } = {},
 ): string {
   const taskList = tasks
@@ -259,17 +261,25 @@ export function generateInitialInbox(
       if (t.blocked_by && t.blocked_by.length > 0) {
         entry += `\n  Blocked by: ${t.blocked_by.join(', ')}`;
       }
+      if (t.role) {
+        entry += `\n  Role: ${t.role}`;
+      }
       return entry;
     })
     .join('\n');
 
   const teamStateRoot = options.teamStateRoot || '<team_state_root>';
   const leaderCwd = options.leaderCwd || '<leader_cwd>';
+  const displayRole = options.workerRole ?? agentType;
+
+  const specializationSection = options.rolePromptContent
+    ? `\n## Your Specialization\n\nYou are operating as a **${displayRole}** agent. Follow these behavioral guidelines:\n\n${options.rolePromptContent}\n`
+    : '';
 
   return `# Worker Assignment: ${workerName}
 
 **Team:** ${teamName}
-**Role:** ${agentType}
+**Role:** ${displayRole}
 **Worker Name:** ${workerName}
 
 ## Your Assigned Tasks
@@ -306,7 +316,7 @@ ${buildVerificationSection('each assigned task')}
 - Do NOT edit files that belong to other workers
 - If you need to modify a shared/common file, write \`{"state": "blocked", "reason": "need to edit shared file X"}\` to your status file and wait
 - Do NOT spawn sub-agents (no \`spawn_agent\`). Complete work in this worker session.
-`;
+${specializationSection}`;
 }
 
 /**
