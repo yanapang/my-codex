@@ -67,14 +67,6 @@ Complex tasks often fail silently: partial implementations get declared "done", 
 - Use `state_write` / `state_read` for ralph mode state persistence between iterations
 </Tool_Usage>
 
-## Visual Feedback Loop (when UI/screenshots are involved)
-
-- Run `$visual-verdict` before every next edit to avoid subjective drift.
-- Supported inputs:
-  - `-i <image-path>`
-  - `--images-dir <directory>`
-- Persist visual decisions in `.omx/state/{scope}/ralph-progress.json` as numeric + qualitative feedback.
-
 ## State Management
 
 Use the `omx_state` MCP server tools (`state_write`, `state_read`, `state_clear`) for Ralph lifecycle state.
