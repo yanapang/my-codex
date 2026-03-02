@@ -266,7 +266,7 @@ export type TransitionTaskResult =
 
 export type ReleaseTaskClaimResult =
   | { ok: true; task: TeamTaskV2 }
-  | { ok: false; error: 'claim_conflict' | 'task_not_found' | 'already_terminal' };
+  | { ok: false; error: 'claim_conflict' | 'task_not_found' | 'already_terminal' | 'lease_expired' };
 
 export interface TeamSummary {
   teamName: string;
@@ -1579,7 +1579,7 @@ export async function releaseTaskClaim(
   teamName: string,
   taskId: string,
   claimToken: string,
-  workerName: string,
+  _workerName: string,
   cwd: string
 ): Promise<ReleaseTaskClaimResult> {
   const lock = await withTaskClaimLock(teamName, taskId, cwd, async () => {
@@ -1594,12 +1594,10 @@ export async function releaseTaskClaim(
       return { ok: false as const, error: 'already_terminal' as const };
     }
 
-    const leaseActive = Boolean(v.claim && new Date(v.claim.leased_until) > new Date());
-    const tokenMatches = Boolean(v.claim && v.claim.token === claimToken && leaseActive);
-    const ownerMatches = v.status === 'in_progress' && v.owner === workerName;
-    if (!tokenMatches && !ownerMatches) {
+    if (!v.owner || !v.claim || v.claim.owner !== v.owner || v.claim.token !== claimToken) {
       return { ok: false as const, error: 'claim_conflict' as const };
     }
+    if (new Date(v.claim.leased_until) <= new Date()) return { ok: false as const, error: 'lease_expired' as const };
 
     const updated: TeamTaskV2 = {
       ...v,

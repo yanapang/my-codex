@@ -624,7 +624,7 @@ describe('team state', () => {
     }
   });
 
-  it('releaseTaskClaim can recover with owner match when claim token changed', async () => {
+  it('releaseTaskClaim returns claim_conflict when claim token changed, even for the owner', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-team-release-owner-'));
     try {
       await initTeamState('team-release-owner', 't', 'executor', 1, cwd);
@@ -640,12 +640,8 @@ describe('team state', () => {
       await writeFile(taskPath, JSON.stringify(current, null, 2));
 
       const released = await releaseTaskClaim('team-release-owner', t.id, claim.claimToken, 'worker-1', cwd);
-      assert.equal(released.ok, true);
-
-      const reread = await readTask('team-release-owner', t.id, cwd);
-      assert.equal(reread?.status, 'pending');
-      assert.equal(reread?.owner, undefined);
-      assert.equal(reread?.claim, undefined);
+      assert.equal(released.ok, false);
+      assert.equal(released.ok ? 'x' : released.error, 'claim_conflict');
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
@@ -727,7 +723,7 @@ describe('team state', () => {
     }
   });
 
-  it('releaseTaskClaim returns claim_conflict when lease has expired and caller is not the owner', async () => {
+  it('releaseTaskClaim returns lease_expired when lease has expired and caller is not the owner', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-team-lease-release-'));
     try {
       await initTeamState('team-lease-release', 't', 'executor', 1, cwd);
@@ -745,13 +741,13 @@ describe('team state', () => {
       // Different worker tries to release with the expired token.
       const result = await releaseTaskClaim('team-lease-release', t.id, claim.claimToken, 'worker-2', cwd);
       assert.equal(result.ok, false);
-      assert.equal(result.ok ? 'x' : result.error, 'claim_conflict');
+      assert.equal(result.ok ? 'x' : result.error, 'lease_expired');
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
   });
 
-  it('releaseTaskClaim succeeds via owner match when lease has expired', async () => {
+  it('releaseTaskClaim returns lease_expired when lease has expired, even for the owner', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-team-lease-release-owner-'));
     try {
       await initTeamState('team-lease-release-owner', 't', 'executor', 1, cwd);
@@ -760,19 +756,16 @@ describe('team state', () => {
       assert.equal(claim.ok, true);
       if (!claim.ok) return;
 
-      // Backdate leased_until so tokenMatches fails, but ownerMatches still holds.
+      // Backdate leased_until so the claim token is no longer valid.
       const taskPath = join(cwd, '.omx', 'state', 'team', 'team-lease-release-owner', 'tasks', `task-${t.id}.json`);
       const current = JSON.parse(await readFile(taskPath, 'utf-8')) as any;
       current.claim.leased_until = new Date(Date.now() - 1000).toISOString();
       await writeFile(taskPath, JSON.stringify(current, null, 2));
 
-      // Same worker releases — should succeed via owner match.
+      // Same worker releases — should now fail because owner-only bypass is removed.
       const result = await releaseTaskClaim('team-lease-release-owner', t.id, claim.claimToken, 'worker-1', cwd);
-      assert.equal(result.ok, true);
-
-      const reread = await readTask('team-lease-release-owner', t.id, cwd);
-      assert.equal(reread?.status, 'pending');
-      assert.equal(reread?.claim, undefined);
+      assert.equal(result.ok, false);
+      assert.equal(result.ok ? 'x' : result.error, 'lease_expired');
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
