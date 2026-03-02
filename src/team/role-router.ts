@@ -9,7 +9,6 @@ import { readdir, readFile } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import type { TeamPhase } from './orchestrator.js';
-import { getPhaseAgents } from './orchestrator.js';
 
 // ─── Layer 1: Prompt Loading ────────────────────────────────────────────────
 
@@ -162,4 +161,3 @@ export function routeTaskToRole(
     reason: 'no keyword match; using fallback role',
   };
 }
-

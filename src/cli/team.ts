@@ -124,7 +124,6 @@ function splitTaskString(task: string): Array<{ subject: string; description: st
   if (numberedMatches.length >= 2) {
     const parts: Array<{ subject: string; description: string }> = [];
     for (let i = 0; i < numberedMatches.length; i++) {
-      const start = numberedMatches[i].index! + numberedMatches[i][0].indexOf(numberedMatches[i][1]);
       const prefixLen = numberedMatches[i][0].length;
       const contentStart = numberedMatches[i].index! + prefixLen;
       const end = i + 1 < numberedMatches.length ? numberedMatches[i + 1].index! : task.length;
