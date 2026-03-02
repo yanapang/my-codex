@@ -415,7 +415,11 @@ async function checkConfig(configPath: string): Promise<Check> {
     if (hasOmx) {
       return { name: 'Config', status: 'pass', message: 'config.toml has OMX entries' };
     }
-    return { name: 'Config', status: 'warn', message: 'config.toml exists but no OMX entries' };
+    return {
+      name: 'Config',
+      status: 'warn',
+      message: 'config.toml exists but no OMX entries yet (expected before first setup; run "omx setup --force" once)',
+    };
   } catch {
     return { name: 'Config', status: 'fail', message: 'cannot read config.toml' };
   }
@@ -475,7 +479,11 @@ async function checkMcpServers(configPath: string): Promise<Check> {
       if (hasOmx) {
         return { name: 'MCP Servers', status: 'pass', message: `${mcpCount} servers configured (OMX present)` };
       }
-      return { name: 'MCP Servers', status: 'warn', message: `${mcpCount} servers but no OMX servers` };
+      return {
+        name: 'MCP Servers',
+        status: 'warn',
+        message: `${mcpCount} servers but no OMX servers yet (expected before first setup; run "omx setup --force" once)`,
+      };
     }
     return { name: 'MCP Servers', status: 'warn', message: 'no MCP servers configured' };
   } catch {
