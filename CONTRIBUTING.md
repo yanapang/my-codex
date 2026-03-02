@@ -22,6 +22,16 @@ omx setup
 omx doctor
 ```
 
+### Team/state coverage gate (issue #454)
+
+CI enforces minimum coverage for critical team orchestration modules:
+
+```bash
+npm run coverage:team-critical
+```
+
+This command checks coverage for `dist/team/**` and `dist/state/**` and writes reports to `coverage/team/`.
+
 ### Release-readiness local verification
 
 When validating team/state changes, run this sequence locally:
