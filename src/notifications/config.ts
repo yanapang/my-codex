@@ -618,6 +618,26 @@ const REPLY_MAX_MESSAGE_LENGTH_MIN = 1;
 const REPLY_MAX_MESSAGE_LENGTH_MAX = 4_000;
 const REPLY_MAX_MESSAGE_LENGTH_DEFAULT = 500;
 
+interface ReplySettingsRaw {
+  enabled?: unknown;
+  authorizedDiscordUserIds?: unknown;
+  pollIntervalMs?: unknown;
+  rateLimitPerMinute?: unknown;
+  maxMessageLength?: unknown;
+  includePrefix?: unknown;
+}
+
+interface NotificationsConfigRaw {
+  reply?: ReplySettingsRaw;
+}
+
+function readReplySettings(raw: Record<string, unknown> | null): ReplySettingsRaw | undefined {
+  const notificationsUnknown = raw?.notifications;
+  if (!notificationsUnknown || typeof notificationsUnknown !== 'object') return undefined;
+  const notifications = notificationsUnknown as NotificationsConfigRaw;
+  return notifications.reply;
+}
+
 function parseIntegerInput(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.trunc(value);
@@ -658,7 +678,7 @@ export function getReplyConfig(): import("./types.js").ReplyConfig | null {
   if (!hasDiscordBot && !hasTelegram) return null;
 
   const raw = readRawConfig();
-  const replyRaw = (raw?.notifications as any)?.reply;
+  const replyRaw = readReplySettings(raw);
 
   const enabled = process.env.OMX_REPLY_ENABLED === "true" || replyRaw?.enabled === true;
   if (!enabled) return null;

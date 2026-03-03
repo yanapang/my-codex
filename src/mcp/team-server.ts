@@ -74,13 +74,18 @@ function persistJob(jobId: string, job: OmxTeamJob): void {
   try {
     if (!existsSync(OMX_JOBS_DIR)) mkdirSync(OMX_JOBS_DIR, { recursive: true });
     writeFileSync(join(OMX_JOBS_DIR, `${jobId}.json`), JSON.stringify(job), 'utf-8');
-  } catch { /* best-effort */ }
+  } catch (err) {
+    process.stderr.write(`[team-server] persist job failed: ${err}\n`);
+  }
 }
 
 function loadJobFromDisk(jobId: string): OmxTeamJob | undefined {
   try {
     return JSON.parse(readFileSync(join(OMX_JOBS_DIR, `${jobId}.json`), 'utf-8')) as OmxTeamJob;
-  } catch { return undefined; }
+  } catch (err) {
+    process.stderr.write(`[team-server] load job failed: ${err}\n`);
+    return undefined;
+  }
 }
 
 async function loadPaneIds(jobId: string): Promise<{ paneIds: string[]; leaderPaneId: string } | null> {
@@ -97,7 +102,10 @@ async function loadPaneIds(jobId: string): Promise<{ paneIds: string[]; leaderPa
       : '';
     return { paneIds, leaderPaneId };
   }
-  catch { return null; }
+  catch (err) {
+    process.stderr.write(`[team-server] load pane ids failed: ${err}\n`);
+    return null;
+  }
 }
 
 function normalizePaneId(value: string | null | undefined): string | null {

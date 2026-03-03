@@ -45,7 +45,8 @@ export function validateGatewayUrl(url: string): boolean {
       return true;
     }
     return false;
-  } catch {
+  } catch (err) {
+    process.stderr.write(`[openclaw-dispatcher] operation failed: ${err}\n`);
     return false;
   }
 }
@@ -198,7 +199,11 @@ export async function wakeCommandGateway(
           child.kill(signal);
           // 1s grace period then SIGKILL
           setTimeout(() => {
-            try { child?.kill("SIGKILL"); } catch { /* already dead */ }
+            try {
+              child?.kill("SIGKILL");
+            } catch (err) {
+              process.stderr.write(`[openclaw-dispatcher] operation failed: ${err}\n`);
+            }
           }, 1000);
         }
       };

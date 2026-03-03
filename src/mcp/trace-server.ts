@@ -70,7 +70,9 @@ async function* iterateLogEntries(logsDir: string): AsyncGenerator<TraceEntry> {
       if (!line.trim()) continue;
       try {
         yield JSON.parse(line) as TraceEntry;
-      } catch { /* skip malformed */ }
+      } catch (err) {
+        process.stderr.write(`[trace-server] operation failed: ${err}\n`);
+      }
     }
   }
 }
@@ -168,7 +170,9 @@ export async function readModeEvents(workingDirectory: string): Promise<ModeEven
           },
         });
       }
-    } catch { /* skip malformed */ }
+    } catch (err) {
+      process.stderr.write(`[trace-server] operation failed: ${err}\n`);
+    }
   }
 
   return events.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
@@ -190,7 +194,8 @@ async function readMetrics(omxDir: string): Promise<Metrics | null> {
   if (!existsSync(metricsPath)) return null;
   try {
     return JSON.parse(await readFile(metricsPath, 'utf-8'));
-  } catch {
+  } catch (err) {
+    process.stderr.write(`[trace-server] operation failed: ${err}\n`);
     return null;
   }
 }

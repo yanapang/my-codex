@@ -1013,13 +1013,13 @@ export async function readWorkerHeartbeat(
   workerName: string,
   cwd: string
 ): Promise<WorkerHeartbeat | null> {
+  const p = join(workerDir(teamName, workerName, cwd), 'heartbeat.json');
   try {
-    const p = join(workerDir(teamName, workerName, cwd), 'heartbeat.json');
-    if (!existsSync(p)) return null;
     const raw = await readFile(p, 'utf8');
     const parsed = JSON.parse(raw) as unknown;
     return isWorkerHeartbeat(parsed) ? parsed : null;
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     return null;
   }
 }
@@ -1038,18 +1038,16 @@ export async function updateWorkerHeartbeat(
 // Read worker status (returns {state:'unknown'} on missing/malformed)
 export async function readWorkerStatus(teamName: string, workerName: string, cwd: string): Promise<WorkerStatus> {
   const unknownStatus: WorkerStatus = { state: 'unknown', updated_at: '1970-01-01T00:00:00.000Z' };
+  const p = join(workerDir(teamName, workerName, cwd), 'status.json');
   try {
-    const p = join(workerDir(teamName, workerName, cwd), 'status.json');
-    if (!existsSync(p)) {
-      return unknownStatus;
-    }
     const raw = await readFile(p, 'utf8');
     const parsed = JSON.parse(raw) as unknown;
     if (!isWorkerStatus(parsed)) {
       return unknownStatus;
     }
     return parsed;
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return unknownStatus;
     return unknownStatus;
   }
 }
@@ -1769,7 +1767,6 @@ export async function readShutdownAck(
   minUpdatedAt?: string,
 ): Promise<ShutdownAck | null> {
   const ackPath = join(workerDir(teamName, workerName, cwd), 'shutdown-ack.json');
-  if (!existsSync(ackPath)) return null;
   try {
     const raw = await readFile(ackPath, 'utf-8');
     const parsed = JSON.parse(raw) as ShutdownAck;
@@ -1780,7 +1777,8 @@ export async function readShutdownAck(
       if (!Number.isFinite(minTs) || !Number.isFinite(ackTs) || ackTs < minTs) return null;
     }
     return parsed;
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     return null;
   }
 }
