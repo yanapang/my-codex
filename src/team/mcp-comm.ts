@@ -321,7 +321,9 @@ export async function waitForDispatchReceipt(
   options: { timeoutMs: number; pollMs?: number },
 ): Promise<TeamDispatchRequest | null> {
   const timeoutMs = Math.max(0, Math.floor(options.timeoutMs));
-  const pollMs = Math.max(25, Math.floor(options.pollMs ?? 50));
+  let currentPollMs = Math.max(25, Math.floor(options.pollMs ?? 50));
+  const maxPollMs = 500;
+  const backoffFactor = 1.5;
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() <= deadline) {
@@ -330,7 +332,9 @@ export async function waitForDispatchReceipt(
     if (request.status === 'notified' || request.status === 'delivered' || request.status === 'failed') {
       return request;
     }
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    const jitter = Math.random() * currentPollMs * 0.3;
+    await new Promise((resolve) => setTimeout(resolve, currentPollMs + jitter));
+    currentPollMs = Math.min(currentPollMs * backoffFactor, maxPollMs);
   }
 
   return await readDispatchRequest(teamName, requestId, cwd);
