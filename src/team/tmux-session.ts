@@ -993,6 +993,11 @@ export function paneLooksReady(captured: string): boolean {
   const hasClaudePromptLine = lines.some((line) => /^\s*❯\s*/u.test(line));
   if (hasCodexPromptLine || hasClaudePromptLine) return true;
 
+  // Custom per-issue prompts (e.g. "› IND-123 only..."). Capture output can
+  // occasionally omit the glyph, so accept both with/without leading prompt char.
+  const hasIssuePromptLine = lines.some((line) => /^\s*(?:[›>❯]\s*)?[A-Z][A-Z0-9]+-\d+\s+only(?:\s*(?:…|\.{3}))?\s*$/iu.test(line));
+  if (hasIssuePromptLine) return true;
+
   // Status-only markers (model name in status bar, token budget) are NOT
   // sufficient on their own — they can appear during bootstrap before the CLI
   // accepts input.  Require an actual prompt character (checked above).
@@ -1017,6 +1022,8 @@ export function paneHasActiveTask(captured: string): boolean {
     .filter((line) => line.length > 0);
 
   const tail = lines.slice(-40);
+  // Codex v5 status line can appear without "esc to interrupt"; treat as busy first.
+  if (tail.some((line) => /\b\d+\s+background terminal running\b/i.test(line))) return true;
   if (tail.some((line) => /esc to interrupt/i.test(line))) return true;
   if (tail.some((line) => /\bbackground terminal running\b/i.test(line))) return true;
   // Typical Codex activity line: "• Doing X (3m 12s • esc to interrupt)"

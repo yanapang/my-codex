@@ -21,6 +21,34 @@ async function writeJsonAtomic(path, value) {
 
 // Keep stale-timeout semantics aligned with src/team/state.ts LOCK_STALE_MS.
 const DISPATCH_LOCK_STALE_MS = 5 * 60 * 1000;
+const DEFAULT_ISSUE_DISPATCH_COOLDOWN_MS = 15 * 60 * 1000;
+const ISSUE_DISPATCH_COOLDOWN_ENV = 'OMX_TEAM_DISPATCH_ISSUE_COOLDOWN_MS';
+
+function resolveIssueDispatchCooldownMs(env = process.env) {
+  const raw = safeString(env[ISSUE_DISPATCH_COOLDOWN_ENV]).trim();
+  if (raw === '') return DEFAULT_ISSUE_DISPATCH_COOLDOWN_MS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_ISSUE_DISPATCH_COOLDOWN_MS;
+  return parsed;
+}
+
+function extractIssueKey(triggerMessage) {
+  const match = safeString(triggerMessage).match(/\b([A-Z][A-Z0-9]+-\d+)\b/i);
+  return match?.[1]?.toUpperCase() || null;
+}
+
+function issueCooldownStatePath(teamDirPath) {
+  return join(teamDirPath, 'dispatch', 'issue-cooldown.json');
+}
+
+async function readIssueCooldownState(teamDirPath) {
+  const fallback = { by_issue: {} };
+  const parsed = await readJson(issueCooldownStatePath(teamDirPath), fallback);
+  if (!parsed || typeof parsed !== 'object' || typeof parsed.by_issue !== 'object' || parsed.by_issue === null) {
+    return fallback;
+  }
+  return parsed;
+}
 
 async function withDispatchLock(teamDirPath, fn) {
   const lockDir = join(teamDirPath, 'dispatch', '.lock');
@@ -163,6 +191,7 @@ function paneHasActiveTask(captured) {
     .map((line) => line.replace(/\r/g, '').trim())
     .filter((line) => line.length > 0);
   const tail = lines.slice(-40);
+  if (tail.some((line) => /\b\d+\s+background terminal running\b/i.test(line))) return true;
   if (tail.some((line) => /esc to interrupt/i.test(line))) return true;
   if (tail.some((line) => /\bbackground terminal running\b/i.test(line))) return true;
   if (tail.some((line) => /^•\s.+\(.+•\s*esc to interrupt\)$/i.test(line))) return true;
@@ -302,6 +331,7 @@ export async function drainPendingTeamDispatch({
   let processed = 0;
   let skipped = 0;
   let failed = 0;
+  const issueCooldownMs = resolveIssueDispatchCooldownMs();
 
   for (const teamName of teams) {
     if (processed >= maxPerTick) break;
@@ -315,6 +345,9 @@ export async function drainPendingTeamDispatch({
     await withDispatchLock(teamDirPath, async () => {
       const requests = await readJson(requestsPath, []);
       if (!Array.isArray(requests)) return;
+      const issueCooldownState = await readIssueCooldownState(teamDirPath);
+      const issueCooldownByIssue = issueCooldownState.by_issue || {};
+      const nowMs = Date.now();
 
       let mutated = false;
       for (const request of requests) {
@@ -325,7 +358,20 @@ export async function drainPendingTeamDispatch({
           continue;
         }
 
+        const issueKey = extractIssueKey(request.trigger_message);
+        if (issueCooldownMs > 0 && issueKey) {
+          const lastInjectedMs = Number(issueCooldownByIssue[issueKey]);
+          if (Number.isFinite(lastInjectedMs) && lastInjectedMs > 0 && nowMs - lastInjectedMs < issueCooldownMs) {
+            skipped += 1;
+            continue;
+          }
+        }
+
         const result = await injector(request, config, resolve(cwd));
+        if (issueKey && issueCooldownMs > 0) {
+          issueCooldownByIssue[issueKey] = Date.now();
+          mutated = true;
+        }
         const nowIso = new Date().toISOString();
         request.attempt_count = Number.isFinite(request.attempt_count) ? Math.max(0, request.attempt_count + 1) : 1;
         request.updated_at = nowIso;
@@ -401,6 +447,8 @@ export async function drainPendingTeamDispatch({
       }
 
       if (mutated) {
+        issueCooldownState.by_issue = issueCooldownByIssue;
+        await writeJsonAtomic(issueCooldownStatePath(teamDirPath), issueCooldownState);
         await writeJsonAtomic(requestsPath, requests);
       }
     });

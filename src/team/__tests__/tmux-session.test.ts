@@ -285,6 +285,14 @@ describe('shouldAttemptAdaptiveRetry', () => {
     );
   });
 
+  it('returns false when latest capture shows background terminal running status', () => {
+    const activeCapture = '2 background terminal running\n❯ hello';
+    assert.equal(
+      shouldAttemptAdaptiveRetry('auto', true, true, activeCapture, 'hello'),
+      false,
+    );
+  });
+
   it('does not treat non-ellipsis Claude bullet text as active generation', () => {
     const readyCapture = '· Caramelizing\n❯ hello';
     assert.equal(
@@ -356,6 +364,14 @@ describe('paneLooksReady gate: status-only is not ready (#391)', () => {
     assert.equal(
       shouldAttemptAdaptiveRetry('auto', true, true, loadingCapture, 'hello'),
       false,
+    );
+  });
+
+  it('shouldAttemptAdaptiveRetry treats issue-only prompt as ready even without glyph', () => {
+    const issuePromptCapture = 'IND-123 only...';
+    assert.equal(
+      shouldAttemptAdaptiveRetry('auto', true, true, issuePromptCapture, 'IND-123 only...'),
+      true,
     );
   });
 });
