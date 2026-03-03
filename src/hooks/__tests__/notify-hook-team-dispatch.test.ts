@@ -401,6 +401,96 @@ describe('notify-hook team dispatch consumer', () => {
     }
   });
 
+  it('applies per-issue cooldown to avoid repeated reinjection in one drain tick', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
+    const previousIssueCooldown = process.env.OMX_TEAM_DISPATCH_ISSUE_COOLDOWN_MS;
+    try {
+      process.env.OMX_TEAM_DISPATCH_ISSUE_COOLDOWN_MS = '900000';
+      await initTeamState('alpha', 'task', 'executor', 2, cwd);
+      const first = await enqueueDispatchRequest('alpha', {
+        kind: 'inbox',
+        to_worker: 'worker-1',
+        worker_index: 1,
+        trigger_message: '› IND-123 only...',
+      }, cwd);
+      const second = await enqueueDispatchRequest('alpha', {
+        kind: 'inbox',
+        to_worker: 'worker-2',
+        worker_index: 2,
+        trigger_message: 'IND-123 only...',
+      }, cwd);
+
+      const modulePath = new URL('../../../scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
+      const mod = await import(pathToFileURL(modulePath).href);
+      const result = await mod.drainPendingTeamDispatch({
+        cwd,
+        maxPerTick: 5,
+        injector: async () => ({ ok: true, reason: 'injected_for_test' }),
+      });
+      assert.equal(result.processed, 1);
+      assert.ok(result.skipped >= 1);
+
+      const firstReq = await readDispatchRequest('alpha', first.request.request_id, cwd);
+      const secondReq = await readDispatchRequest('alpha', second.request.request_id, cwd);
+      assert.equal(firstReq?.status, 'notified');
+      assert.equal(secondReq?.status, 'pending');
+      assert.equal(secondReq?.attempt_count, 0);
+    } finally {
+      if (typeof previousIssueCooldown === 'string') process.env.OMX_TEAM_DISPATCH_ISSUE_COOLDOWN_MS = previousIssueCooldown;
+      else delete process.env.OMX_TEAM_DISPATCH_ISSUE_COOLDOWN_MS;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('skips repeated same-issue reinjection during per-issue cooldown window', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
+    const previousCooldown = process.env.OMX_TEAM_DISPATCH_ISSUE_COOLDOWN_MS;
+    let injectCount = 0;
+    try {
+      process.env.OMX_TEAM_DISPATCH_ISSUE_COOLDOWN_MS = '900000';
+      await initTeamState('alpha', 'task', 'executor', 1, cwd);
+      const first = await enqueueDispatchRequest('alpha', {
+        kind: 'inbox',
+        to_worker: 'worker-1',
+        worker_index: 1,
+        trigger_message: 'IND-123 only...',
+      }, cwd);
+      const second = await enqueueDispatchRequest('alpha', {
+        kind: 'inbox',
+        to_worker: 'worker-1',
+        worker_index: 1,
+        trigger_message: 'IND-123 only: retry',
+      }, cwd);
+
+      const modulePath = new URL('../../../scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
+      const mod = await import(pathToFileURL(modulePath).href);
+      const injector = async () => {
+        injectCount += 1;
+        return { ok: true, reason: 'tmux_send_keys_unconfirmed' };
+      };
+
+      const firstTick = await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5, injector });
+      const secondTick = await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5, injector });
+
+      assert.equal(firstTick.processed, 0);
+      assert.ok(firstTick.skipped >= 1);
+      assert.equal(secondTick.processed, 0);
+      assert.ok(secondTick.skipped >= 2);
+      assert.equal(injectCount, 1, 'same issue should not be reinjected while cooldown is active');
+
+      const firstRequest = await readDispatchRequest('alpha', first.request.request_id, cwd);
+      const secondRequest = await readDispatchRequest('alpha', second.request.request_id, cwd);
+      assert.equal(firstRequest?.status, 'pending');
+      assert.equal(firstRequest?.attempt_count, 1);
+      assert.equal(secondRequest?.status, 'pending');
+      assert.equal(secondRequest?.attempt_count, 0, 'cooldown-blocked request should remain untouched');
+    } finally {
+      if (typeof previousCooldown === 'string') process.env.OMX_TEAM_DISPATCH_ISSUE_COOLDOWN_MS = previousCooldown;
+      else delete process.env.OMX_TEAM_DISPATCH_ISSUE_COOLDOWN_MS;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('skips non-hook transport preferences in hook consumer', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
     try {
