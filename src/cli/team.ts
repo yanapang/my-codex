@@ -4,6 +4,12 @@ import { DEFAULT_MAX_WORKERS } from '../team/state.js';
 import { sanitizeTeamName } from '../team/tmux-session.js';
 import { parseWorktreeMode, type WorktreeMode } from '../team/worktree.js';
 import { routeTaskToRole } from '../team/role-router.js';
+import {
+  TEAM_API_OPERATIONS,
+  resolveTeamApiOperation,
+  executeTeamApiOperation,
+  type TeamApiOperation,
+} from '../team/api-interop.js';
 
 interface TeamCliOptions {
   verbose?: boolean;
@@ -23,6 +29,56 @@ const MIN_WORKER_COUNT = 1;
 export interface ParsedTeamStartArgs {
   parsed: ParsedTeamArgs;
   worktreeMode: WorktreeMode;
+}
+
+function parseTeamApiArgs(args: string[]): {
+  operation: TeamApiOperation;
+  input: Record<string, unknown>;
+  json: boolean;
+} {
+  const operation = resolveTeamApiOperation(args[0] || '');
+  if (!operation) {
+    throw new Error(`Usage: omx team api <operation> [--input <json>] [--json]\nSupported operations: ${TEAM_API_OPERATIONS.join(', ')}`);
+  }
+  let input: Record<string, unknown> = {};
+  let json = false;
+  for (let i = 1; i < args.length; i += 1) {
+    const token = args[i];
+    if (token === '--json') {
+      json = true;
+      continue;
+    }
+    if (token === '--input') {
+      const next = args[i + 1];
+      if (!next) throw new Error('Missing value after --input');
+      try {
+        const parsed = JSON.parse(next) as unknown;
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          throw new Error('input must be a JSON object');
+        }
+        input = parsed as Record<string, unknown>;
+      } catch (error) {
+        throw new Error(`Invalid --input JSON: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      i += 1;
+      continue;
+    }
+    if (token.startsWith('--input=')) {
+      const raw = token.slice('--input='.length);
+      try {
+        const parsed = JSON.parse(raw) as unknown;
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          throw new Error('input must be a JSON object');
+        }
+        input = parsed as Record<string, unknown>;
+      } catch (error) {
+        throw new Error(`Invalid --input JSON: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      continue;
+    }
+    throw new Error(`Unknown argument for "omx team api": ${token}`);
+  }
+  return { operation, input, json };
 }
 
 function slugifyTask(task: string): string {
@@ -237,6 +293,52 @@ export async function teamCommand(args: string[], options: TeamCliOptions = {}):
   const teamArgs = parsedWorktree.remainingArgs;
   const [subcommandRaw] = teamArgs;
   const subcommand = (subcommandRaw || '').toLowerCase();
+
+  if (subcommand === 'api') {
+    const wantsJson = teamArgs.includes('--json');
+    const jsonBase = {
+      schema_version: '1.0',
+      timestamp: new Date().toISOString(),
+    };
+    let parsedApi: ReturnType<typeof parseTeamApiArgs>;
+    try {
+      parsedApi = parseTeamApiArgs(teamArgs.slice(1));
+    } catch (error) {
+      if (wantsJson) {
+        console.log(JSON.stringify({
+          ...jsonBase,
+          ok: false,
+          command: 'omx team api',
+          operation: 'unknown',
+          error: {
+            code: 'invalid_input',
+            message: error instanceof Error ? error.message : String(error),
+          },
+        }));
+        process.exitCode = 1;
+        return;
+      }
+      throw error;
+    }
+    const envelope = await executeTeamApiOperation(parsedApi.operation, parsedApi.input, cwd);
+    if (parsedApi.json) {
+      console.log(JSON.stringify({
+        ...jsonBase,
+        command: `omx team api ${parsedApi.operation}`,
+        ...envelope,
+      }));
+      if (!envelope.ok) process.exitCode = 1;
+      return;
+    }
+    if (envelope.ok) {
+      console.log(`ok operation=${envelope.operation}`);
+      console.log(JSON.stringify(envelope.data, null, 2));
+      return;
+    }
+    console.error(`error operation=${envelope.operation} code=${envelope.error.code}: ${envelope.error.message}`);
+    process.exitCode = 1;
+    return;
+  }
 
   if (subcommand === 'status') {
     const name = teamArgs[1];

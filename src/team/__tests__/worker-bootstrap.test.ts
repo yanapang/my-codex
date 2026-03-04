@@ -21,9 +21,9 @@ describe('worker bootstrap', () => {
   it('worker skill lifecycle instructions are claim-safe (issue #448)', async () => {
     const workerSkill = await readFile(join(process.cwd(), 'skills', 'worker', 'SKILL.md'), 'utf8');
 
-    assert.match(workerSkill, /team_claim_task/);
-    assert.match(workerSkill, /team_transition_task_status/);
-    assert.match(workerSkill, /team_release_task_claim/);
+    assert.match(workerSkill, /omx team api claim-task/);
+    assert.match(workerSkill, /omx team api transition-task-status/);
+    assert.match(workerSkill, /omx team api release-task-claim/);
     assert.doesNotMatch(workerSkill, /Write completion to the task file/i);
     assert.doesNotMatch(workerSkill, /`?\{"status":"completed","result":"\.\.\."\}`?/);
     assert.doesNotMatch(workerSkill, /`?\{"status":"failed","error":"\.\.\."\}`?/);
@@ -43,9 +43,9 @@ describe('worker bootstrap', () => {
     assert.match(overlay, /<team_state_root>\/team\/my-team\/tasks/);
     assert.match(overlay, /tasks\/task-<id>\.json/);
     assert.match(overlay, /task_id: "<id>"/);
-    assert.match(overlay, /team_claim_task/);
-    assert.match(overlay, /team_transition_task_status/);
-    assert.match(overlay, /team_release_task_claim/);
+    assert.match(overlay, /omx team api claim-task/);
+    assert.match(overlay, /omx team api transition-task-status/);
+    assert.match(overlay, /omx team api release-task-claim/);
     assert.doesNotMatch(overlay, /On completion: write \{"status": "completed"/);
     assert.match(overlay, /Do NOT spawn sub-agents/);
     assert.match(overlay, /do not pass workingDirectory unless the lead explicitly tells you to/);
@@ -198,9 +198,9 @@ describe('worker bootstrap', () => {
     assert.match(inbox, /\*\*Task 2\*\*: Second task/);
     assert.match(inbox, /Resolve canonical team state root/);
     assert.match(inbox, /<team_state_root>\/team\/team-inbox\/tasks\/task-<id>\.json/);
-    assert.match(inbox, /team_claim_task/);
-    assert.match(inbox, /team_transition_task_status/);
-    assert.match(inbox, /team_release_task_claim/);
+    assert.match(inbox, /omx team api claim-task/);
+    assert.match(inbox, /omx team api transition-task-status/);
+    assert.match(inbox, /omx team api release-task-claim/);
     assert.doesNotMatch(inbox, /Write `\{"status": "completed", "result": "brief summary"\}` to the task file/);
     assert.match(inbox, /Verification Requirements/);
     assert.match(inbox, /Fix-Verify Loop/);
@@ -271,9 +271,9 @@ describe('worker bootstrap', () => {
     assert.match(inbox, /Implement parser update/);
     assert.match(inbox, /team_state_root/);
     assert.match(inbox, /team\/team-followup\/tasks\/task-42\.json/);
-    assert.match(inbox, /team_claim_task/);
-    assert.match(inbox, /team_transition_task_status/);
-    assert.match(inbox, /team_release_task_claim/);
+    assert.match(inbox, /omx team api claim-task/);
+    assert.match(inbox, /omx team api transition-task-status/);
+    assert.match(inbox, /omx team api release-task-claim/);
     assert.doesNotMatch(inbox, /Write `\{"status": "completed", "result": "brief summary"\}` when done/);
     assert.match(inbox, /Verification Requirements/);
     assert.match(inbox, /PASS\/FAIL/);
