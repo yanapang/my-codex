@@ -58,6 +58,23 @@ The consensus workflow:
 
 Follow the Plan skill's full documentation for consensus mode details.
 
+## Pre-context Intake
+
+Before consensus planning or execution handoff, ensure a grounded context snapshot exists:
+
+1. Derive a task slug from the request.
+2. Reuse the latest relevant snapshot in `.omx/context/{slug}-*.md` when available.
+3. If none exists, create `.omx/context/{slug}-{timestamp}.md` (UTC `YYYYMMDDTHHMMSSZ`) with:
+   - task statement
+   - desired outcome
+   - known facts/evidence
+   - constraints
+   - unknowns/open questions
+   - likely codebase touchpoints
+4. If ambiguity remains high, run `explore` first for brownfield facts, then run `$deep-interview --quick <task>` before continuing.
+
+Do not hand off to execution modes until this intake is complete; if urgency forces progress, explicitly document the risk tradeoffs.
+
 ## Pre-Execution Gate
 
 ### Why the Gate Exists

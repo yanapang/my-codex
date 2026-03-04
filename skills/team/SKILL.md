@@ -70,6 +70,23 @@ tmux list-panes -F '#{pane_id}\t#{pane_start_command}' | rg 'hud --watch' || tru
 
 If duplicates exist, remove extras before `omx team` to prevent HUD ending up in worker stack.
 
+## Pre-context Intake Gate
+
+Before launching `omx team`, require a grounded context snapshot:
+
+1. Derive a task slug from the request.
+2. Reuse the latest relevant snapshot in `.omx/context/{slug}-*.md` when available.
+3. If none exists, create `.omx/context/{slug}-{timestamp}.md` (UTC `YYYYMMDDTHHMMSSZ`) with:
+   - task statement
+   - desired outcome
+   - known facts/evidence
+   - constraints
+   - unknowns/open questions
+   - likely codebase touchpoints
+4. If ambiguity remains high, run `explore` first for brownfield facts, then run `$deep-interview --quick <task>` before team launch.
+
+Do not start worker panes until this gate is satisfied; if forced to proceed quickly, state explicit scope/risk limitations in the launch report.
+
 ## Current Runtime Behavior (As Implemented)
 
 `omx team` currently performs:
