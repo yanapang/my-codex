@@ -72,12 +72,32 @@ describe('parseAskArgs', () => {
     });
   });
 
+  it('parses --agent-prompt with positional task text', () => {
+    assert.deepEqual(parseAskArgs(['claude', '--agent-prompt', 'executor', 'review', 'this']), {
+      provider: 'claude',
+      prompt: 'review this',
+      agentPromptRole: 'executor',
+    });
+  });
+
+  it('parses --agent-prompt=<role> with --prompt task text', () => {
+    assert.deepEqual(parseAskArgs(['gemini', '--agent-prompt=planner', '--prompt', 'brainstorm', 'ideas']), {
+      provider: 'gemini',
+      prompt: 'brainstorm ideas',
+      agentPromptRole: 'planner',
+    });
+  });
+
   it('throws for invalid provider', () => {
     assert.throws(() => parseAskArgs(['openai', 'hello']), /Invalid provider/);
   });
 
   it('throws when prompt is missing', () => {
     assert.throws(() => parseAskArgs(['claude']), /Missing prompt text/);
+  });
+
+  it('throws when --agent-prompt role is missing', () => {
+    assert.throws(() => parseAskArgs(['claude', '--agent-prompt', '--prompt', 'hello']), /Missing role after --agent-prompt/);
   });
 });
 
@@ -193,6 +213,76 @@ describe('omx ask', () => {
       const geminiArtifactPath = geminiRes.stdout.trim();
       const geminiArtifact = await readFile(geminiArtifactPath, 'utf-8');
       assert.match(geminiArtifact, /GEMINI_PROMPT_OK:gemini-long-flag/);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('injects --agent-prompt content into final prompt while keeping Original task raw', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-ask-agent-prompt-'));
+    try {
+      const fakeBin = join(wd, 'bin');
+      const codexHome = join(wd, '.codex-home');
+      const promptsDir = join(codexHome, 'prompts');
+      await mkdir(fakeBin, { recursive: true });
+      await mkdir(promptsDir, { recursive: true });
+
+      await writeFile(
+        join(promptsDir, 'executor.md'),
+        'You are Executor.\nFollow strict verification rules.',
+      );
+
+      await writeFile(
+        join(fakeBin, 'claude'),
+        '#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"fake-claude\"; exit 0; fi\nif [ \"$1\" = \"-p\" ]; then echo \"CLAUDE_FINAL_PROMPT:$2\"; exit 0; fi\necho \"unexpected\" 1>&2\nexit 3\n',
+      );
+      await chmod(join(fakeBin, 'claude'), 0o755);
+
+      const res = runOmx(
+        wd,
+        ['ask', 'claude', '--agent-prompt', 'executor', 'ship', 'feature'],
+        { PATH: `${fakeBin}:${process.env.PATH || ''}`, CODEX_HOME: codexHome },
+      );
+      if (shouldSkipForSpawnPermissions(res.error)) return;
+
+      assert.equal(res.status, 0, res.stderr || res.stdout);
+      const artifactPath = res.stdout.trim();
+      const artifact = await readFile(artifactPath, 'utf-8');
+      assert.match(artifact, /## Original task\n\nship feature/);
+      assert.match(artifact, /## Final prompt[\s\S]*You are Executor\./);
+      assert.match(artifact, /## Final prompt[\s\S]*Follow strict verification rules\./);
+      assert.match(artifact, /## Final prompt[\s\S]*ship feature/);
+      assert.match(artifact, /CLAUDE_FINAL_PROMPT:/);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('fails clearly when --agent-prompt role is missing from prompts directory', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-ask-agent-prompt-missing-'));
+    try {
+      const fakeBin = join(wd, 'bin');
+      const codexHome = join(wd, '.codex-home');
+      const promptsDir = join(codexHome, 'prompts');
+      await mkdir(fakeBin, { recursive: true });
+      await mkdir(promptsDir, { recursive: true });
+
+      await writeFile(
+        join(fakeBin, 'gemini'),
+        '#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"fake-gemini\"; exit 0; fi\nif [ \"$1\" = \"-p\" ]; then echo \"should-not-run\"; exit 0; fi\necho \"unexpected\" 1>&2\nexit 4\n',
+      );
+      await chmod(join(fakeBin, 'gemini'), 0o755);
+
+      const res = runOmx(
+        wd,
+        ['ask', 'gemini', '--agent-prompt=planner', '--prompt', 'do', 'planning'],
+        { PATH: `${fakeBin}:${process.env.PATH || ''}`, CODEX_HOME: codexHome },
+      );
+      if (shouldSkipForSpawnPermissions(res.error)) return;
+
+      assert.equal(res.status, 1, res.stderr || res.stdout);
+      assert.match(res.stderr, /--agent-prompt role "planner" not found/i);
+      assert.doesNotMatch(res.stdout, /should-not-run/);
     } finally {
       await rm(wd, { recursive: true, force: true });
     }

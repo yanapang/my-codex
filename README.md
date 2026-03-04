@@ -148,6 +148,8 @@ Ask command examples:
 ```bash
 omx ask claude "review this diff"
 omx ask gemini "brainstorm alternatives"
+omx ask claude --agent-prompt executor "implement feature X with tests"
+omx ask gemini --agent-prompt=planner --prompt "draft a rollout plan"
 # underlying provider flags from CLI help:
 # claude -p|--print "<prompt>"
 # gemini -p|--prompt "<prompt>"

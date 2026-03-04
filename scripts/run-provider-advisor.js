@@ -8,6 +8,7 @@ const PROVIDER_BINARIES = {
   claude: 'claude',
   gemini: 'gemini',
 };
+const ASK_ORIGINAL_TASK_ENV = 'OMX_ASK_ORIGINAL_TASK';
 
 function usage() {
   console.error('Usage: omx ask <claude|gemini> "<prompt>"');
@@ -155,7 +156,7 @@ async function main() {
 
   const artifactPath = await writeArtifact({
     provider,
-    originalTask: prompt,
+    originalTask: process.env[ASK_ORIGINAL_TASK_ENV] ?? prompt,
     finalPrompt: prompt,
     rawOutput,
     exitCode,
