@@ -203,6 +203,13 @@ describe('resolveTeamWorkerLaunchArgsEnv (spark)', () => {
 });
 
 describe('resolveCliInvocation', () => {
+  it('resolves ask to ask command', () => {
+    assert.deepEqual(resolveCliInvocation(['ask', 'claude', 'hello']), {
+      command: 'ask',
+      launchArgs: [],
+    });
+  });
+
   it('resolves hooks to hooks command', () => {
     assert.deepEqual(resolveCliInvocation(['hooks']), {
       command: 'hooks',

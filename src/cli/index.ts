@@ -16,6 +16,7 @@ import { hooksCommand } from './hooks.js';
 import { hudCommand } from '../hud/index.js';
 import { teamCommand } from './team.js';
 import { ralphCommand } from './ralph.js';
+import { askCommand } from './ask.js';
 import {
   MADMAX_FLAG,
   CODEX_BYPASS_FLAG,
@@ -81,6 +82,7 @@ Usage:
   omx uninstall Remove OMX configuration and clean up installed artifacts
   omx doctor    Check installation health
   omx doctor --team  Check team/swarm runtime health diagnostics
+  omx ask       Ask local provider CLI (claude|gemini) and write artifact output
   omx team      Spawn parallel worker panes in tmux and bootstrap inbox/task state
   omx ralph     Launch Codex with ralph persistence mode active
   omx version   Show version information
@@ -131,7 +133,7 @@ const ALLOWED_SHELLS = new Set([
   '/usr/local/bin/bash', '/usr/local/bin/zsh', '/usr/local/bin/fish',
 ]);
 
-type CliCommand = 'launch' | 'setup' | 'uninstall' | 'doctor' | 'team' | 'version' | 'tmux-hook' | 'hooks' | 'hud' | 'status' | 'cancel' | 'help' | 'reasoning' | string;
+type CliCommand = 'launch' | 'setup' | 'uninstall' | 'doctor' | 'ask' | 'team' | 'version' | 'tmux-hook' | 'hooks' | 'hud' | 'status' | 'cancel' | 'help' | 'reasoning' | string;
 
 export interface ResolvedCliInvocation {
   command: CliCommand;
@@ -354,7 +356,7 @@ export function buildHudPaneCleanupTargets(existingPaneIds: string[], createdPan
 
 export async function main(args: string[]): Promise<void> {
   const knownCommands = new Set([
-    'launch', 'setup', 'uninstall', 'doctor', 'team', 'ralph', 'version', 'tmux-hook', 'hooks', 'hud', 'status', 'cancel', 'help', '--help', '-h',
+    'launch', 'setup', 'uninstall', 'doctor', 'ask', 'team', 'ralph', 'version', 'tmux-hook', 'hooks', 'hud', 'status', 'cancel', 'help', '--help', '-h',
   ]);
   const firstArg = args[0];
   const { command, launchArgs } = resolveCliInvocation(args);
@@ -396,6 +398,9 @@ export async function main(args: string[]): Promise<void> {
         break;
       case 'doctor':
         await doctor(options);
+        break;
+      case 'ask':
+        await askCommand(args.slice(1));
         break;
       case 'team':
         await teamCommand(args.slice(1), options);

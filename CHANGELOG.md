@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- New canonical provider advisor command: `omx ask <claude|gemini> "<prompt>"`.
+
+### Changed
+- `ask-claude` and `ask-gemini` skill guidance now routes to canonical `omx ask ...` usage.
+- Legacy wrapper/npm script entrypoints remain available as transitional compatibility paths with migration hints.
+
 ## [0.7.6] - 2026-03-02
 
 ### Changed
