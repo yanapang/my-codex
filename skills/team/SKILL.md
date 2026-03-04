@@ -5,7 +5,7 @@ description: N coordinated agents on shared task list using tmux-based orchestra
 
 # Team Skill
 
-`$team` is the tmux-based parallel execution mode for OMX. It starts real worker Codex and/or Claude CLI sessions in split panes and coordinates them through `.omx/state/team/...` files plus MCP team tools.
+`$team` is the tmux-based parallel execution mode for OMX. It starts real worker Codex and/or Claude CLI sessions in split panes and coordinates them through `.omx/state/team/...` files plus CLI team interop (`omx team api ...`) and state files.
 
 This skill is operationally sensitive. Treat it as an operator workflow, not a generic prompt pattern.
 
@@ -189,6 +189,31 @@ Semantics:
 - `.omx/state/team/<team>/workers/worker-<n>/status.json`
 - `.omx/state/team-leader-nudge.json`
 
+
+## Team Mutation Interop (CLI-first)
+
+Use `omx team api` for machine-readable mutation/reads instead of legacy `team_*` MCP tools.
+
+```bash
+omx team api <operation> --input '{"team_name":"my-team",...}' --json
+```
+
+Examples:
+
+```bash
+omx team api send-message --input '{"team_name":"my-team","from_worker":"worker-1","to_worker":"leader-fixed","body":"ACK"}' --json
+omx team api claim-task --input '{"team_name":"my-team","task_id":"1","worker":"worker-1"}' --json
+omx team api transition-task-status --input '{"team_name":"my-team","task_id":"1","from":"in_progress","to":"completed","claim_token":"<token>"}' --json
+```
+
+`--json` responses include stable metadata for automation:
+- `schema_version`
+- `timestamp`
+- `command`
+- `ok`
+- `operation`
+- `data` or `error`
+
 ## Team + Worker Protocol Notes
 
 Leader-to-worker:
@@ -198,8 +223,8 @@ Leader-to-worker:
 
 Worker-to-leader:
 
-- Send ACK to `leader-fixed` mailbox via `team_send_message`
-- Claim task via state API, execute, update task + status
+- Send ACK to `leader-fixed` mailbox via `omx team api send-message --json`
+- Claim/transition/release task lifecycle via `omx team api <operation> --json`
 
 Task ID rule (critical):
 
@@ -277,10 +302,10 @@ Checks:
 
 1. Worker pane capture shows inbox processing
 2. `.omx/state/team/<team>/mailbox/leader-fixed.json` exists
-3. Worker skill loaded and `team_send_message` called
+3. Worker skill loaded and `omx team api send-message --json` called
 4. Task-id mismatch not blocking worker flow
 
-### Worker logs `team_send_message ENOENT` / `team_update_task ENOENT`
+### Worker logs `omx team api ... ENOENT` (or legacy `team_send_message ENOENT` / `team_update_task ENOENT`)
 
 Meaning:
 - Team state path no longer exists while worker is still running.
