@@ -256,7 +256,8 @@ function isPidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
+  } catch (err) {
+    process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
     return false;
   }
 }
@@ -286,8 +287,9 @@ async function teardownPromptWorker(
   context: 'startup_rollback' | 'shutdown',
 ): Promise<PromptWorkerTeardownResult> {
   const handle = getPromptWorkerHandle(teamName, workerName);
-  const pid = Number.isFinite(handle?.pid)
-    ? (handle!.pid as number)
+  const handlePid = handle?.pid;
+  const pid = (typeof handlePid === 'number' && Number.isFinite(handlePid))
+    ? handlePid
     : (Number.isFinite(fallbackPid) && (fallbackPid ?? 0) > 0 ? (fallbackPid as number) : null);
 
   if (pid === null) {
@@ -301,7 +303,8 @@ async function teardownPromptWorker(
     } else {
       process.kill(pid, 'SIGTERM');
     }
-  } catch {
+  } catch (err) {
+    process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
     // Best effort.
   }
 
@@ -327,7 +330,8 @@ async function teardownPromptWorker(
     } else {
       process.kill(pid, 'SIGKILL');
     }
-  } catch {
+  } catch (err) {
+    process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
     // Best effort.
   }
 
@@ -361,7 +365,8 @@ function isPromptWorkerAlive(config: TeamConfig, worker: WorkerInfo): boolean {
   try {
     process.kill(worker.pid as number, 0);
     return true;
-  } catch {
+  } catch (err) {
+    process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
     return false;
   }
 }
@@ -809,10 +814,18 @@ export async function startTeam(
       // In split-pane topology, we must not kill the entire tmux session; kill only created panes.
       if (sessionName.includes(':')) {
         for (const paneId of createdWorkerPaneIds) {
-          try { await killWorkerByPaneIdAsync(paneId, createdLeaderPaneId); } catch { /* ignore */ }
+          try {
+            await killWorkerByPaneIdAsync(paneId, createdLeaderPaneId);
+          } catch (err) {
+            process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+          }
         }
         if (config?.hud_pane_id) {
-          try { await killWorkerByPaneIdAsync(config.hud_pane_id, createdLeaderPaneId); } catch { /* ignore */ }
+          try {
+            await killWorkerByPaneIdAsync(config.hud_pane_id, createdLeaderPaneId);
+          } catch (err) {
+            process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+          }
         }
       } else {
         try {
@@ -1014,7 +1027,9 @@ export async function monitorTeam(teamName: string, cwd: string): Promise<TeamSn
         }
       }
     }
-  } catch { /* best-effort */ }
+  } catch (err) {
+    process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+  }
 
   const updatedAt = new Date().toISOString();
   const totalMs = performance.now() - monitorStartMs;
@@ -1145,7 +1160,8 @@ export async function assignTask(
         `# Assignment Cancelled\n\nTask ${taskId} was not dispatched due to ${reason}.\nDo not execute this task from prior inbox content.`,
         cwd,
       );
-    } catch {
+    } catch (err) {
+      process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
       // best effort
     }
 
@@ -1181,7 +1197,11 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
   const config = await readTeamConfig(sanitized, cwd);
   if (!config) {
     // No config -- just try to kill tmux session and clean up
-    try { destroyTeamSession(`omx-team-${sanitized}`); } catch { /* ignore */ }
+    try {
+      destroyTeamSession(`omx-team-${sanitized}`);
+    } catch (err) {
+      process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+    }
     await cleanupTeamState(sanitized, cwd);
     restoreTeamModelInstructionsFile(sanitized);
     return;
@@ -1263,7 +1283,9 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
         dispatchPolicy,
         inboxCorrelationKey: `shutdown:${w.name}`,
       });
-    } catch { /* worker might already be dead */ }
+    } catch (err) {
+      process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+    }
   }
 
   // 2. Wait up to 15s for workers to exit and collect acks
@@ -1344,7 +1366,11 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
 
     // 4. Destroy tmux session
     if (!sessionName.includes(':')) {
-      try { destroyTeamSession(sessionName); } catch { /* ignore */ }
+      try {
+        destroyTeamSession(sessionName);
+      } catch (err) {
+        process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+      }
     }
   } else {
     const promptTeardownFailures: string[] = [];
@@ -1366,7 +1392,11 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
   }
 
   // 5. Remove team-scoped worker instructions file (no mutation of project AGENTS.md)
-  try { await removeTeamWorkerInstructionsFile(sanitized, cwd); } catch { /* ignore */ }
+  try {
+    await removeTeamWorkerInstructionsFile(sanitized, cwd);
+  } catch (err) {
+    process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+  }
   restoreTeamModelInstructionsFile(sanitized);
 
   // 6. Ralph stricter completion logging
@@ -1408,7 +1438,8 @@ export async function resumeTeam(teamName: string, cwd: string): Promise<TeamRun
         try {
           process.kill(worker.pid as number, 0);
           return true;
-        } catch {
+        } catch (err) {
+          process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
           return false;
         }
       })
@@ -1483,7 +1514,8 @@ async function resolveLeaderSessionId(cwd: string): Promise<string> {
     const raw = await readFile(p, 'utf-8');
     const parsed = JSON.parse(raw) as { session_id?: unknown };
     if (typeof parsed.session_id === 'string' && parsed.session_id.trim() !== '') return parsed.session_id.trim();
-  } catch {
+  } catch (err) {
+    process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
     return '';
   }
   return '';
@@ -1878,7 +1910,8 @@ async function notifyLeaderAsync(config: TeamConfig, message: string, cwd: strin
     try {
       await sendToLeaderPane(config.leader_pane_id, message);
       return true;
-    } catch {
+    } catch (err) {
+      process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
       // Fall through to mailbox
     }
   }

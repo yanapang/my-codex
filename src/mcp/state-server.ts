@@ -844,7 +844,9 @@ export async function handleStateToolCall(request: {
         if (existsSync(path)) {
           try {
             existing = JSON.parse(await readFile(path, 'utf-8'));
-          } catch { /* start fresh */ }
+          } catch (e) {
+            process.stderr.write('[state-server] Failed to parse state file: ' + e + '\n');
+          }
         }
 
         const mergedRaw = { ...existing, ...fields, ...(customState as Record<string, unknown> || {}) } as Record<string, unknown>;
@@ -934,7 +936,9 @@ export async function handleStateToolCall(request: {
             if (data.active) {
               active.push(mode);
             }
-          } catch { /* skip malformed */ }
+          } catch (e) {
+            process.stderr.write('[state-server] Failed to parse state file: ' + e + '\n');
+          }
         }
       }
       return { content: [{ type: 'text', text: JSON.stringify({ active_modes: active }) }] };

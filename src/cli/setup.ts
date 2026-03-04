@@ -322,7 +322,7 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
     }
 
     if (sessionIsActive && shouldOverwriteAgentsMd) {
-      console.log('  WARNING: Active omx session detected (pid ' + activeSession!.pid + ').');
+      console.log('  WARNING: Active omx session detected (pid ' + activeSession?.pid + ').');
       console.log('  Skipping AGENTS.md overwrite to avoid corrupting runtime overlay.');
       if (force) {
         console.log('  Stop the active session first, then re-run setup --force.');

@@ -185,7 +185,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!existsSync(memPath)) {
         return text({ exists: false });
       }
-      const data: ProjectMemory = JSON.parse(await readFile(memPath, 'utf-8'));
+      let data: ProjectMemory = {};
+      try {
+        data = JSON.parse(await readFile(memPath, 'utf-8')) as ProjectMemory;
+      } catch {
+        data = {};
+      }
       const section = a.section as string | undefined;
       if (section && section !== 'all' && section in data) {
         return text((data as Record<string, unknown>)[section]);
@@ -199,7 +204,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const merge = a.merge as boolean;
       const newMem = a.memory as Record<string, unknown>;
       if (merge && existsSync(memPath)) {
-        const existing = JSON.parse(await readFile(memPath, 'utf-8'));
+        let existing: Record<string, unknown> = {};
+        try {
+          existing = JSON.parse(await readFile(memPath, 'utf-8')) as Record<string, unknown>;
+        } catch {
+          existing = {};
+        }
         const merged = { ...existing, ...newMem };
         await writeFile(memPath, JSON.stringify(merged, null, 2));
       } else {
@@ -213,7 +223,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       await mkdir(join(wd, '.omx'), { recursive: true });
       let data: ProjectMemory = {};
       if (existsSync(memPath)) {
-        data = JSON.parse(await readFile(memPath, 'utf-8'));
+        try {
+          data = JSON.parse(await readFile(memPath, 'utf-8')) as ProjectMemory;
+        } catch {
+          data = {};
+        }
       }
       if (!data.notes) data.notes = [];
       data.notes.push({
@@ -230,7 +244,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       await mkdir(join(wd, '.omx'), { recursive: true });
       let data: ProjectMemory = {};
       if (existsSync(memPath)) {
-        data = JSON.parse(await readFile(memPath, 'utf-8'));
+        try {
+          data = JSON.parse(await readFile(memPath, 'utf-8')) as ProjectMemory;
+        } catch {
+          data = {};
+        }
       }
       if (!data.directives) data.directives = [];
       data.directives.push({

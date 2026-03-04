@@ -57,7 +57,9 @@ async function acquireLock(cwd: string, timeoutMs: number = 5000): Promise<void>
           await rm(lock, { recursive: true, force: true }).catch(() => {});
           continue; // Retry acquire immediately
         }
-      } catch { /* no owner file or parse error, wait */ }
+      } catch (err) {
+        process.stderr.write(`[agents-overlay] lock owner check failed: ${err}\n`);
+      }
       await new Promise(r => setTimeout(r, 100));
     }
   }
@@ -66,7 +68,11 @@ async function acquireLock(cwd: string, timeoutMs: number = 5000): Promise<void>
 }
 
 async function releaseLock(cwd: string): Promise<void> {
-  try { await rm(lockPath(cwd), { recursive: true, force: true }); } catch { /* ignore */ }
+  try {
+    await rm(lockPath(cwd), { recursive: true, force: true });
+  } catch (err) {
+    process.stderr.write(`[agents-overlay] release lock failed: ${err}\n`);
+  }
 }
 
 async function withAgentsMdLock<T>(cwd: string, fn: () => Promise<T>): Promise<T> {

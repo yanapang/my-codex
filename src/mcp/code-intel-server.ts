@@ -178,13 +178,17 @@ async function findSgBinary(): Promise<string | null> {
     try {
       await execFileAsync('which', [bin]);
       return bin;
-    } catch { /* not found */ }
+    } catch (err) {
+      process.stderr.write(`[code-intel-server] operation failed: ${err}\n`);
+    }
   }
   // Try npx
   try {
     await execFileAsync('npx', ['@ast-grep/cli', '--version'], { timeout: 15000 });
     return 'npx-ast-grep';
-  } catch { /* not available */ }
+  } catch (err) {
+    process.stderr.write(`[code-intel-server] operation failed: ${err}\n`);
+  }
   return null;
 }
 
@@ -246,7 +250,8 @@ async function runAstGrep(
         matches: options.maxResults ? matches.slice(0, options.maxResults) : matches,
         command: `${cmd} ${args.join(' ')}`,
       };
-    } catch {
+    } catch (err) {
+      process.stderr.write(`[code-intel-server] operation failed: ${err}\n`);
       // Non-JSON output (rewrite mode)
       return { matches: [{ output: stdout }], command: `${cmd} ${args.join(' ')}` };
     }
@@ -287,7 +292,9 @@ async function searchWorkspaceSymbols(
               results.push({ ...sym, file: relative(dir, full) });
             }
           }
-        } catch { /* skip unreadable */ }
+        } catch (err) {
+          process.stderr.write(`[code-intel-server] operation failed: ${err}\n`);
+        }
       }
     }
   }
@@ -580,7 +587,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           referenceCount: filteredRefs.length,
           references: filteredRefs.slice(0, 100),
         });
-      } catch {
+      } catch (err) {
+        process.stderr.write(`[code-intel-server] operation failed: ${err}\n`);
         return text({
           symbol,
           includeDeclaration: effectiveIncludeDeclaration,
@@ -597,7 +605,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       try {
         const { stdout } = await exec('npx', ['tsc', '--version'], { timeout: 10000 });
         checks['typescript'] = { available: true, version: stdout.trim() };
-      } catch {
+      } catch (err) {
+        process.stderr.write(`[code-intel-server] operation failed: ${err}\n`);
         checks['typescript'] = { available: false, note: 'Install: npm i -D typescript' };
       }
       // Check ast-grep
@@ -611,7 +620,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       try {
         await exec('grep', ['--version']);
         checks['grep'] = { available: true };
-      } catch {
+      } catch (err) {
+        process.stderr.write(`[code-intel-server] operation failed: ${err}\n`);
         checks['grep'] = { available: false };
       }
       return text({ servers: checks });
