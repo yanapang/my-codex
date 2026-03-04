@@ -99,15 +99,19 @@ function capBodyToMax(sections: OverlaySection[], maxBody: number): string {
   // Deterministic overflow policy (lowest priority removed first):
   // 1) Drop optional sections from the end until it fits.
   // 2) If still too large, hard-truncate the final section with ellipsis.
-  let current = sections.slice();
-  let body = joinSections(current);
+  let body = joinSections(sections);
+  if (body.length <= maxBody) return body;
 
-  while (body.length > maxBody) {
-    const lastOptionalIdx = [...current].reverse().findIndex(s => s.optional);
-    if (lastOptionalIdx < 0) break;
-    const idx = current.length - 1 - lastOptionalIdx;
+  const optionalIndices: number[] = [];
+  for (let i = sections.length - 1; i >= 0; i--) {
+    if (sections[i].optional) optionalIndices.push(i);
+  }
+
+  const current = sections.slice();
+  for (const idx of optionalIndices) {
     current.splice(idx, 1);
     body = joinSections(current);
+    if (body.length <= maxBody) return body;
   }
 
   if (body.length > maxBody) {
@@ -148,14 +152,7 @@ async function readRalphPlanningArtifacts(cwd: string): Promise<{ hasPrd: boolea
 async function readActiveModes(cwd: string, sessionId?: string): Promise<string> {
   const refs = await listModeStateFilesWithScopePreference(cwd, sessionId);
 
-  // Compatibility fallback: when a session id is provided, keep root reads available
-  // if no session-scoped file exists for a mode.
   const preferredByMode = new Map<string, { mode: string; path: string; scope: 'root' | 'session' }>();
-  if (sessionId) {
-    for (const ref of await listModeStateFilesWithScopePreference(cwd)) {
-      preferredByMode.set(ref.mode, ref);
-    }
-  }
   for (const ref of refs) {
     preferredByMode.set(ref.mode, ref);
   }
