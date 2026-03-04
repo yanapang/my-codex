@@ -132,6 +132,7 @@ omx                # Launch Codex (+ HUD in tmux when available)
 omx setup          # Install prompts/skills/config by scope + project AGENTS.md/.omx
 omx doctor         # Installation/runtime diagnostics
 omx doctor --team  # Team/swarm diagnostics
+omx ask ...        # Ask local provider advisor (claude|gemini), writes .omx/artifacts/*
 omx team ...       # Start/status/resume/shutdown team workers (interactive tmux by default)
 omx status         # Show active modes
 omx cancel         # Cancel active execution modes
@@ -140,6 +141,18 @@ omx tmux-hook ...  # init|status|validate|test
 omx hooks ...      # init|status|validate|test (plugin extension workflow)
 omx hud ...        # --watch|--json|--preset
 omx help
+```
+
+Ask command examples:
+
+```bash
+omx ask claude "review this diff"
+omx ask gemini "brainstorm alternatives"
+omx ask claude --agent-prompt executor "implement feature X with tests"
+omx ask gemini --agent-prompt=planner --prompt "draft a rollout plan"
+# underlying provider flags from CLI help:
+# claude -p|--print "<prompt>"
+# gemini -p|--prompt "<prompt>"
 ```
 
 Non-tmux team launch (advanced):
