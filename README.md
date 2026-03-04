@@ -24,6 +24,10 @@ Multi-agent orchestration layer for [OpenAI Codex CLI](https://github.com/openai
 - [Español (Spanish)](./README.es.md)
 - [Português (Portuguese)](./README.pt.md)
 - [Русский (Russian)](./README.ru.md)
+- [Türkçe (Turkish)](./README.tr.md)
+- [Deutsch (German)](./README.de.md)
+- [Français (French)](./README.fr.md)
+- [Italiano (Italian)](./README.it.md)
 
 
 OMX turns Codex from a single-session agent into a coordinated system with:
