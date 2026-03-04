@@ -158,4 +158,43 @@ describe('omx ask', () => {
       await rm(wd, { recursive: true, force: true });
     }
   });
+
+  it('supports claude --print and gemini --prompt end-to-end through omx ask', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-ask-provider-flags-'));
+    try {
+      const fakeBin = join(wd, 'bin');
+      await mkdir(fakeBin, { recursive: true });
+
+      await writeFile(
+        join(fakeBin, 'claude'),
+        '#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"fake-claude\"; exit 0; fi\nif [ \"$1\" = \"-p\" ]; then echo \"CLAUDE_PRINT_OK:$2\"; exit 0; fi\necho \"unexpected\" 1>&2\nexit 3\n',
+      );
+      await chmod(join(fakeBin, 'claude'), 0o755);
+
+      await writeFile(
+        join(fakeBin, 'gemini'),
+        '#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"fake-gemini\"; exit 0; fi\nif [ \"$1\" = \"-p\" ]; then echo \"GEMINI_PROMPT_OK:$2\"; exit 0; fi\necho \"unexpected\" 1>&2\nexit 4\n',
+      );
+      await chmod(join(fakeBin, 'gemini'), 0o755);
+
+      const env = {
+        PATH: `${fakeBin}:${process.env.PATH || ''}`,
+      };
+
+      const claudeRes = runOmx(wd, ['ask', 'claude', '--print', 'claude-long-flag'], env);
+      if (shouldSkipForSpawnPermissions(claudeRes.error)) return;
+      assert.equal(claudeRes.status, 0, claudeRes.stderr || claudeRes.stdout);
+      const claudeArtifactPath = claudeRes.stdout.trim();
+      const claudeArtifact = await readFile(claudeArtifactPath, 'utf-8');
+      assert.match(claudeArtifact, /CLAUDE_PRINT_OK:claude-long-flag/);
+
+      const geminiRes = runOmx(wd, ['ask', 'gemini', '--prompt', 'gemini-long-flag'], env);
+      assert.equal(geminiRes.status, 0, geminiRes.stderr || geminiRes.stdout);
+      const geminiArtifactPath = geminiRes.stdout.trim();
+      const geminiArtifact = await readFile(geminiArtifactPath, 'utf-8');
+      assert.match(geminiArtifact, /GEMINI_PROMPT_OK:gemini-long-flag/);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
 });
