@@ -24,6 +24,21 @@ function runOmx(
   return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '', error: r.error?.message };
 }
 
+function runProviderAdvisorScript(
+  cwd: string,
+  argv: string[],
+): { status: number | null; stdout: string; stderr: string; error?: string } {
+  const testDir = dirname(fileURLToPath(import.meta.url));
+  const repoRoot = join(testDir, '..', '..', '..');
+  const scriptPath = join(repoRoot, 'scripts', 'run-provider-advisor.js');
+  const r = spawnSync(process.execPath, [scriptPath, ...argv], {
+    cwd,
+    encoding: 'utf-8',
+    env: process.env,
+  });
+  return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '', error: r.error?.message };
+}
+
 function shouldSkipForSpawnPermissions(err?: string): boolean {
   return typeof err === 'string' && /(EPERM|EACCES)/i.test(err);
 }
@@ -43,6 +58,20 @@ describe('parseAskArgs', () => {
     });
   });
 
+  it('parses --print prompt form', () => {
+    assert.deepEqual(parseAskArgs(['claude', '--print', 'review', 'this']), {
+      provider: 'claude',
+      prompt: 'review this',
+    });
+  });
+
+  it('parses --prompt prompt form', () => {
+    assert.deepEqual(parseAskArgs(['gemini', '--prompt', 'brainstorm', 'ideas']), {
+      provider: 'gemini',
+      prompt: 'brainstorm ideas',
+    });
+  });
+
   it('throws for invalid provider', () => {
     assert.throws(() => parseAskArgs(['openai', 'hello']), /Invalid provider/);
   });
@@ -53,6 +82,20 @@ describe('parseAskArgs', () => {
 });
 
 describe('omx ask', () => {
+  it('script usage documents provider-specific long flags from CLI help', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-ask-usage-'));
+    try {
+      const res = runProviderAdvisorScript(wd, []);
+      if (shouldSkipForSpawnPermissions(res.error)) return;
+
+      assert.equal(res.status, 1, res.stderr || res.stdout);
+      assert.match(res.stderr, /claude --print/);
+      assert.match(res.stderr, /gemini --prompt/);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it('preserves child stdout/stderr and exact non-zero exit code', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-ask-contract-'));
     try {

@@ -22,6 +22,13 @@ Run Claude through the canonical OMX CLI command path (no MCP routing):
 omx ask claude "{{ARGUMENTS}}"
 ```
 
+Exact non-interactive Claude CLI command from `claude --help`:
+
+```bash
+claude -p "{{ARGUMENTS}}"
+# equivalent: claude --print "{{ARGUMENTS}}"
+```
+
 If needed, adapt to the user's installed Claude CLI variant while keeping local execution as the default path.
 
 Legacy compatibility entrypoints (`./scripts/ask-claude.sh`, `npm run ask:claude -- ...`) are transitional wrappers.

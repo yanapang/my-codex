@@ -143,6 +143,16 @@ omx hud ...        # --watch|--json|--preset
 omx help
 ```
 
+Ask command examples:
+
+```bash
+omx ask claude "review this diff"
+omx ask gemini "brainstorm alternatives"
+# underlying provider flags from CLI help:
+# claude -p|--print "<prompt>"
+# gemini -p|--prompt "<prompt>"
+```
+
 Non-tmux team launch (advanced):
 
 ```bash

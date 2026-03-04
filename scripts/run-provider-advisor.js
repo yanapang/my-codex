@@ -12,7 +12,8 @@ const PROVIDER_BINARIES = {
 function usage() {
   console.error('Usage: omx ask <claude|gemini> "<prompt>"');
   console.error('Legacy direct usage: node scripts/run-provider-advisor.js <claude|gemini> <prompt...>');
-  console.error('                 or: node scripts/run-provider-advisor.js <claude|gemini> -p "<prompt>"');
+  console.error('                 or: node scripts/run-provider-advisor.js claude --print "<prompt>"');
+  console.error('                 or: node scripts/run-provider-advisor.js gemini --prompt "<prompt>"');
 }
 
 function slugify(value) {
@@ -41,7 +42,7 @@ function parseArgs(argv) {
     process.exit(1);
   }
 
-  if (rest[0] === '-p') {
+  if (rest[0] === '-p' || rest[0] === '--print' || rest[0] === '--prompt') {
     const prompt = rest.slice(1).join(' ').trim();
     if (!prompt) {
       usage();

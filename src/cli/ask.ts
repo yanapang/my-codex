@@ -7,12 +7,15 @@ import { getPackageRoot } from '../utils/package.js';
 export const ASK_USAGE = [
   'Usage: omx ask <claude|gemini> <question or task>',
   '   or: omx ask <claude|gemini> -p "<prompt>"',
+  '   or: omx ask claude --print "<prompt>"',
+  '   or: omx ask gemini --prompt "<prompt>"',
 ].join('\n');
 
 const ASK_PROVIDERS = ['claude', 'gemini'] as const;
 type AskProvider = typeof ASK_PROVIDERS[number];
 const ASK_PROVIDER_SET = new Set<string>(ASK_PROVIDERS);
 const ASK_ADVISOR_SCRIPT_ENV = 'OMX_ASK_ADVISOR_SCRIPT';
+const ASK_PROMPT_FLAGS = new Set(['-p', '--print', '--prompt']);
 
 export interface ParsedAskArgs {
   provider: AskProvider;
@@ -36,9 +39,9 @@ export function parseAskArgs(args: readonly string[]): ParsedAskArgs {
   }
 
   const [maybePromptFlag, ...promptRest] = rest;
-  if (maybePromptFlag === '-p' || maybePromptFlag === '--prompt') {
+  if (ASK_PROMPT_FLAGS.has(maybePromptFlag)) {
     const prompt = promptRest.join(' ').trim();
-    if (!prompt) throw askUsageError('Missing prompt text after -p/--prompt.');
+    if (!prompt) throw askUsageError('Missing prompt text after -p/--print/--prompt.');
     return { provider: provider as AskProvider, prompt };
   }
 

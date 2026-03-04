@@ -22,6 +22,13 @@ Run Gemini through the canonical OMX CLI command path (no MCP routing):
 omx ask gemini "{{ARGUMENTS}}"
 ```
 
+Exact non-interactive Gemini CLI command from `gemini --help`:
+
+```bash
+gemini -p "{{ARGUMENTS}}"
+# equivalent: gemini --prompt "{{ARGUMENTS}}"
+```
+
 If needed, adapt to the user's installed Gemini CLI variant while keeping local execution as the default path.
 
 Legacy compatibility entrypoints (`./scripts/ask-gemini.sh`, `npm run ask:gemini -- ...`) are transitional wrappers.
