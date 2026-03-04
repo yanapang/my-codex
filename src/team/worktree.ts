@@ -171,6 +171,48 @@ function hasBranchInUse(entries: GitWorktreeEntry[], branchName: string, worktre
   return entries.some((entry) => entry.branchRef === expectedRef && resolve(entry.path) !== resolvedPath);
 }
 
+function resolveGitCommonDir(cwd: string): string | null {
+  const result = spawnSync('git', ['rev-parse', '--git-common-dir'], {
+    cwd,
+    encoding: 'utf-8',
+  });
+  if (result.status !== 0) return null;
+  const value = (result.stdout || '').trim();
+  if (!value) return null;
+  return resolve(cwd, value);
+}
+
+function readWorktreeEntryFromPath(repoRoot: string, worktreePath: string): GitWorktreeEntry | null {
+  if (!existsSync(worktreePath)) return null;
+
+  const repoCommonDir = resolveGitCommonDir(repoRoot);
+  const worktreeCommonDir = resolveGitCommonDir(worktreePath);
+  if (!repoCommonDir || !worktreeCommonDir || repoCommonDir !== worktreeCommonDir) {
+    return null;
+  }
+
+  const headResult = spawnSync('git', ['rev-parse', 'HEAD'], {
+    cwd: worktreePath,
+    encoding: 'utf-8',
+  });
+  if (headResult.status !== 0) return null;
+  const head = (headResult.stdout || '').trim();
+  if (!head) return null;
+
+  const branchResult = spawnSync('git', ['symbolic-ref', '-q', 'HEAD'], {
+    cwd: worktreePath,
+    encoding: 'utf-8',
+  });
+  const branchRef = branchResult.status === 0 ? (branchResult.stdout || '').trim() : null;
+
+  return {
+    path: resolve(worktreePath),
+    head,
+    branchRef: branchRef || null,
+    detached: !branchRef,
+  };
+}
+
 export function parseWorktreeMode(args: string[]): ParsedWorktreeMode {
   let mode: WorktreeMode = { enabled: false };
   const remaining: string[] = [];
@@ -250,7 +292,8 @@ export function ensureWorktree(plan: PlannedWorktreeTarget | { enabled: false })
   if (!plan.enabled) return { enabled: false };
 
   const allWorktrees = listWorktrees(plan.repoRoot);
-  const existingAtPath = findWorktreeByPath(allWorktrees, plan.worktreePath);
+  const existingAtPath = findWorktreeByPath(allWorktrees, plan.worktreePath)
+    ?? readWorktreeEntryFromPath(plan.repoRoot, plan.worktreePath);
   const expectedBranchRef = plan.branchName ? `refs/heads/${plan.branchName}` : null;
 
   if (existingAtPath) {

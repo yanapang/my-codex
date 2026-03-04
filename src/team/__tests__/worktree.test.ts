@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -141,6 +141,63 @@ describe('worktree ensure + rollback', () => {
       if (!conflictingLaunchPlan.enabled) return;
 
       assert.throws(() => ensureWorktree(conflictingLaunchPlan), /branch_in_use/);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('reuses existing worktree when target path already exists as a valid alias', async () => {
+    const repo = await initRepo();
+    try {
+      const plan = planWorktreeTarget({
+        cwd: repo,
+        scope: 'launch',
+        mode: { enabled: true, detached: false, name: 'feature/reuse-alias' },
+      });
+      assert.equal(plan.enabled, true);
+      if (!plan.enabled) return;
+
+      const created = ensureWorktree(plan);
+      assert.equal(created.enabled, true);
+      if (!created.enabled) return;
+      assert.equal(created.created, true);
+
+      const aliasPath = `${created.worktreePath}-alias`;
+      await symlink(created.worktreePath, aliasPath);
+
+      const reused = ensureWorktree({ ...plan, worktreePath: aliasPath });
+      assert.equal(reused.enabled, true);
+      if (!reused.enabled) return;
+      assert.equal(reused.reused, true);
+      assert.equal(reused.created, false);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves mismatch safety when existing alias points to a different branch', async () => {
+    const repo = await initRepo();
+    try {
+      const plan = planWorktreeTarget({
+        cwd: repo,
+        scope: 'launch',
+        mode: { enabled: true, detached: false, name: 'feature/mismatch-source' },
+      });
+      assert.equal(plan.enabled, true);
+      if (!plan.enabled) return;
+
+      const created = ensureWorktree(plan);
+      assert.equal(created.enabled, true);
+      if (!created.enabled) return;
+      assert.equal(created.created, true);
+
+      const aliasPath = `${created.worktreePath}-alias`;
+      await symlink(created.worktreePath, aliasPath);
+
+      assert.throws(
+        () => ensureWorktree({ ...plan, worktreePath: aliasPath, branchName: 'feature/other-branch' }),
+        /worktree_target_mismatch/,
+      );
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
