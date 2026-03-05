@@ -1,74 +1,93 @@
-# Release Notes - 0.8.1
+# oh-my-codex v0.8.1
 
-Status: Prepared on **2026-03-05**.
+Released: **2026-03-05**
 
-Current package version: **0.8.1**.
+This is a **stability + usability** release focused on team orchestration reliability, notification setup simplicity, and safer OpenClaw operations.
 
-## Scope policy
+---
 
-This release note is based strictly on:
+## TL;DR
 
-- `git log --no-merges 4141fd6..HEAD`
-- `git diff --shortstat 4141fd6..HEAD`
+If you use `$team`/`omx team` heavily, this release makes the runtime more consistent by standardizing around **CLI-first interop**.
 
-Scope summary:
+If you are setting up notifications, onboarding is now cleaner through a **unified `configure-notifications` flow**.
 
-- Commit window: **11 non-merge commits** (`2026-03-04` to `2026-03-05`)
-- Diff snapshot: **51 files changed, +5,454 / -2,420**
+If you use OpenClaw integrations, timeout handling now has **safe configurable bounds**.
 
-## Highlights
+---
 
-- Team runtime moved fully to CLI-first interop (`omx team api`) with stronger dispatch reliability.
-- Notification setup unified under `configure-notifications`.
-- OpenClaw safety + operations guidance expanded, with timeout safety controls.
+## What changed
 
-## Added
+### 1) Team runtime: CLI-first interop is now the default direction
 
-- `feat(team): add CLI interop API and hard-deprecate team_* MCP tools`
-- `feat(team): finalize CLI-first team interop and dispatch reliability`
+- Added and finalized team API interop through:
+  - `omx team api ...`
+- Legacy `team_*` MCP tools are now treated as deprecated paths in favor of the CLI-first contract.
 
-## Changed
+**Why this matters:**
+- More predictable behavior across team orchestration flows
+- Cleaner compatibility surface for worker/leader interactions
+- Better long-term maintainability around team runtime contracts
 
-- Unified notification setup flow via `configure-notifications`.
-- Team protocol docs migrated to CLI-first interop contract.
-- README setup docs now include configure-notifications guidance.
+### 2) Notifications: setup is now unified
 
-## Fixed
+- Notification setup guidance has been refactored into a single workflow:
+  - `configure-notifications`
 
-- Removed dead state-server helpers and enforced CLI-first dispatch policy.
-- OpenClaw command timeout is now configurable with safe bounds.
+**Why this matters:**
+- Fewer fragmented setup paths
+- Easier onboarding for new users
+- Lower chance of config drift between notification providers
 
-## Verification for release readiness
+### 3) OpenClaw safety + operability improvements
 
-- [x] `npm run build` passes
-- [x] `npm test` passes
-- [x] `npm run check:no-unused` passes
-- [x] CLI smoke checks pass (`--help`, `version`, `status`, `doctor`, `setup --dry-run`, `cancel`)
+- OpenClaw command timeout is now configurable with bounded safety limits.
+- Documentation was expanded with stronger token/command safety guidance and a practical dev runbook.
 
-## Smoke verification evidence (2026-03-05)
+**Why this matters:**
+- Safer operation in automation-heavy environments
+- Better operational clarity for development and incident follow-up
 
-| Command | Exit | Evidence |
-|---|---:|---|
-| `npm run build` | 0 | `tsc` completed |
-| `npm test` | 0 | `1908` pass, `0` fail, catalog check ok |
-| `npm run check:no-unused` | 0 | `tsc -p tsconfig.no-unused.json` succeeded |
-| `node bin/omx.js --help` | 0 | CLI usage rendered |
-| `node bin/omx.js version` | 0 | `oh-my-codex v0.8.1` |
-| `node bin/omx.js status` | 0 | mode status rendered |
-| `node bin/omx.js doctor` | 0 | `Results: 9 passed, 0 warnings, 0 failed` |
-| `node bin/omx.js setup --dry-run` | 0 | dry-run setup completed |
-| `node bin/omx.js cancel` | 0 | `No active modes to cancel.` |
+---
 
-## Commit ledger (`4141fd6..HEAD`, history order)
+## Compatibility / migration notes
 
-- `2026-03-04 6a318b2 feat(team): add CLI interop API and hard-deprecate team_* MCP tools`
-- `2026-03-04 bf39364 docs(team): migrate worker/team protocol and interop contract to CLI-first`
-- `2026-03-04 85ab1cf fix(ci,team): remove dead state-server helpers and enforce CLI-first dispatch policy`
-- `2026-03-04 c6b7780 test(team): add comprehensive api-interop coverage for coverage gate (#556)`
-- `2026-03-04 c0c5d82 feat(team): finalize CLI-first team interop and dispatch reliability`
-- `2026-03-05 2d3b14f refactor notifications setup into unified configure-notifications flow`
-- `2026-03-05 6b7528d docs(notifications): add OpenClaw clawdbot agent workflow for dev (#563)`
-- `2026-03-05 2afb54c docs(readme): add configure-notifications setup guidance (#565)`
-- `2026-03-05 c42c264 docs(openclaw): harden token and command safety guidance (#566)`
-- `2026-03-05 0ccea70 fix(openclaw): make command timeout configurable with safe bounds (#567)`
-- `2026-03-05 a7c9e59 docs: add OpenClaw dev runbook for Korean tmux follow-up (#568)`
+- If you previously relied on legacy `team_*` MCP workflows, migrate to:
+  - `omx team api <operation> ...`
+- For notification setup, prefer:
+  - `omx configure-notifications` (or skill equivalent)
+
+No breaking package-level API changes were introduced in this patch release.
+
+---
+
+## Verification summary
+
+All release gates passed before publish:
+
+- ✅ `npm run build`
+- ✅ `npm test` (`1908` pass / `0` fail)
+- ✅ `npm run check:no-unused`
+- ✅ CLI smoke checks (`--help`, `version`, `status`, `doctor`, `setup --dry-run`, `cancel`)
+
+---
+
+## Scope and commit window
+
+Release scope was prepared from non-merge commits in:
+- `4141fd6..HEAD`
+
+Snapshot at preparation time:
+- **11 non-merge commits** (2026-03-04 to 2026-03-05)
+- **51 files changed** (`+5,454 / -2,420`)
+
+Key commits included:
+
+- `6a318b2` feat(team): add CLI interop API and hard-deprecate team_* MCP tools
+- `c0c5d82` feat(team): finalize CLI-first team interop and dispatch reliability
+- `2d3b14f` refactor: notifications setup into unified configure-notifications flow
+- `0ccea70` fix(openclaw): make command timeout configurable with safe bounds
+
+---
+
+Thanks for using **oh-my-codex**. If anything regresses, please open an issue with repro steps and logs.
