@@ -18,6 +18,7 @@ import { installNativeAgentConfigs } from '../agents/native-config.js';
 import { getPackageRoot } from '../utils/package.js';
 import { readSessionState, isSessionStale } from '../hooks/session.js';
 import { getCatalogHeadlineCounts } from './catalog-contract.js';
+import { tryReadCatalogManifest } from '../catalog/reader.js';
 
 interface SetupOptions {
   force?: boolean;
@@ -522,10 +523,26 @@ async function installSkills(
   options: SetupOptions
 ): Promise<number> {
   if (!existsSync(srcDir)) return 0;
+  const manifest = tryReadCatalogManifest();
+  const skillStatusByName = manifest
+    ? new Map(manifest.skills.map((skill) => [skill.name, skill.status]))
+    : null;
+  const isInstallableStatus = (status: string | undefined): boolean => status === 'active' || status === 'internal';
   const entries = await readdir(srcDir, { withFileTypes: true });
+  const staleCandidateSkillNames = new Set(manifest?.skills.map((skill) => skill.name) ?? []);
   let count = 0;
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
+    staleCandidateSkillNames.add(entry.name);
+    const status = skillStatusByName?.get(entry.name);
+    if (skillStatusByName && !isInstallableStatus(status)) {
+      if (options.verbose) {
+        const label = status ?? 'unlisted';
+        console.log(`  skipped ${entry.name}/ (status: ${label})`);
+      }
+      continue;
+    }
+
     const skillSrc = join(srcDir, entry.name);
     const skillDst = join(dstDir, entry.name);
     const skillMd = join(skillSrc, 'SKILL.md');
@@ -571,6 +588,26 @@ async function installSkills(
       );
     }
   }
+
+  if (options.force && manifest && existsSync(dstDir)) {
+    for (const staleSkill of staleCandidateSkillNames) {
+      const status = skillStatusByName?.get(staleSkill);
+      if (isInstallableStatus(status)) continue;
+
+      const staleSkillDir = join(dstDir, staleSkill);
+      if (!existsSync(staleSkillDir)) continue;
+
+      if (!options.dryRun) {
+        await rm(staleSkillDir, { recursive: true, force: true });
+      }
+      if (options.verbose) {
+        const prefix = options.dryRun ? 'would remove stale skill' : 'removed stale skill';
+        const label = status ?? 'unlisted';
+        console.log(`  ${prefix} ${staleSkill}/ (status: ${label})`);
+      }
+    }
+  }
+
   return count;
 }
 
