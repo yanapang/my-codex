@@ -45,6 +45,7 @@ describe('config generator idempotency (#384)', () => {
     }
   });
 
+
   it('second run updates without duplicating any section', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-idem-'));
     try {
@@ -290,4 +291,75 @@ describe('config generator idempotency (#384)', () => {
       await rm(wd, { recursive: true, force: true });
     }
   });
+  it('seeds context keys when root model is missing and both context keys are absent', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-idem-'));
+    try {
+      const configPath = join(wd, 'config.toml');
+      await writeFile(configPath, 'approval_policy = "on-failure"\n');
+
+      await mergeConfig(configPath, wd);
+      const toml = await readFile(configPath, 'utf-8');
+
+      assert.match(toml, /^model = "gpt-5.4"$/m);
+      assert.match(toml, /^model_context_window = 1000000$/m);
+      assert.match(toml, /^model_auto_compact_token_limit = 900000$/m);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('does not seed 1M context defaults for non-gpt-5.4 models', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-idem-'));
+    try {
+      const configPath = join(wd, 'config.toml');
+      await writeFile(configPath, 'model = "o3"\n');
+
+      await mergeConfig(configPath, wd);
+      const toml = await readFile(configPath, 'utf-8');
+
+      assert.match(toml, /^model = "o3"$/m, 'user model preserved');
+      assert.doesNotMatch(toml, /^model_context_window = 1000000$/m);
+      assert.doesNotMatch(toml, /^model_auto_compact_token_limit = 900000$/m);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves partial user context config without backfilling the missing partner key', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-idem-'));
+    try {
+      const configPath = join(wd, 'config.toml');
+      await writeFile(configPath, [
+        'model = "gpt-5.4"',
+        'model_context_window = 640000',
+        '',
+      ].join('\n'));
+
+      await mergeConfig(configPath, wd);
+      const toml = await readFile(configPath, 'utf-8');
+
+      assert.match(toml, /^model = "gpt-5\.4"$/m);
+      assert.match(toml, /^model_context_window = 640000$/m);
+      assert.doesNotMatch(toml, /^model_auto_compact_token_limit = 900000$/m);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('does not duplicate seeded model defaults across reruns', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-idem-'));
+    try {
+      const configPath = join(wd, 'config.toml');
+      await mergeConfig(configPath, wd);
+      await mergeConfig(configPath, wd);
+
+      const toml = await readFile(configPath, 'utf-8');
+      assert.equal(count(toml, /^model = "gpt-5\.4"$/gm), 1, 'seeded model should appear once');
+      assert.equal(count(toml, /^model_context_window = 1000000$/gm), 1, 'seeded context window should appear once');
+      assert.equal(count(toml, /^model_auto_compact_token_limit = 900000$/gm), 1, 'seeded auto compact limit should appear once');
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
 });

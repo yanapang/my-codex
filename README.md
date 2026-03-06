@@ -189,7 +189,7 @@ See `docs/hooks-extension.md` for the full extension workflow and event model.
 --spark             # Use Codex spark model for team workers only (~1.3x faster)
 --madmax-spark      # spark model for workers + bypass approvals for leader and workers
 -w, --worktree[=<name>]  # Launch Codex in a git worktree (detached when no name given)
---force             # Force reinstall (overwrite existing files)
+--force             # Enable destructive maintenance (for example stale/deprecated skill cleanup)
 --dry-run           # Show what would be done without doing it
 --keep-config       # Skip config.toml cleanup during uninstall
 --purge             # Remove .omx/ cache directory during uninstall
@@ -289,16 +289,23 @@ Notes:
   - `user`: `~/.codex/prompts/`, `~/.agents/skills/`, `~/.codex/config.toml`, `~/.omx/agents/`
   - `project`: `./.codex/prompts/`, `./.agents/skills/`, `./.codex/config.toml`, `./.omx/agents/`
 - Launch behavior: if persisted scope is `project`, `omx` launch auto-uses `CODEX_HOME=./.codex` (unless `CODEX_HOME` is already set).
-- Existing `AGENTS.md` is preserved by default. In interactive TTY runs, setup prompts before overwrite; `--force` overwrites without prompt (active-session safety checks still apply).
+- Managed OMX artifacts refresh by default in both interactive and non-interactive runs: prompts, skills, native agent configs, project `AGENTS.md`, and the managed OMX portion of `config.toml`
+- If a managed file differs and will be overwritten, setup creates a backup first under `.omx/backups/setup/<timestamp>/...` (project scope) or `~/.omx/backups/setup/<timestamp>/...` (user scope)
+- Active-session safety still blocks `AGENTS.md` overwrite while an OMX session is running
 - `config.toml` updates (for both scopes):
   - `notify = ["node", "..."]`
   - `model_reasoning_effort = "high"`
   - `developer_instructions = "..."`
+  - `model = "gpt-5.4"` when root `model` is absent
+  - `model_context_window = 1000000` and `model_auto_compact_token_limit = 900000` only when the effective root model is `gpt-5.4` and both context keys are absent
   - `[features] multi_agent = true, child_agents_md = true`
   - MCP server entries (`omx_state`, `omx_memory`, `omx_code_intel`, `omx_trace`)
   - `[tui] status_line`
 - Project `AGENTS.md`
 - `.omx/` runtime directories and HUD config
+- Default setup output includes a compact per-category refresh summary; `--verbose` adds changed-file detail
+- `--force` is reserved for stronger maintenance behavior such as stale/deprecated skill cleanup; it is no longer required for ordinary refresh
+- The 1M GPT-5.4 context settings are experimental and can increase usage because requests beyond the standard context budget may count more heavily
 
 ## Agents and Skills
 

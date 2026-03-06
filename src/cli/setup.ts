@@ -4,17 +4,19 @@
  */
 
 import { mkdir, copyFile, readdir, readFile, writeFile, stat, rm } from 'fs/promises';
-import { join, dirname } from 'path';
+import { join, dirname, relative } from 'path';
 import { existsSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { createInterface } from 'readline/promises';
+import { homedir } from 'os';
 import {
   codexHome, codexConfigPath, codexPromptsDir,
   userSkillsDir, omxStateDir, omxPlansDir, omxLogsDir,
   omxAgentsConfigDir,
 } from '../utils/paths.js';
-import { mergeConfig } from '../config/generator.js';
-import { installNativeAgentConfigs } from '../agents/native-config.js';
+import { buildMergedConfig } from '../config/generator.js';
+import { generateAgentToml } from '../agents/native-config.js';
+import { AGENT_DEFINITIONS } from '../agents/definitions.js';
 import { getPackageRoot } from '../utils/package.js';
 import { readSessionState, isSessionStale } from '../hooks/session.js';
 import { getCatalogHeadlineCounts } from './catalog-contract.js';
@@ -48,6 +50,28 @@ export interface ScopeDirectories {
   skillsDir: string;
 }
 
+
+interface SetupCategorySummary {
+  updated: number;
+  unchanged: number;
+  backedUp: number;
+  skipped: number;
+  removed: number;
+}
+
+interface SetupRunSummary {
+  prompts: SetupCategorySummary;
+  skills: SetupCategorySummary;
+  nativeAgents: SetupCategorySummary;
+  agentsMd: SetupCategorySummary;
+  config: SetupCategorySummary;
+}
+
+interface SetupBackupContext {
+  backupRoot: string;
+  baseRoot: string;
+}
+
 function applyScopePathRewritesToAgentsTemplate(content: string, scope: SetupScope): string {
   if (scope !== 'project') return content;
   return content
@@ -71,6 +95,81 @@ const REQUIRED_TEAM_CLI_API_MARKERS = [
 ] as const;
 
 const DEFAULT_SETUP_SCOPE: SetupScope = 'user';
+
+
+function createEmptyCategorySummary(): SetupCategorySummary {
+  return {
+    updated: 0,
+    unchanged: 0,
+    backedUp: 0,
+    skipped: 0,
+    removed: 0,
+  };
+}
+
+function createEmptyRunSummary(): SetupRunSummary {
+  return {
+    prompts: createEmptyCategorySummary(),
+    skills: createEmptyCategorySummary(),
+    nativeAgents: createEmptyCategorySummary(),
+    agentsMd: createEmptyCategorySummary(),
+    config: createEmptyCategorySummary(),
+  };
+}
+
+function getBackupContext(scope: SetupScope, projectRoot: string): SetupBackupContext {
+  const timestamp = new Date().toISOString().replace(/[:]/g, '-');
+  if (scope === 'project') {
+    return {
+      backupRoot: join(projectRoot, '.omx', 'backups', 'setup', timestamp),
+      baseRoot: projectRoot,
+    };
+  }
+  return {
+    backupRoot: join(homedir(), '.omx', 'backups', 'setup', timestamp),
+    baseRoot: homedir(),
+  };
+}
+
+async function ensureBackup(
+  destinationPath: string,
+  contentChanged: boolean,
+  backupContext: SetupBackupContext,
+  options: Pick<SetupOptions, 'dryRun' | 'verbose'>,
+): Promise<boolean> {
+  if (!contentChanged || !existsSync(destinationPath)) return false;
+
+  const relativePath = relative(backupContext.baseRoot, destinationPath);
+  const safeRelativePath = relativePath.startsWith('..') || relativePath === ''
+    ? destinationPath.replace(/^[/]+/, '')
+    : relativePath;
+  const backupPath = join(backupContext.backupRoot, safeRelativePath);
+
+  if (!options.dryRun) {
+    await mkdir(dirname(backupPath), { recursive: true });
+    await copyFile(destinationPath, backupPath);
+  }
+  if (options.verbose) {
+    console.log(`  backup ${destinationPath} -> ${backupPath}`);
+  }
+  return true;
+}
+
+async function filesDiffer(src: string, dst: string): Promise<boolean> {
+  if (!existsSync(dst)) return true;
+  const [srcContent, dstContent] = await Promise.all([
+    readFile(src, 'utf-8'),
+    readFile(dst, 'utf-8'),
+  ]);
+  return srcContent !== dstContent;
+}
+
+function logCategorySummary(name: string, summary: SetupCategorySummary): void {
+  console.log(
+    `  ${name}: updated=${summary.updated}, unchanged=${summary.unchanged}, ` +
+    `backed_up=${summary.backedUp}, skipped=${summary.skipped}, removed=${summary.removed}`,
+  );
+}
 
 function isSetupScope(value: string): value is SetupScope {
   return SETUP_SCOPES.includes(value as SetupScope);
@@ -232,17 +331,21 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
   await persistSetupScope(projectRoot, resolvedScope.scope, { dryRun, verbose });
   console.log('  Done.\n');
 
+  const catalogCounts = getCatalogHeadlineCounts();
+  const summary = createEmptyRunSummary();
+  const backupContext = getBackupContext(resolvedScope.scope, projectRoot);
+
   // Step 2: Install agent prompts
   console.log('[2/8] Installing agent prompts...');
-  const catalogCounts = getCatalogHeadlineCounts();
   {
     const promptsSrc = join(pkgRoot, 'prompts');
     const promptsDst = scopeDirs.promptsDir;
-    const promptCount = await installDirectory(promptsSrc, promptsDst, '.md', { force, dryRun, verbose });
+    summary.prompts = await installDirectory(promptsSrc, promptsDst, '.md', backupContext, { force, dryRun, verbose }, 'prompt');
     const cleanedLegacyPromptShims = await cleanupLegacySkillPromptShims(promptsSrc, promptsDst, {
       dryRun,
       verbose,
     });
+    summary.prompts.removed += cleanedLegacyPromptShims;
     if (cleanedLegacyPromptShims > 0) {
       if (dryRun) {
         console.log(`  Would remove ${cleanedLegacyPromptShims} legacy skill prompt shim file(s).`);
@@ -251,22 +354,20 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
       }
     }
     if (catalogCounts) {
-      console.log(`  Installed ${promptCount} agent prompts (catalog baseline: ${catalogCounts.prompts}).\n`);
+      console.log(`  Prompt refresh complete (catalog baseline: ${catalogCounts.prompts}).\n`);
     } else {
-      console.log(`  Installed ${promptCount} agent prompts.\n`);
+      console.log('  Prompt refresh complete.\n');
     }
   }
 
   // Step 3: Install native agent configs
   console.log('[3/8] Installing native agent configs...');
   {
-    const agentConfigCount = await installNativeAgentConfigs(pkgRoot, {
-      force,
+    summary.nativeAgents = await refreshNativeAgentConfigs(pkgRoot, scopeDirs.nativeAgentsDir, backupContext, {
       dryRun,
       verbose,
-      agentsDir: scopeDirs.nativeAgentsDir,
     });
-    console.log(`  Installed ${agentConfigCount} native agent configs to ${scopeDirs.nativeAgentsDir}.\n`);
+    console.log(`  Native agent refresh complete (${scopeDirs.nativeAgentsDir}).\n`);
   }
 
   // Step 4: Install skills
@@ -274,23 +375,25 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
   {
     const skillsSrc = join(pkgRoot, 'skills');
     const skillsDst = scopeDirs.skillsDir;
-    const skillCount = await installSkills(skillsSrc, skillsDst, { force, dryRun, verbose });
+    summary.skills = await installSkills(skillsSrc, skillsDst, backupContext, { force, dryRun, verbose });
     if (catalogCounts) {
-      console.log(`  Installed ${skillCount} skills (catalog baseline: ${catalogCounts.skills}).\n`);
+      console.log(`  Skill refresh complete (catalog baseline: ${catalogCounts.skills}).\n`);
     } else {
-      console.log(`  Installed ${skillCount} skills.\n`);
+      console.log('  Skill refresh complete.\n');
     }
   }
 
   // Step 5: Update config.toml
   console.log('[5/8] Updating config.toml...');
-  if (!dryRun) {
-    await mergeConfig(scopeDirs.codexConfigFile, pkgRoot, {
-      verbose,
-      agentsConfigDir: scopeDirs.nativeAgentsDir,
-    });
-  }
-  console.log(`  Done (${scopeDirs.codexConfigFile}).\n`);
+  await updateManagedConfig(
+    scopeDirs.codexConfigFile,
+    pkgRoot,
+    scopeDirs.nativeAgentsDir,
+    summary.config,
+    backupContext,
+    { dryRun, verbose },
+  );
+  console.log(`  Config refresh complete (${scopeDirs.codexConfigFile}).\n`);
 
   // Step 5.5: Verify team CLI interop surface is available.
   console.log('[5.5/8] Verifying Team CLI API interop...');
@@ -314,32 +417,29 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
   const sessionIsActive = activeSession && !isSessionStale(activeSession);
 
   if (existsSync(agentsMdSrc)) {
-    let shouldOverwriteAgentsMd = force;
-    if (!force && agentsMdExists && process.stdin.isTTY && process.stdout.isTTY) {
-      shouldOverwriteAgentsMd = agentsOverwritePrompt
-        ? await agentsOverwritePrompt()
-        : await promptForAgentsOverwrite();
+    const content = await readFile(agentsMdSrc, 'utf-8');
+    const rewritten = applyScopePathRewritesToAgentsTemplate(content, resolvedScope.scope);
+    let changed = true;
+    if (agentsMdExists) {
+      const existing = await readFile(agentsMdDst, 'utf-8');
+      changed = existing !== rewritten;
     }
 
-    if (sessionIsActive && shouldOverwriteAgentsMd) {
+    if (sessionIsActive && agentsMdExists && changed) {
+      summary.agentsMd.skipped += 1;
       console.log('  WARNING: Active omx session detected (pid ' + activeSession?.pid + ').');
       console.log('  Skipping AGENTS.md overwrite to avoid corrupting runtime overlay.');
-      if (force) {
-        console.log('  Stop the active session first, then re-run setup --force.');
-      } else {
-        console.log('  Stop the active session first, then re-run setup and approve overwrite (or use --force).');
-      }
-    } else if (shouldOverwriteAgentsMd || !agentsMdExists) {
-      if (!dryRun) {
-        const content = await readFile(agentsMdSrc, 'utf-8');
-        const rewritten = applyScopePathRewritesToAgentsTemplate(content, resolvedScope.scope);
-        await writeFile(agentsMdDst, rewritten);
-      }
-      console.log('  Generated AGENTS.md in project root.');
+      console.log('  Stop the active session first, then re-run setup.');
     } else {
-      console.log('  AGENTS.md already exists (use --force to overwrite).');
+      await syncManagedContent(rewritten, agentsMdDst, summary.agentsMd, backupContext, { dryRun, verbose }, 'AGENTS.md');
+      if (summary.agentsMd.updated > 0) {
+        console.log('  Generated AGENTS.md in project root.');
+      } else if (summary.agentsMd.unchanged > 0) {
+        console.log('  AGENTS.md already up to date.');
+      }
     }
   } else {
+    summary.agentsMd.skipped += 1;
     console.log('  AGENTS.md template not found, skipping.');
   }
   console.log();
@@ -364,6 +464,19 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
   }
   console.log('  StatusLine configured in config.toml via [tui] section.');
   console.log();
+
+  console.log('Setup refresh summary:');
+  logCategorySummary('prompts', summary.prompts);
+  logCategorySummary('skills', summary.skills);
+  logCategorySummary('native_agents', summary.nativeAgents);
+  logCategorySummary('agents_md', summary.agentsMd);
+  logCategorySummary('config', summary.config);
+  console.log();
+
+  if (force) {
+    console.log('Force mode: enabled additional destructive maintenance (for example stale deprecated skill cleanup).');
+    console.log();
+  }
 
   console.log('Setup complete! Run "omx doctor" to verify installation.');
   console.log('\nNext steps:');
@@ -426,38 +539,129 @@ function isGitHubCliConfigured(): boolean {
   return result.status === 0;
 }
 
+async function syncManagedFileFromDisk(
+  srcPath: string,
+  dstPath: string,
+  summary: SetupCategorySummary,
+  backupContext: SetupBackupContext,
+  options: Pick<SetupOptions, 'dryRun' | 'verbose'>,
+  verboseLabel: string,
+): Promise<void> {
+  const destinationExists = existsSync(dstPath);
+  const changed = !destinationExists || await filesDiffer(srcPath, dstPath);
+
+  if (!changed) {
+    summary.unchanged += 1;
+    return;
+  }
+
+  if (await ensureBackup(dstPath, destinationExists, backupContext, options)) {
+    summary.backedUp += 1;
+  }
+
+  if (!options.dryRun) {
+    await mkdir(dirname(dstPath), { recursive: true });
+    await copyFile(srcPath, dstPath);
+  }
+
+  summary.updated += 1;
+  if (options.verbose) {
+    console.log(`  ${options.dryRun ? 'would update' : 'updated'} ${verboseLabel}`);
+  }
+}
+
+async function syncManagedContent(
+  content: string,
+  dstPath: string,
+  summary: SetupCategorySummary,
+  backupContext: SetupBackupContext,
+  options: Pick<SetupOptions, 'dryRun' | 'verbose'>,
+  verboseLabel: string,
+): Promise<void> {
+  const destinationExists = existsSync(dstPath);
+  let changed = true;
+  if (destinationExists) {
+    const existing = await readFile(dstPath, 'utf-8');
+    changed = existing !== content;
+  }
+
+  if (!changed) {
+    summary.unchanged += 1;
+    return;
+  }
+
+  if (await ensureBackup(dstPath, destinationExists, backupContext, options)) {
+    summary.backedUp += 1;
+  }
+
+  if (!options.dryRun) {
+    await mkdir(dirname(dstPath), { recursive: true });
+    await writeFile(dstPath, content);
+  }
+
+  summary.updated += 1;
+  if (options.verbose) {
+    console.log(`  ${options.dryRun ? 'would update' : 'updated'} ${verboseLabel}`);
+  }
+}
+
 async function installDirectory(
   srcDir: string,
   dstDir: string,
   ext: string,
-  options: SetupOptions
-): Promise<number> {
-  if (!existsSync(srcDir)) return 0;
+  backupContext: SetupBackupContext,
+  options: SetupOptions,
+  kindLabel: string,
+): Promise<SetupCategorySummary> {
+  const summary = createEmptyCategorySummary();
+  if (!existsSync(srcDir)) return summary;
   const files = await readdir(srcDir);
-  let count = 0;
   for (const file of files) {
     if (!file.endsWith(ext)) continue;
     const src = join(srcDir, file);
     const dst = join(dstDir, file);
     const srcStat = await stat(src);
     if (!srcStat.isFile()) continue;
-    if (options.force || !existsSync(dst)) {
-      if (!options.dryRun) {
-        await copyFile(src, dst);
-      }
-      if (options.verbose) console.log(`  ${file}`);
-      count++;
-    }
+    await syncManagedFileFromDisk(src, dst, summary, backupContext, options, `${kindLabel} ${file}`);
   }
-  return count;
+  return summary;
+}
+
+async function refreshNativeAgentConfigs(
+  pkgRoot: string,
+  agentsDir: string,
+  backupContext: SetupBackupContext,
+  options: Pick<SetupOptions, 'dryRun' | 'verbose'>,
+): Promise<SetupCategorySummary> {
+  const summary = createEmptyCategorySummary();
+
+  if (!options.dryRun) {
+    await mkdir(agentsDir, { recursive: true });
+  }
+
+  for (const [name, agent] of Object.entries(AGENT_DEFINITIONS)) {
+    const promptPath = join(pkgRoot, 'prompts', `${name}.md`);
+    if (!existsSync(promptPath)) {
+      continue;
+    }
+
+    const promptContent = await readFile(promptPath, 'utf-8');
+    const toml = generateAgentToml(agent, promptContent);
+    const dst = join(agentsDir, `${name}.toml`);
+    await syncManagedContent(toml, dst, summary, backupContext, options, `native agent ${name}.toml`);
+  }
+
+  return summary;
 }
 
 async function installSkills(
   srcDir: string,
   dstDir: string,
+  backupContext: SetupBackupContext,
   options: SetupOptions
-): Promise<number> {
-  if (!existsSync(srcDir)) return 0;
+): Promise<SetupCategorySummary> {
+  const summary = createEmptyCategorySummary();
+  if (!existsSync(srcDir)) return summary;
   const manifest = tryReadCatalogManifest();
   const skillStatusByName = manifest
     ? new Map(manifest.skills.map((skill) => [skill.name, skill.status]))
@@ -465,12 +669,12 @@ async function installSkills(
   const isInstallableStatus = (status: string | undefined): boolean => status === 'active' || status === 'internal';
   const entries = await readdir(srcDir, { withFileTypes: true });
   const staleCandidateSkillNames = new Set(manifest?.skills.map((skill) => skill.name) ?? []);
-  let count = 0;
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     staleCandidateSkillNames.add(entry.name);
     const status = skillStatusByName?.get(entry.name);
     if (skillStatusByName && !isInstallableStatus(status)) {
+      summary.skipped += 1;
       if (options.verbose) {
         const label = status ?? 'unlisted';
         console.log(`  skipped ${entry.name}/ (status: ${label})`);
@@ -483,44 +687,17 @@ async function installSkills(
     const skillMd = join(skillSrc, 'SKILL.md');
     if (!existsSync(skillMd)) continue;
 
-    let copied = 0;
-    let overwritten = 0;
-    let skipped = 0;
-    const skillFiles = await readdir(skillSrc);
-
     if (!options.dryRun) {
       await mkdir(skillDst, { recursive: true });
     }
 
+    const skillFiles = await readdir(skillSrc);
     for (const sf of skillFiles) {
       const sfPath = join(skillSrc, sf);
       const sfStat = await stat(sfPath);
       if (!sfStat.isFile()) continue;
-
       const dstPath = join(skillDst, sf);
-      const dstExists = existsSync(dstPath);
-      if (dstExists && !options.force) {
-        skipped++;
-        continue;
-      }
-
-      if (!options.dryRun) {
-        await copyFile(sfPath, dstPath);
-      }
-      if (dstExists) {
-        overwritten++;
-      } else {
-        copied++;
-      }
-    }
-
-    if (copied + overwritten > 0) {
-      count++;
-    }
-    if (options.verbose) {
-      console.log(
-        `  ${entry.name}/ (copied: ${copied}, overwritten: ${overwritten}, skipped: ${skipped})`,
-      );
+      await syncManagedFileFromDisk(sfPath, dstPath, summary, backupContext, options, `skill ${entry.name}/${sf}`);
     }
   }
 
@@ -535,6 +712,7 @@ async function installSkills(
       if (!options.dryRun) {
         await rm(staleSkillDir, { recursive: true, force: true });
       }
+      summary.removed += 1;
       if (options.verbose) {
         const prefix = options.dryRun ? 'would remove stale skill' : 'removed stale skill';
         const label = status ?? 'unlisted';
@@ -543,7 +721,38 @@ async function installSkills(
     }
   }
 
-  return count;
+  return summary;
+}
+
+async function updateManagedConfig(
+  configPath: string,
+  pkgRoot: string,
+  agentsConfigDir: string,
+  summary: SetupCategorySummary,
+  backupContext: SetupBackupContext,
+  options: Pick<SetupOptions, 'dryRun' | 'verbose'>,
+): Promise<void> {
+  const existing = existsSync(configPath) ? await readFile(configPath, 'utf-8') : '';
+  const finalConfig = buildMergedConfig(existing, pkgRoot, { agentsConfigDir, verbose: options.verbose });
+  const changed = existing !== finalConfig;
+
+  if (!changed) {
+    summary.unchanged += 1;
+    return;
+  }
+
+  if (await ensureBackup(configPath, existsSync(configPath), backupContext, options)) {
+    summary.backedUp += 1;
+  }
+
+  if (!options.dryRun) {
+    await writeFile(configPath, finalConfig);
+  }
+
+  summary.updated += 1;
+  if (options.verbose) {
+    console.log(`  ${options.dryRun ? 'would update' : 'updated'} config ${configPath}`);
+  }
 }
 
 async function setupNotifyHook(

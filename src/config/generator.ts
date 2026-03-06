@@ -36,16 +36,53 @@ const OMX_TOP_LEVEL_KEYS = [
   'developer_instructions',
 ] as const;
 
-function getOmxTopLevelLines(pkgRoot: string): string[] {
+const DEFAULT_SETUP_MODEL = 'gpt-5.4';
+const DEFAULT_SETUP_MODEL_CONTEXT_WINDOW = 1000000;
+const DEFAULT_SETUP_MODEL_AUTO_COMPACT_TOKEN_LIMIT = 900000;
+
+function parseRootKeyValues(config: string): Map<string, string> {
+  const values = new Map<string, string>();
+  const lines = config.split(/\r?\n/);
+  for (const line of lines) {
+    if (/^\s*\[/.test(line)) break;
+    const match = line.match(/^\s*([A-Za-z0-9_-]+)\s*=\s*(.+?)\s*$/);
+    if (!match) continue;
+    values.set(match[1], match[2]);
+  }
+  return values;
+}
+
+function getOmxTopLevelLines(pkgRoot: string, existingConfig = ''): string[] {
   const notifyHookPath = join(pkgRoot, 'scripts', 'notify-hook.js');
   const escapedPath = escapeTomlString(notifyHookPath);
+  const rootValues = parseRootKeyValues(existingConfig);
 
-  return [
+  const lines = [
     '# oh-my-codex top-level settings (must be before any [table])',
     `notify = ["node", "${escapedPath}"]`,
     'model_reasoning_effort = "high"',
     `developer_instructions = "You have oh-my-codex installed. Use /prompts:architect, /prompts:executor, /prompts:planner for specialized agent roles. Workflow skills via $name: $ralph, $autopilot, $plan. AGENTS.md is your orchestration brain."`,
   ];
+
+  const existingModel = rootValues.get('model');
+  const existingContextWindow = rootValues.get('model_context_window');
+  const existingAutoCompact = rootValues.get('model_auto_compact_token_limit');
+  const effectiveModel = existingModel?.match(/^"(.*)"$/)?.[1] ?? DEFAULT_SETUP_MODEL;
+
+  if (!existingModel) {
+    lines.push(`model = "${DEFAULT_SETUP_MODEL}"`);
+  }
+
+  if (
+    effectiveModel == DEFAULT_SETUP_MODEL
+    && !existingContextWindow
+    && !existingAutoCompact
+  ) {
+    lines.push(`model_context_window = ${DEFAULT_SETUP_MODEL_CONTEXT_WINDOW}`);
+    lines.push(`model_auto_compact_token_limit = ${DEFAULT_SETUP_MODEL_AUTO_COMPACT_TOKEN_LIMIT}`);
+  }
+
+  return lines;
 }
 
 /**
@@ -401,6 +438,28 @@ function getOmxTablesBlock(pkgRoot: string, agentsConfigDir: string): string {
  *   3. … user sections …
  *   4. OMX [table] sections (mcp_servers, tui)
  */
+export function buildMergedConfig(
+  existingConfig: string,
+  pkgRoot: string,
+  options: MergeOptions = {}
+): string {
+  let existing = existingConfig;
+
+  if (existing.includes('oh-my-codex (OMX) Configuration')) {
+    const stripped = stripExistingOmxBlocks(existing);
+    existing = stripped.cleaned;
+  }
+
+  existing = stripOmxTopLevelKeys(existing);
+  existing = stripOrphanedOmxSections(existing);
+  existing = upsertFeatureFlags(existing);
+
+  const topLines = getOmxTopLevelLines(pkgRoot, existing);
+  const tablesBlock = getOmxTablesBlock(pkgRoot, options.agentsConfigDir || omxAgentsConfigDir());
+
+  return topLines.join('\n') + '\n\n' + existing.trimEnd() + '\n' + tablesBlock;
+}
+
 export async function mergeConfig(
   configPath: string,
   pkgRoot: string,
@@ -412,31 +471,14 @@ export async function mergeConfig(
     existing = await readFile(configPath, 'utf-8');
   }
 
-  // Strip old OMX table-section block
   if (existing.includes('oh-my-codex (OMX) Configuration')) {
     const stripped = stripExistingOmxBlocks(existing);
-    existing = stripped.cleaned;
     if (options.verbose && stripped.removed > 0) {
       console.log('  Updating existing OMX config block.');
     }
   }
 
-  // Strip any stale OMX top-level keys (from previous runs or wrong positions)
-  existing = stripOmxTopLevelKeys(existing);
-
-  // Strip orphaned OMX table sections that may exist outside the marker block
-  // (legacy configs, or configs where markers were accidentally removed)
-  existing = stripOrphanedOmxSections(existing);
-
-  // Upsert [features] flags
-  existing = upsertFeatureFlags(existing);
-
-  // Build final config:
-  //   top-level keys → existing content (with [features]) → OMX tables block
-  const topLines = getOmxTopLevelLines(pkgRoot);
-  const tablesBlock = getOmxTablesBlock(pkgRoot, options.agentsConfigDir || omxAgentsConfigDir());
-
-  const finalConfig = topLines.join('\n') + '\n\n' + existing.trimEnd() + '\n' + tablesBlock;
+  const finalConfig = buildMergedConfig(existing, pkgRoot, options);
 
   await writeFile(configPath, finalConfig);
   if (options.verbose) {
