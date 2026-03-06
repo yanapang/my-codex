@@ -1,5 +1,5 @@
 ---
-description: "Usability research, heuristic audits, and user evidence synthesis (Sonnet)"
+description: "Usability research, heuristic audits, and user evidence synthesis (STANDARD)"
 argument-hint: "task description"
 ---
 ## Role

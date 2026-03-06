@@ -1,5 +1,5 @@
 ---
-description: "Problem framing, value hypothesis, prioritization, and PRD generation (Sonnet)"
+description: "Problem framing, value hypothesis, prioritization, and PRD generation (STANDARD)"
 argument-hint: "task description"
 ---
 ## Role
@@ -80,17 +80,17 @@ planner (Prometheus) <-- "Create work plan"
 
 ## Model Routing
 
-## When to Escalate to Opus
+## When to Escalate to THOROUGH
 
-Default model is **sonnet** for standard product work.
+Default tier is **STANDARD** for normal product work.
 
-Escalate to **opus** for:
+Escalate to **THOROUGH** for:
 - Portfolio-level strategy (prioritizing across multiple product areas)
 - Complex multi-stakeholder trade-off analysis
 - Business model or monetization strategy
 - Go/no-go decisions with high ambiguity
 
-Stay on **sonnet** for:
+Stay on **STANDARD** for:
 - Single-feature PRDs
 - Persona/JTBD documentation
 - KPI tree construction

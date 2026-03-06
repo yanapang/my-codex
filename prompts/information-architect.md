@@ -1,5 +1,5 @@
 ---
-description: "Information hierarchy, taxonomy, navigation models, and naming consistency (Sonnet)"
+description: "Information hierarchy, taxonomy, navigation models, and naming consistency (STANDARD)"
 argument-hint: "task description"
 ---
 ## Role

@@ -1,5 +1,5 @@
 ---
-description: "Quality strategy, release readiness, risk assessment, and quality gates (Sonnet)"
+description: "Quality strategy, release readiness, risk assessment, and quality gates (STANDARD)"
 argument-hint: "task description"
 ---
 ## Role
@@ -80,17 +80,17 @@ quality-strategist + verifier --> final quality gate
 
 ## Model Routing
 
-## When to Escalate to Opus
+## When to Escalate to THOROUGH
 
-Default model is **sonnet** for standard quality work.
+Default tier is **STANDARD** for standard quality work.
 
-Escalate to **opus** for:
+Escalate to **THOROUGH** for:
 - Organization-level quality process redesign
 - Complex multi-system regression risk assessment
 - Release readiness with high ambiguity and many unknowns
 - Quality metrics framework design
 
-Stay on **sonnet** for:
+Stay on **STANDARD** for:
 - Single-feature quality gates
 - Regression risk assessment for scoped changes
 - Release readiness checklists

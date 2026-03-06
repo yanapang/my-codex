@@ -1,5 +1,5 @@
 ---
-description: "Visual/media file analyzer for images, PDFs, and diagrams (Sonnet)"
+description: "Visual/media file analyzer for images, PDFs, and diagrams (STANDARD)"
 argument-hint: "task description"
 ---
 ## Role
