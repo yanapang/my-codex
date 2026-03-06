@@ -3,9 +3,9 @@
  * Generates per-agent .toml files at ~/.omx/agents/<name>.toml
  */
 
-import { readFile, writeFile, mkdir } from 'fs/promises';
-import { join } from 'path';
 import { existsSync } from 'fs';
+import { mkdir, readFile, writeFile } from 'fs/promises';
+import { join } from 'path';
 import { AGENT_DEFINITIONS, AgentDefinition } from './definitions.js';
 import { omxAgentsConfigDir } from '../utils/paths.js';
 
@@ -15,6 +15,78 @@ const REASONING_EFFORT_MAP: Record<AgentDefinition['model'], string> = {
   sonnet: 'medium',
   opus: 'high',
 };
+
+const POSTURE_OVERLAYS: Record<AgentDefinition['posture'], string> = {
+  'frontier-orchestrator': [
+    '## OMX Posture Overlay',
+    '',
+    'You are operating in the frontier-orchestrator posture.',
+    '- Prioritize intent classification before implementation.',
+    '- Default to delegation and orchestration when specialists exist.',
+    '- Treat the first decision as a routing problem: research vs planning vs implementation vs verification.',
+    '- Challenge flawed user assumptions concisely before execution when the design is likely to cause avoidable problems.',
+    '- Preserve explicit executor handoff boundaries: do not absorb deep implementation work when a specialized executor is more appropriate.',
+  ].join('\n'),
+  'deep-worker': [
+    '## OMX Posture Overlay',
+    '',
+    'You are operating in the deep-worker posture.',
+    '- Once the task is clearly implementation-oriented, bias toward direct execution and end-to-end completion.',
+    '- Explore first, then implement minimal changes that match existing patterns.',
+    '- Keep verification strict: diagnostics, tests, and build evidence are mandatory before claiming completion.',
+    '- Escalate only after materially different approaches fail or when architecture tradeoffs exceed local implementation scope.',
+  ].join('\n'),
+  'fast-lane': [
+    '## OMX Posture Overlay',
+    '',
+    'You are operating in the fast-lane posture.',
+    '- Optimize for fast triage, search, lightweight synthesis, and narrow routing decisions.',
+    '- Do not start deep implementation unless the task is tightly bounded and obvious.',
+    '- If the task expands beyond quick classification or lightweight execution, escalate to a frontier-orchestrator or deep-worker role.',
+    '- Keep responses concise, scope-aware, and conservative under ambiguity.',
+  ].join('\n'),
+};
+
+const MODEL_CLASS_OVERLAYS: Record<AgentDefinition['modelClass'], string> = {
+  frontier: [
+    '## Model-Class Guidance',
+    '',
+    'This role is tuned for frontier-class models.',
+    '- Use the model\'s steerability for coordination, tradeoff reasoning, and precise delegation.',
+    '- Favor clean routing decisions over impulsive implementation.',
+  ].join('\n'),
+  standard: [
+    '## Model-Class Guidance',
+    '',
+    'This role is tuned for standard-capability models.',
+    '- Balance autonomy with clear boundaries.',
+    '- Prefer explicit verification and narrow scope control over speculative reasoning.',
+  ].join('\n'),
+  fast: [
+    '## Model-Class Guidance',
+    '',
+    'This role is tuned for fast/low-latency models.',
+    '- Prefer quick search, synthesis, and routing over prolonged reasoning.',
+    '- Escalate rather than bluff when deeper work is required.',
+  ].join('\n'),
+};
+
+function buildPromptInstructions(agent: AgentDefinition, promptContent: string): string {
+  const instructions = stripFrontmatter(promptContent);
+  return [
+    instructions,
+    '',
+    POSTURE_OVERLAYS[agent.posture],
+    '',
+    MODEL_CLASS_OVERLAYS[agent.modelClass],
+    '',
+    `## OMX Agent Metadata`,
+    `- role: ${agent.name}`,
+    `- posture: ${agent.posture}`,
+    `- model_class: ${agent.modelClass}`,
+    `- routing_role: ${agent.routingRole}`,
+  ].join('\n');
+}
 
 /**
  * Strip YAML frontmatter (between --- markers) from markdown content
@@ -40,7 +112,7 @@ function escapeTomlMultiline(s: string): string {
  * Generate TOML content for a single agent config file
  */
 export function generateAgentToml(agent: AgentDefinition, promptContent: string): string {
-  const instructions = stripFrontmatter(promptContent);
+  const instructions = buildPromptInstructions(agent, promptContent);
   const effort = REASONING_EFFORT_MAP[agent.model];
   const escaped = escapeTomlMultiline(instructions);
 
