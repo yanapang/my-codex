@@ -34,6 +34,15 @@ async function sleep(ms: number): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, ms));
 }
 
+async function waitFor(predicate: () => Promise<boolean>, timeoutMs: number = 3000, stepMs: number = 50): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await sleep(stepMs);
+  }
+  throw new Error(`waitFor timed out after ${timeoutMs}ms`);
+}
+
 function buildFakeTmux(tmuxLogPath: string): string {
   return `#!/usr/bin/env bash
 set -eu
@@ -208,6 +217,8 @@ describe('notify-fallback watcher', () => {
 
       const watcherScript = new URL('../../../scripts/notify-fallback-watcher.js', import.meta.url).pathname;
       const notifyHook = new URL('../../../scripts/notify-hook.js', import.meta.url).pathname;
+      const watcherStatePath = join(wd, '.omx', 'state', 'notify-fallback-state.json');
+      const turnLog = join(wd, '.omx', 'logs', `turns-${new Date().toISOString().split('T')[0]}.jsonl`);
       const child = spawn(
         process.execPath,
         [watcherScript, '--cwd', wd, '--notify-script', notifyHook, '--poll-ms', '75'],
@@ -217,7 +228,15 @@ describe('notify-fallback watcher', () => {
           env: { ...process.env, HOME: tempHome },
         }
       );
-      await sleep(150);
+
+      await waitFor(async () => {
+        try {
+          const state = JSON.parse(await readFile(watcherStatePath, 'utf-8'));
+          return state.tracked_files === 1;
+        } catch {
+          return false;
+        }
+      });
 
       await appendLine(rolloutPath, {
         timestamp: new Date(Date.now() + 500).toISOString(),
@@ -229,11 +248,14 @@ describe('notify-fallback watcher', () => {
         },
       });
 
-      await sleep(500);
+      await waitFor(async () => {
+        const turnLines = await readLines(turnLog);
+        return turnLines.length === 1 && new RegExp(newTurn).test(turnLines[0] ?? '');
+      }, 4000, 75);
+
       child.kill('SIGTERM');
       await sleep(100);
 
-      const turnLog = join(wd, '.omx', 'logs', `turns-${new Date().toISOString().split('T')[0]}.jsonl`);
       const turnLines = await readLines(turnLog);
       assert.equal(turnLines.length, 1);
       assert.match(turnLines[0], new RegExp(newTurn));
