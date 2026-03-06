@@ -1,4 +1,5 @@
 import { describe, it } from 'node:test';
+import { once } from 'node:events';
 import assert from 'node:assert/strict';
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -254,7 +255,7 @@ describe('notify-fallback watcher', () => {
       }, 4000, 75);
 
       child.kill('SIGTERM');
-      await sleep(100);
+      await once(child, 'exit');
 
       const turnLines = await readLines(turnLog);
       assert.equal(turnLines.length, 1);
