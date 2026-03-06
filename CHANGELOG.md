@@ -4,6 +4,28 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-03-06
+
+Generated from `v0.8.3..dev` (non-merge commits) and release validation on `dev`.
+
+### Changed
+- Bumped package version to `0.8.4`.
+- `omx setup` now refreshes managed OMX artifacts by default while preserving backups of overwritten files where applicable.
+
+### Added
+- Setup refresh coverage for managed artifact replacement, scope-aware updates, and uninstall compatibility paths.
+
+### Fixed
+- Setup now prompts before upgrading managed Codex model references from `gpt-5.3-codex` to `gpt-5.4`, reducing surprise config churn during refreshes.
+- Config generation and setup refresh flows are more idempotent and resilient across repeated runs and scoped installs.
+
+### Docs
+- Refreshed setup guidance in the README to document the new refresh/upgrade behavior.
+
+### CI / Test
+- Hardened the notify-fallback watcher streaming test to wait for watcher shutdown before temp-directory cleanup during full-suite runs.
+- Removed an unused setup overwrite prompt code path caught by the `check:no-unused` release gate.
+
 ## [0.8.3] - 2026-03-06
 
 Generated from the Gemini worker hotfix on `dev`, plus release-validation hardening and verification on `dev`.

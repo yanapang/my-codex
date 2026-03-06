@@ -280,28 +280,6 @@ async function promptForSetupScope(
   }
 }
 
-async function promptForAgentsOverwrite(): Promise<boolean> {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    return false;
-  }
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-  try {
-    const answer = (
-      await rl.question(
-        "AGENTS.md already exists. Overwrite with template? [y/N]: ",
-      )
-    )
-      .trim()
-      .toLowerCase();
-    return answer === "y" || answer === "yes";
-  } finally {
-    rl.close();
-  }
-}
-
 async function promptForModelUpgrade(
   currentModel: string,
   targetModel: string,
@@ -367,7 +345,6 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
     dryRun = false,
     scope: requestedScope,
     verbose = false,
-    agentsOverwritePrompt,
     modelUpgradePrompt,
   } = options;
   const pkgRoot = getPackageRoot();
