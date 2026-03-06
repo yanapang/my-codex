@@ -121,6 +121,54 @@ User
     -> .omx/ (runtime state, memory, plans, logs)
 ```
 
+## Experimental: posture-aware routing
+
+This branch includes an experimental routing layer that separates:
+
+- `role`: agent responsibility (`executor`, `planner`, `architect`)
+- `tier`: reasoning depth / cost (`LOW`, `STANDARD`, `THOROUGH`)
+- `posture`: operating style (`frontier-orchestrator`, `deep-worker`, `fast-lane`)
+
+Current intent of the experiment:
+
+- **Frontier-orchestrator**: leader/router posture for steerable frontier models
+- **Deep-worker**: implementation-first posture for executor-style roles
+- **Fast-lane**: lightweight triage/search posture for fast models
+
+This is designed to make OMX's initial routing behavior more Sisyphus-like without removing the existing Hephaestus-like execution lane.
+
+### How to test this experiment
+
+1. Build the project:
+
+```bash
+npm run build
+```
+
+2. Reinstall native agent configs:
+
+```bash
+node bin/omx.js setup
+```
+
+3. Inspect generated native agent configs in `~/.omx/agents/` and confirm they now include:
+   - `## OMX Posture Overlay`
+   - `## Model-Class Guidance`
+   - `## OMX Agent Metadata`
+
+4. Spot-check representative roles:
+   - `planner` / `architect` / `critic` -> `frontier-orchestrator`
+   - `executor` / `build-fixer` / `test-engineer` -> `deep-worker`
+   - `explore` / `writer` -> `fast-lane`
+
+5. Run focused tests:
+
+```bash
+node --test dist/agents/__tests__/definitions.test.js dist/agents/__tests__/native-config.test.js
+```
+
+This experiment currently changes native prompt generation and metadata, not the full prose of every prompt file.
+
 ## Main Commands
 
 ```bash
