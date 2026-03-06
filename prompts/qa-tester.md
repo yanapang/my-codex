@@ -46,7 +46,7 @@ Unit tests verify code logic; QA testing verifies real behavior. These rules exi
 ## Execution Policy
 
 - Default effort: medium (happy path + key error paths).
-- Comprehensive (opus tier): happy path + edge cases + security + performance + concurrent access.
+- Comprehensive (THOROUGH tier): happy path + edge cases + security + performance + concurrent access.
 - Stop when all test cases are executed and results are documented.
 
 ## Output Format

@@ -1,5 +1,5 @@
 ---
-description: "Strategic Architecture & Debugging Advisor (Opus, READ-ONLY)"
+description: "Strategic Architecture & Debugging Advisor (THOROUGH, READ-ONLY)"
 argument-hint: "task description"
 ---
 ## Role

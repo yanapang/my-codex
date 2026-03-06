@@ -54,19 +54,19 @@ Most non-trivial software tasks require coordinated phases: understanding requir
 1. **Phase 0 - Expansion**: Turn the user's idea into a detailed spec
    - If `.omx/specs/deep-interview-*.md` exists for this task: reuse it and skip redundant expansion work
    - If prompt is highly vague: route to `$deep-interview` for Socratic ambiguity-gated clarification
-   - Analyst (Opus): Extract requirements
-   - Architect (Opus): Create technical specification
+   - Analyst (THOROUGH tier): Extract requirements
+   - Architect (THOROUGH tier): Create technical specification
    - Output: `.omx/plans/autopilot-spec.md`
 
 2. **Phase 1 - Planning**: Create an implementation plan from the spec
-   - Architect (Opus): Create plan (direct mode, no interview)
-   - Critic (Opus): Validate plan
+   - Architect (THOROUGH tier): Create plan (direct mode, no interview)
+   - Critic (THOROUGH tier): Validate plan
    - Output: `.omx/plans/autopilot-impl.md`
 
 3. **Phase 2 - Execution**: Implement the plan using Ralph + Ultrawork
-   - Executor-low (Haiku): Simple tasks
-   - Executor (Sonnet): Standard tasks
-   - Executor-high (Opus): Complex tasks
+   - LOW-tier executor/search roles: Simple tasks
+   - STANDARD-tier executor roles: Standard tasks
+   - THOROUGH-tier executor/architect roles: Complex tasks
    - Run independent tasks in parallel
 
 4. **Phase 3 - QA**: Cycle until all tests pass (UltraQA mode)

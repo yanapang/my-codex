@@ -1,5 +1,5 @@
 ---
-description: "Work plan review expert and critic (Opus)"
+description: "Work plan review expert and critic (THOROUGH)"
 argument-hint: "task description"
 ---
 ## Role

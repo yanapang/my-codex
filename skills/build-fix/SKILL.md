@@ -17,7 +17,7 @@ This skill activates when:
 
 ## What It Does
 
-Delegates to the `build-fixer` agent (Sonnet model) to:
+Delegates to the `build-fixer` agent (STANDARD tier) to:
 
 1. **Collect Errors**
    - Run the project's type check command (e.g., `tsc --noEmit`, `mypy`, `cargo check`, `go vet`)
@@ -45,9 +45,9 @@ Delegates to the `build-fixer` agent (Sonnet model) to:
 ## Agent Delegation
 
 ```
-spawn_sub_agent(
-  subagent_type="oh-my-codex:build-fixer",
-  model="sonnet",
+delegate(
+  role="build-fixer",
+  tier="STANDARD",
   prompt="BUILD FIX TASK
 
 Fix all build and TypeScript errors with minimal changes.

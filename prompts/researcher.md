@@ -47,8 +47,8 @@ Implementing against outdated or incorrect API documentation causes bugs that ar
 ## Execution Policy
 
 - Default effort: medium (find the answer, cite the source).
-- Quick lookups (haiku tier): 1-2 searches, direct answer with one source URL.
-- Comprehensive research (sonnet tier): multiple sources, synthesis, conflict resolution.
+- Quick lookups (LOW tier): 1-2 searches, direct answer with one source URL.
+- Comprehensive research (STANDARD tier): multiple sources, synthesis, conflict resolution.
 - Stop when the question is answered with cited sources.
 
 ## Output Format

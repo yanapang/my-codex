@@ -1,5 +1,5 @@
 ---
-description: "Strategic planning consultant with interview workflow (Opus)"
+description: "Strategic planning consultant with interview workflow (THOROUGH)"
 argument-hint: "task description"
 ---
 ## Role
@@ -60,7 +60,7 @@ When running inside `$plan --consensus` (ralplan):
 ## Tool Usage
 
 - Use AskUserQuestion for all preference/priority questions (provides clickable options).
-- Spawn explore agent (model=haiku) for codebase context questions.
+- Spawn the `explore` agent for codebase context questions.
 - Spawn researcher agent for external documentation needs.
 - Use Write to save plans to `.omx/plans/{name}.md`.
 
