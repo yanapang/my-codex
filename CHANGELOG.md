@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-03-06
+
+7 non-merge commits from `v0.8.4..dev`. Contributors: [@Yeachan-Heo](https://github.com/Yeachan-Heo), [@HaD0Yun](https://github.com/HaD0Yun), [@sjals93](https://github.com/sjals93).
+
+### Added
+- **Posture-aware agent routing** — agents now carry Sisyphus-style posture metadata (`frontier-orchestrator`, `deep-worker`, `fast-lane`) that separates role, reasoning tier, and operating style. Native agent configs include `## OMX Posture Overlay`, `## Model-Class Guidance`, and `## OMX Agent Metadata` sections. (PR [#588](https://github.com/Yeachan-Heo/oh-my-codex/pull/588), [#592](https://github.com/Yeachan-Heo/oh-my-codex/pull/592) — @HaD0Yun)
+- **Maintainers section** added to README with @Yeachan-Heo and @HaD0Yun.
+
+### Fixed
+- **Windows ESM import crash** — `bin/omx.js` now converts absolute paths to `file://` URLs before `import()`, fixing `ERR_UNSUPPORTED_ESM_URL_SCHEME` on Windows. (PR [#589](https://github.com/Yeachan-Heo/oh-my-codex/pull/589) — @sjals93, fixes [#557](https://github.com/Yeachan-Heo/oh-my-codex/issues/557))
+- **tmux capture-pane history flag** — replaced invalid `-l` flag with the correct `-S` negative-offset form so `capture-pane` actually returns recent output. (PR [#593](https://github.com/Yeachan-Heo/oh-my-codex/pull/593), fixes [#591](https://github.com/Yeachan-Heo/oh-my-codex/issues/591))
+- **Legacy model alias cleanup** — removed stale `gpt-5.3-codex` / `o3` references from 15 prompt files and runtime agent metadata generation, preventing confusion when posture routing is active. (part of PR [#592](https://github.com/Yeachan-Heo/oh-my-codex/pull/592))
+
 ## [0.8.4] - 2026-03-06
 
 Generated from `v0.8.3..dev` (non-merge commits) and release validation on `dev`.
