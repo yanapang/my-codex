@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-03-06
+
+Generated from the Gemini worker hotfix on `dev`, plus release-validation hardening and verification on `dev`.
+
+### Changed
+- Bumped package version to `0.8.3`.
+
+### Fixed
+- Team runtime now seeds Gemini workers with a prompt-interactive launch (`--approval-mode yolo -i <inbox prompt>`) instead of relying on stdin-only startup behavior (`#585`).
+- Gemini workers now drop non-Gemini default model passthroughs unless an explicit Gemini model was requested, preventing invalid mixed-provider startup args (`#585`).
+- Expanded runtime and tmux-session coverage for Gemini prompt-mode worker startup and argument translation (`#585`).
+
+### CI / Test
+- Hardened the notify-fallback watcher streaming test to wait for watcher readiness before asserting EOF-tail behavior during full-suite runs.
+
+
 ## [0.8.2] - 2026-03-06
 
 Generated from `v0.8.1..dev` (non-merge commits) and release validation on `dev`.
