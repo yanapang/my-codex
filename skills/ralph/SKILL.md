@@ -41,9 +41,9 @@ Complex tasks often fail silently: partial implementations get declared "done", 
 1. **Review progress**: Check TODO list and any prior iteration state
 2. **Continue from where you left off**: Pick up incomplete tasks
 3. **Delegate in parallel**: Route tasks to specialist agents at appropriate tiers
-   - Simple lookups: LOW tier (Haiku) -- "What does this function return?"
-   - Standard work: MEDIUM tier (Sonnet) -- "Add error handling to this module"
-   - Complex analysis: HIGH tier (Opus) -- "Debug this race condition"
+   - Simple lookups: LOW tier -- "What does this function return?"
+   - Standard work: STANDARD tier -- "Add error handling to this module"
+   - Complex analysis: THOROUGH tier -- "Debug this race condition"
 4. **Run long operations in background**: Builds, installs, test suites use `run_in_background: true`
 5. **Visual task gate (when screenshot/reference images are present)**:
    - Run `$visual-verdict` **before every next edit**.
@@ -57,9 +57,9 @@ Complex tasks often fail silently: partial implementations get declared "done", 
    c. Read the output -- confirm it actually passed
    d. Check: zero pending/in_progress TODO items
 7. **Architect verification** (tiered):
-   - <5 files, <100 lines with full tests: STANDARD tier minimum (architect-medium / Sonnet)
-   - Standard changes: STANDARD tier (architect-medium / Sonnet)
-   - >20 files or security/architectural changes: THOROUGH tier (architect / Opus)
+   - <5 files, <100 lines with full tests: STANDARD tier minimum (architect role)
+   - Standard changes: STANDARD tier (architect role)
+   - >20 files or security/architectural changes: THOROUGH tier (architect role)
    - Ralph floor: always at least STANDARD, even for small changes
 8. **On approval**: Run `/cancel` to cleanly exit and clean up all state files
 9. **On rejection**: Fix the issues raised, then re-verify at the same tier
@@ -92,9 +92,9 @@ Use the `omx_state` MCP server tools (`state_write`, `state_read`, `state_clear`
 <Good>
 Correct parallel delegation:
 ```
-spawn_sub_agent(subagent_type="oh-my-codex:executor-low", model="haiku", prompt="Add type export for UserConfig")
-spawn_sub_agent(subagent_type="oh-my-codex:executor", model="sonnet", prompt="Implement the caching layer for API responses")
-spawn_sub_agent(subagent_type="oh-my-codex:executor-high", model="opus", prompt="Refactor auth module to support OAuth2 flow")
+delegate(role="executor", tier="LOW", task="Add type export for UserConfig")
+delegate(role="executor", tier="STANDARD", task="Implement the caching layer for API responses")
+delegate(role="executor", tier="THOROUGH", task="Refactor auth module to support OAuth2 flow")
 ```
 Why good: Three independent tasks fired simultaneously at appropriate tiers.
 </Good>
@@ -105,7 +105,7 @@ Correct verification before completion:
 1. Run: npm test           → Output: "42 passed, 0 failed"
 2. Run: npm run build      → Output: "Build succeeded"
 3. Run: lsp_diagnostics    → Output: 0 errors
-4. Spawn architect-medium  → Verdict: "APPROVED"
+4. Delegate to architect at STANDARD tier  → Verdict: "APPROVED"
 5. Run /cancel
 ```
 Why good: Fresh evidence at each step, architect verification, then clean exit.
@@ -120,9 +120,9 @@ Why bad: Uses "should" and "look good" -- no fresh test/build output, no archite
 <Bad>
 Sequential execution of independent tasks:
 ```
-spawn_sub_agent(executor-low, "Add type export") → wait →
-spawn_sub_agent(executor, "Implement caching") → wait →
-spawn_sub_agent(executor-high, "Refactor auth")
+delegate(executor, LOW, "Add type export") → wait →
+delegate(executor, STANDARD, "Implement caching") → wait →
+delegate(executor, THOROUGH, "Refactor auth")
 ```
 Why bad: These are independent tasks that should run in parallel, not sequentially.
 </Bad>

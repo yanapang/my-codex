@@ -12,7 +12,7 @@ describe('agents/native-config', () => {
     const agent: AgentDefinition = {
       name: 'executor',
       description: 'Code implementation',
-      model: 'sonnet',
+      reasoningEffort: 'medium',
       posture: 'deep-worker',
       modelClass: 'standard',
       routingRole: 'executor',

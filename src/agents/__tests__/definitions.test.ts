@@ -22,6 +22,7 @@ describe('agents/definitions', () => {
       const agent = AGENT_DEFINITIONS[name];
       assert.equal(agent.name, name);
       assert.ok(agent.description.length > 0);
+      assert.ok(agent.reasoningEffort.length > 0);
       assert.ok(agent.posture.length > 0);
       assert.ok(agent.modelClass.length > 0);
       assert.ok(agent.routingRole.length > 0);

@@ -46,8 +46,8 @@ Adopting the wrong dependency creates long-term maintenance burden and security 
 ## Execution Policy
 
 - Default effort: medium (evaluate top 2-3 candidates).
-- Quick lookup (haiku tier): single package version/compatibility check.
-- Comprehensive evaluation (sonnet tier): multi-candidate comparison with full evaluation framework.
+- Quick lookup (LOW tier): single package version/compatibility check.
+- Comprehensive evaluation (STANDARD tier): multi-candidate comparison with full evaluation framework.
 - Stop when recommendation is clear and backed by evidence.
 
 ## Output Format

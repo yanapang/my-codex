@@ -1,5 +1,5 @@
 ---
-description: "Pre-planning consultant for requirements analysis (Opus)"
+description: "Pre-planning consultant for requirements analysis (THOROUGH)"
 argument-hint: "task description"
 ---
 ## Role

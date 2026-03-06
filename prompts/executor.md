@@ -1,5 +1,5 @@
 ---
-description: "Autonomous deep executor for goal-oriented implementation (Sonnet)"
+description: "Autonomous deep executor for goal-oriented implementation (STANDARD)"
 argument-hint: "task description"
 ---
 ## Role

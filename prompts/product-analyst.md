@@ -1,5 +1,5 @@
 ---
-description: "Product metrics, event schemas, funnel analysis, and experiment measurement design (Sonnet)"
+description: "Product metrics, event schemas, funnel analysis, and experiment measurement design (STANDARD)"
 argument-hint: "task description"
 ---
 ## Role

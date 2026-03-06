@@ -9,13 +9,6 @@ import { join } from 'path';
 import { AGENT_DEFINITIONS, AgentDefinition } from './definitions.js';
 import { omxAgentsConfigDir } from '../utils/paths.js';
 
-// Map OMX model tiers to Codex reasoning effort levels
-const REASONING_EFFORT_MAP: Record<AgentDefinition['model'], string> = {
-  haiku: 'low',
-  sonnet: 'medium',
-  opus: 'high',
-};
-
 const POSTURE_OVERLAYS: Record<AgentDefinition['posture'], string> = {
   'frontier-orchestrator': [
     '## OMX Posture Overlay',
@@ -113,7 +106,7 @@ function escapeTomlMultiline(s: string): string {
  */
 export function generateAgentToml(agent: AgentDefinition, promptContent: string): string {
   const instructions = buildPromptInstructions(agent, promptContent);
-  const effort = REASONING_EFFORT_MAP[agent.model];
+  const effort = agent.reasoningEffort;
   const escaped = escapeTomlMultiline(instructions);
 
   return [

@@ -53,7 +53,7 @@ Jumping into code without understanding requirements leads to rework, scope cree
 2. **Ask one focused question** using `AskUserQuestion` for preferences, scope, and constraints
 3. **Gather codebase facts first**: Before asking "what patterns does your code use?", spawn an `explore` agent to find out, then ask informed follow-up questions
 4. **Build on answers**: Each question builds on the previous answer
-5. **Consult Analyst** (Opus) for hidden requirements, edge cases, and risks
+5. **Consult Analyst** (THOROUGH tier) for hidden requirements, edge cases, and risks
 6. **Create plan** when the user signals readiness: "create the plan", "I'm ready", "make it a work plan"
 
 ### Direct Mode (detailed requests)
@@ -127,7 +127,7 @@ Plans are saved to `.omx/plans/`. Drafts go to `.omx/drafts/`.
 - Before first MCP tool use, call `ToolSearch("mcp")` to discover deferred MCP tools
 - Use `AskUserQuestion` for preference questions (scope, priority, timeline, risk tolerance) -- provides clickable UI
 - Use plain text for questions needing specific values (port numbers, names, follow-up clarifications)
-- Use `explore` agent (Haiku, 30s timeout) to gather codebase facts before asking the user
+- Use the `explore` agent (LOW tier, bounded quick pass) to gather codebase facts before asking the user
 - Use `ask_codex` with `agent_role: "planner"` for planning validation on large-scope plans
 - Use `ask_codex` with `agent_role: "analyst"` for requirements analysis
 - Use `ask_codex` with `agent_role: "critic"` for plan review in consensus and review modes

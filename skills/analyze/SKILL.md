@@ -38,7 +38,7 @@ Deep investigation requires a different approach than quick lookups or code chan
 2. **Gather relevant context**: Read or identify the key files involved
 3. **Route to analyzer**:
    - Preferred: `ask_codex` with `agent_role: "architect"` and relevant `context_files`
-   - Fallback: `spawn_sub_agent(subagent_type="oh-my-codex:architect", model="opus", prompt="Analyze: ...")`
+   - Fallback: delegate to the `architect` role at THOROUGH tier with the analysis request
 4. **Return structured findings**: Present the analysis with evidence, file references, and actionable recommendations
 </Steps>
 
@@ -46,7 +46,7 @@ Deep investigation requires a different approach than quick lookups or code chan
 - Before first MCP tool use, call `ToolSearch("mcp")` to discover deferred MCP tools
 - Use `ask_codex` with `agent_role: "architect"` as the preferred analysis route
 - Pass `context_files` with all relevant source files for grounded analysis
-- Use `spawn_sub_agent(subagent_type="oh-my-codex:architect", model="opus", ...)` as fallback when ToolSearch finds no MCP tools or Codex is unavailable
+- Use the `architect` role as fallback when ToolSearch finds no MCP tools or Codex is unavailable
 - For broad analysis, use `explore` agent first to identify relevant files before routing to architect
 </Tool_Usage>
 

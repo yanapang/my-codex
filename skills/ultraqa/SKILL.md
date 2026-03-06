@@ -39,7 +39,7 @@ If no structured goal provided, interpret the argument as a custom goal.
    - `--custom`: Run appropriate command and check for pattern
    - `--interactive`: Use qa-tester for interactive CLI/service testing:
      ```
-     spawn_sub_agent(subagent_type="oh-my-codex:qa-tester", model="sonnet", prompt="TEST:
+     delegate(role="qa-tester", tier="STANDARD", task="TEST:
      Goal: [describe what to verify]
      Service: [how to start]
      Test cases: [specific scenarios to verify]")
@@ -51,7 +51,7 @@ If no structured goal provided, interpret the argument as a custom goal.
 
 3. **ARCHITECT DIAGNOSIS**: Spawn architect to analyze failure
    ```
-   spawn_sub_agent(subagent_type="oh-my-codex:architect", model="opus", prompt="DIAGNOSE FAILURE:
+   delegate(role="architect", tier="THOROUGH", task="DIAGNOSE FAILURE:
    Goal: [goal type]
    Output: [test/build output]
    Provide root cause and specific fix recommendations.")
@@ -59,7 +59,7 @@ If no structured goal provided, interpret the argument as a custom goal.
 
 4. **FIX ISSUES**: Apply architect's recommendations
    ```
-   spawn_sub_agent(subagent_type="oh-my-codex:executor", model="sonnet", prompt="FIX:
+   delegate(role="executor", tier="STANDARD", task="FIX:
    Issue: [architect diagnosis]
    Files: [affected files]
    Apply the fix precisely as recommended.")
