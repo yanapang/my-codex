@@ -92,7 +92,7 @@ describe('omx setup skills overwrite behavior', () => {
     }
   });
 
-  it('preserves existing skill files unless --force is set', async () => {
+  it('refreshes existing skill files by default and restores packaged content', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-setup-skills-'));
     const previousCwd = process.cwd();
     try {
@@ -109,7 +109,10 @@ describe('omx setup skills overwrite behavior', () => {
       await writeFile(skillPath, customized);
 
       await setup({ scope: 'project' });
-      assert.equal(await readFile(skillPath, 'utf-8'), customized);
+      assert.equal(await readFile(skillPath, 'utf-8'), installed);
+
+      const backupsRoot = join(wd, '.omx', 'backups', 'setup');
+      assert.equal(existsSync(backupsRoot), true);
 
       await setup({ scope: 'project', force: true });
       assert.equal(await readFile(skillPath, 'utf-8'), installed);
@@ -139,6 +142,7 @@ describe('omx setup skills overwrite behavior', () => {
       const output = logs.join('\n');
       assert.match(output, /skipped swarm\/ \(status: alias\)/);
       assert.match(output, /removed stale skill swarm\/ \(status: alias\)/);
+      assert.match(output, /skills: updated=/);
     } finally {
       console.log = originalLog;
       process.chdir(previousCwd);
