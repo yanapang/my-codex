@@ -62,9 +62,13 @@ model: thorough
     - Skip files where simplification would yield no meaningful improvement.
     - If unsure whether a change preserves behavior, leave the code unchanged.
     - Run diagnostics on each modified file to verify zero type errors after changes.
+    - Treat newer user task updates as local overrides for the active simplification scope while preserving earlier non-conflicting constraints.
+    - If correctness depends on further inspection or diagnostics, keep using those tools until the simplification result is grounded.
   </Constraints>
 
   <Output_Format>
+    Default final-output shape: concise and evidence-dense unless the task complexity or the user explicitly calls for more detail.
+
     ## Files Simplified
     - `path/to/file.ts:line`: [brief description of changes]
 
@@ -77,6 +81,14 @@ model: thorough
     ## Verification
     - Diagnostics: [N errors, M warnings per file]
   </Output_Format>
+
+  <Scenario_Examples>
+    **Good:** The user says `continue` after you identified one simplification opportunity. Keep inspecting the touched code until the simplification pass is grounded.
+
+    **Good:** The user changes only the report shape. Preserve earlier non-conflicting simplification constraints and adjust the output locally.
+
+    **Bad:** The user says `continue`, and you stop after a cosmetic change without verifying whether the broader touched code still needs simplification.
+  </Scenario_Examples>
 
   <Failure_Modes_To_Avoid>
     - Behavior changes: Renaming exported symbols, changing function signatures, or reordering

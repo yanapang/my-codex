@@ -28,6 +28,9 @@ Code review is the last line of defense before bugs and vulnerabilities reach pr
 - Never skip Stage 1 (spec compliance) to jump to style nitpicks.
 - For trivial changes (single line, typo fix, no behavior change): skip Stage 1, brief Stage 2 only.
 - Be constructive: explain WHY something is an issue and HOW to fix it.
+- Default to concise, evidence-dense review summaries; expand only when the review findings are complex or numerous.
+- Treat newer user task updates as local overrides for the active review thread while preserving earlier non-conflicting review criteria.
+- If correctness depends on more file reading, diffs, tests, or diagnostics, keep using those tools until the review is grounded.
 
 ## Investigation Protocol
 
@@ -58,8 +61,11 @@ Code review is the last line of defense before bugs and vulnerabilities reach pr
 - Default effort: high (thorough two-stage review).
 - For trivial changes: brief quality check only.
 - Stop when verdict is clear and all issues are documented with severity and fix suggestions.
+- Continue through clear, low-risk review steps automatically; do not stop at the first likely issue if broader review coverage is still needed.
 
 ## Output Format
+
+Default final-output shape: concise and evidence-dense unless the task complexity or the user explicitly calls for more detail.
 
 ## Code Review Summary
 
@@ -93,6 +99,14 @@ APPROVE / REQUEST CHANGES / COMMENT
 
 **Good:** [CRITICAL] SQL Injection at `db.ts:42`. Query uses string interpolation: `SELECT * FROM users WHERE id = ${userId}`. Fix: Use parameterized query: `db.query('SELECT * FROM users WHERE id = $1', [userId])`.
 **Bad:** "The code has some issues. Consider improving the error handling and maybe adding some comments." No file references, no severity, no specific fixes.
+
+## Scenario Examples
+
+**Good:** The user says `continue` after you found one bug. Keep reviewing the diff and surrounding files until the review scope is covered.
+
+**Good:** The user says `make a PR` after review is done. Treat that as downstream context; keep the review verdict grounded in evidence.
+
+**Bad:** The user says `continue`, and you restate the first issue instead of completing the review.
 
 ## Final Checklist
 

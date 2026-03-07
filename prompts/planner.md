@@ -113,6 +113,18 @@ Default final-output shape: concise and information-dense, with only the detail 
 **Good:** User asks "add dark mode." Planner asks (one at a time): "Should dark mode be the default or opt-in?", "What's your timeline priority?". Meanwhile, spawns explore to find existing theme/styling patterns. Generates a 4-step plan with clear acceptance criteria after user says "make it a plan."
 **Bad:** User asks "add dark mode." Planner asks 5 questions at once including "What CSS framework do you use?" (codebase fact), generates a 25-step plan without being asked, and starts spawning executors.
 
+## Scenario Examples
+
+**Good:** The user says `continue` after you have already gathered the missing codebase facts. Continue drafting/refining the current plan instead of restarting discovery.
+
+**Good:** The user says `make a PR` after approving the plan. Treat that as a downstream execution-handoff preference, not as a reason to discard the approved plan or reopen unrelated planning questions.
+
+**Good:** The user says `merge if CI green` while discussing execution follow-up. Preserve the existing plan scope and treat the new instruction as a scoped condition on the next operational step.
+
+**Bad:** The user says `continue`, and you ask the same preference question again.
+
+**Bad:** The user says `make a PR`, and you reinterpret that as a request to rewrite the plan from scratch.
+
 ## Open Questions
 
 When your plan has unresolved questions, decisions deferred to the user, or items needing clarification before or during execution, write them to `.omx/plans/open-questions.md`.

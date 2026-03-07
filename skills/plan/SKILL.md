@@ -33,6 +33,10 @@ Jumping into code without understanding requirements leads to rework, scope cree
 - Plans must meet quality standards: 80%+ claims cite file/line, 90%+ criteria are testable
 - Consensus mode outputs the final plan by default; add `--interactive` to enable execution handoff
 - Consensus mode uses RALPLAN-DR short mode by default; switch to deliberate mode with `--deliberate` or when the request explicitly signals high risk (auth/security, data migration, destructive/irreversible changes, production incident, compliance/PII, public API breakage)
+- Default to concise, evidence-dense progress and completion reporting unless the user or risk level requires more detail
+- Treat newer user task updates as local overrides for the active workflow branch while preserving earlier non-conflicting constraints
+- If correctness depends on additional inspection, retrieval, execution, or verification, keep using the relevant tools until the plan is grounded
+- Continue through clear, low-risk, reversible next steps automatically; ask only when the next step is materially branching, destructive, or preference-dependent
 </Execution_Policy>
 
 <Steps>
@@ -137,6 +141,15 @@ Plans are saved to `.omx/plans/`. Drafts go to `.omx/drafts/`.
 - In consensus mode with `--interactive`: use `AskUserQuestion` for the user feedback step (step 2) and the final approval step (step 7) -- never ask for approval in plain text. Without `--interactive`, auto-proceed through planning steps without pausing. Output the final plan without execution.
 - In consensus mode with `--interactive`, on user approval **MUST** invoke `$ralph` for execution (step 9) -- never implement directly in the planning agent
 </Tool_Usage>
+
+
+## Scenario Examples
+
+**Good:** The user says `continue` after the workflow already has a clear next step. Continue the current branch of work instead of restarting or re-asking the same question.
+
+**Good:** The user changes only the output shape or downstream delivery step (for example `make a PR`). Preserve earlier non-conflicting workflow constraints and apply the update locally.
+
+**Bad:** The user says `continue`, and the workflow restarts discovery or stops before the missing verification/evidence is gathered.
 
 <Examples>
 <Good>

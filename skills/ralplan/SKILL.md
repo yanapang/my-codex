@@ -26,6 +26,13 @@ $ralplan --interactive "task description"
 
 ## Behavior
 
+## GPT-5.4 Guidance Alignment
+
+- Default to concise, evidence-dense progress and completion reporting unless the user or risk level requires more detail.
+- Treat newer user task updates as local overrides for the active workflow branch while preserving earlier non-conflicting constraints.
+- If correctness depends on additional inspection, retrieval, execution, or verification, keep using the relevant tools until the consensus-planning flow is grounded.
+- Continue through clear, low-risk, reversible next steps automatically; ask only when the next step is materially branching, destructive, or preference-dependent.
+
 This skill invokes the Plan skill in consensus mode:
 
 ```
@@ -147,3 +154,11 @@ The gate auto-passes when it detects **any** concrete signal. You do not need al
 | Want to bypass the gate | Prefix with `force:` or `!` (e.g., `force: ralph fix it`) |
 | Gate does not fire on a vague prompt | The gate only catches prompts with <=15 effective words and no concrete anchors; add more detail or use `$ralplan` explicitly |
 | Redirected to ralplan but want to skip planning | In the ralplan workflow, say "just do it" or "skip planning" to transition directly to execution |
+
+## Scenario Examples
+
+**Good:** The user says `continue` after the workflow already has a clear next step. Continue the current branch of work instead of restarting or re-asking the same question.
+
+**Good:** The user changes only the output shape or downstream delivery step (for example `make a PR`). Preserve earlier non-conflicting workflow constraints and apply the update locally.
+
+**Bad:** The user says `continue`, and the workflow restarts discovery or stops before the missing verification/evidence is gathered.

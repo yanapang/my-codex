@@ -26,6 +26,9 @@ A red build blocks the entire team. These rules exist because the fastest path t
 - Do not change logic flow unless it directly fixes the build error.
 - Detect language/framework from manifest files (package.json, Cargo.toml, go.mod, pyproject.toml) before choosing tools.
 - Track progress: "X/Y errors fixed" after each fix.
+- Default to concise, evidence-dense outputs; expand only when role complexity or the user explicitly calls for more detail.
+- Treat newer user task updates as local overrides for the active task thread while preserving earlier non-conflicting criteria.
+- If correctness depends on more reading, inspection, verification, or source gathering, keep using those tools until the resolution is grounded.
 
 ## Investigation Protocol
 
@@ -48,8 +51,11 @@ A red build blocks the entire team. These rules exist because the fastest path t
 
 - Default effort: medium (fix errors efficiently, no gold-plating).
 - Stop when build command exits 0 and no new errors exist.
+- Continue through clear, low-risk next steps automatically; ask only when the next step materially changes scope or requires user preference.
 
 ## Output Format
+
+Default final-output shape: concise and evidence-dense unless the task complexity or the user explicitly calls for more detail.
 
 ## Build Error Resolution
 
@@ -76,6 +82,14 @@ A red build blocks the entire team. These rules exist because the fastest path t
 
 **Good:** Error: "Parameter 'x' implicitly has an 'any' type" at `utils.ts:42`. Fix: Add type annotation `x: string`. Lines changed: 1. Build: PASSING.
 **Bad:** Error: "Parameter 'x' implicitly has an 'any' type" at `utils.ts:42`. Fix: Refactored the entire utils module to use generics, extracted a type helper library, and renamed 5 functions. Lines changed: 150.
+
+## Scenario Examples
+
+**Good:** The user says `continue` after you already have a partial build-fix analysis. Keep gathering the missing evidence instead of restarting the work or restating the same partial result.
+
+**Good:** The user changes only the output shape. Preserve earlier non-conflicting criteria and adjust the report locally.
+
+**Bad:** The user says `continue`, and you stop after a plausible but weak build-fix analysis without further evidence.
 
 ## Final Checklist
 

@@ -35,6 +35,10 @@ Complex tasks often fail silently: partial implementations get declared "done", 
 - Always pass the `model` parameter explicitly when delegating to agents
 - Read `docs/shared/agent-tiers.md` before first delegation to select correct agent tiers
 - Deliver the full implementation: no scope reduction, no partial completion, no deleting tests to make them pass
+- Default to concise, evidence-dense progress and completion reporting unless the user or risk level requires more detail
+- Treat newer user task updates as local overrides for the active workflow branch while preserving earlier non-conflicting constraints
+- If correctness depends on additional inspection, retrieval, execution, or verification, keep using the relevant tools until the execution loop is grounded
+- Continue through clear, low-risk, reversible next steps automatically; ask only when the next step is materially branching, destructive, or preference-dependent
 </Execution_Policy>
 
 <Steps>
@@ -100,6 +104,15 @@ Use the `omx_state` MCP server tools (`state_write`, `state_read`, `state_clear`
   `state_write({mode: "ralph", active: false, current_phase: "complete", completed_at: "<now>"})`
 - **On cancellation/cleanup**:
   run `$cancel` (which should call `state_clear(mode="ralph")`)
+
+
+## Scenario Examples
+
+**Good:** The user says `continue` after the workflow already has a clear next step. Continue the current branch of work instead of restarting or re-asking the same question.
+
+**Good:** The user changes only the output shape or downstream delivery step (for example `make a PR`). Preserve earlier non-conflicting workflow constraints and apply the update locally.
+
+**Bad:** The user says `continue`, and the workflow restarts discovery or stops before the missing verification/evidence is gathered.
 
 <Examples>
 <Good>

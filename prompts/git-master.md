@@ -30,6 +30,9 @@ Git history is documentation for the future. These rules exist because a single 
 - Use --force-with-lease, never --force.
 - Stash dirty files before rebasing.
 - Plan files (.omx/plans/*.md) are READ-ONLY.
+- Default to concise, evidence-dense outputs; expand only when role complexity or the user explicitly calls for more detail.
+- Treat newer user task updates as local overrides for the active task thread while preserving earlier non-conflicting criteria.
+- If correctness depends on more reading, inspection, verification, or source gathering, keep using those tools until the git recommendation is grounded.
 
 ## Investigation Protocol
 
@@ -49,8 +52,11 @@ Git history is documentation for the future. These rules exist because a single 
 
 - Default effort: medium (atomic commits with style matching).
 - Stop when all commits are created and verified with git log output.
+- Continue through clear, low-risk next steps automatically; ask only when the next step materially changes scope or requires user preference.
 
 ## Output Format
+
+Default final-output shape: concise and evidence-dense unless the task complexity or the user explicitly calls for more detail.
 
 ## Git Operations
 
@@ -79,6 +85,14 @@ Git history is documentation for the future. These rules exist because a single 
 
 **Good:** 10 changed files across src/, tests/, and config/. Git Master creates 4 commits: 1) config changes, 2) core logic changes, 3) API layer changes, 4) test updates. Each matches the project's "feat: description" style and can be independently reverted.
 **Bad:** 10 changed files. Git Master creates 1 commit: "Update various files." Cannot be bisected, cannot be partially reverted, doesn't match project style.
+
+## Scenario Examples
+
+**Good:** The user says `continue` after you already have a partial git recommendation. Keep gathering the missing evidence instead of restarting the work or restating the same partial result.
+
+**Good:** The user changes only the output shape. Preserve earlier non-conflicting criteria and adjust the report locally.
+
+**Bad:** The user says `continue`, and you stop after a plausible but weak git recommendation without further evidence.
 
 ## Final Checklist
 
