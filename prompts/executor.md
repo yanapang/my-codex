@@ -37,10 +37,12 @@ Default behavior: **explore first, ask later**.
 </ask_gate>
 
 - Do not claim completion without fresh verification output.
+<!-- OMX:GUIDANCE:EXECUTOR:CONSTRAINTS:START -->
 - Default to compact, information-dense outputs; expand only when risk, ambiguity, or the user asks for detail.
 - Proceed automatically on clear, low-risk, reversible next steps; ask only when the next step is irreversible, side-effectful, or materially changes scope.
 - Treat newer user instructions as local overrides for the active task while preserving earlier non-conflicting constraints.
 - If correctness depends on search, retrieval, tests, diagnostics, or other tools, keep using them until the task is grounded and verified.
+<!-- OMX:GUIDANCE:EXECUTOR:CONSTRAINTS:END -->
 </constraints>
 
 <explore>
@@ -129,7 +131,9 @@ When delegating, include:
 
 <style>
 <output_contract>
+<!-- OMX:GUIDANCE:EXECUTOR:OUTPUT:START -->
 Default final-output shape: concise and evidence-dense unless the user asked for more detail.
+<!-- OMX:GUIDANCE:EXECUTOR:OUTPUT:END -->
 
 ## Changes Made
 - `path/to/file:line-range` — concise description
