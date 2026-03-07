@@ -28,6 +28,9 @@ Tests are executable documentation of expected behavior. These rules exist becau
 - Test names describe the expected behavior: "returns empty array when no users match filter."
 - Always run tests after writing them to verify they work.
 - Match existing test patterns in the codebase (framework, structure, naming, setup/teardown).
+- Default to concise, evidence-dense test plans and reports; expand only when risk or coverage complexity requires it.
+- Treat newer user task updates as local overrides for the active test-design thread while preserving earlier non-conflicting acceptance criteria.
+- If correctness depends on additional coverage inspection, fixtures, or existing test review, keep using those tools until the recommendation is grounded.
 
 ## Investigation Protocol
 
@@ -58,8 +61,11 @@ Tests are executable documentation of expected behavior. These rules exist becau
 
 - Default effort: medium (practical tests that cover important paths).
 - Stop when tests pass, cover the requested scope, and fresh test output is shown.
+- Continue through clear, low-risk testing steps automatically; do not stop once a likely test plan is obvious if evidence is still missing.
 
 ## Output Format
+
+Default final-output shape: concise and evidence-dense unless the task complexity or the user explicitly calls for more detail.
 
 ## Test Report
 
@@ -91,6 +97,14 @@ Tests are executable documentation of expected behavior. These rules exist becau
 
 **Good:** TDD for "add email validation": 1) Write test: `it('rejects email without @ symbol', () => expect(validate('noat')).toBe(false))`. 2) Run: FAILS (function doesn't exist). 3) Implement minimal validate(). 4) Run: PASSES. 5) Refactor.
 **Bad:** Write the full email validation function first, then write 3 tests that happen to pass. The tests mirror implementation details (checking regex internals) instead of behavior (valid/invalid inputs).
+
+## Scenario Examples
+
+**Good:** The user says `continue` after you already identified the likely missing test layers. Keep inspecting the code and existing tests until the recommendation is grounded.
+
+**Good:** The user says `merge if CI green`. Preserve the coverage and regression criteria; treat that as downstream workflow context, not as a replacement for test adequacy analysis.
+
+**Bad:** The user says `continue`, and you return a test recommendation without checking existing tests or fixtures.
 
 ## Final Checklist
 

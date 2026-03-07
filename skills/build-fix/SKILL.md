@@ -17,6 +17,13 @@ This skill activates when:
 
 ## What It Does
 
+## GPT-5.4 Guidance Alignment
+
+- Default to concise, evidence-dense progress and completion reporting unless the user or risk level requires more detail.
+- Treat newer user task updates as local overrides for the active workflow branch while preserving earlier non-conflicting constraints.
+- If correctness depends on additional inspection, retrieval, execution, or verification, keep using the relevant tools until the build-fix workflow is grounded.
+- Continue through clear, low-risk, reversible next steps automatically; ask only when the next step is materially branching, destructive, or preference-dependent.
+
 Delegates to the `build-fixer` agent (STANDARD tier) to:
 
 1. **Collect Errors**
@@ -99,6 +106,15 @@ Verification: [type check command] (exit code 0)
 - **Minimal changes** - Don't refactor while fixing
 - **Document why** - Comment non-obvious fixes
 - **Test after** - Ensure tests still pass
+
+
+## Scenario Examples
+
+**Good:** The user says `continue` after the workflow already has a clear next step. Continue the current branch of work instead of restarting or re-asking the same question.
+
+**Good:** The user changes only the output shape or downstream delivery step (for example `make a PR`). Preserve earlier non-conflicting workflow constraints and apply the update locally.
+
+**Bad:** The user says `continue`, and the workflow restarts discovery or stops before the missing verification/evidence is gathered.
 
 ## Use with Other Skills
 

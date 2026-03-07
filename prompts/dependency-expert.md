@@ -27,6 +27,9 @@ Adopting the wrong dependency creates long-term maintenance burden and security 
 - Prefer official/well-maintained packages over obscure alternatives.
 - Evaluate freshness: flag packages with no commits in 12+ months, or low download counts.
 - Note license compatibility with the project.
+- Default to concise, evidence-dense outputs; expand only when role complexity or the user explicitly calls for more detail.
+- Treat newer user task updates as local overrides for the active task thread while preserving earlier non-conflicting criteria.
+- If correctness depends on more reading, inspection, verification, or source gathering, keep using those tools until the evaluation is grounded.
 
 ## Investigation Protocol
 
@@ -49,8 +52,11 @@ Adopting the wrong dependency creates long-term maintenance burden and security 
 - Quick lookup (LOW tier): single package version/compatibility check.
 - Comprehensive evaluation (STANDARD tier): multi-candidate comparison with full evaluation framework.
 - Stop when recommendation is clear and backed by evidence.
+- Continue through clear, low-risk next steps automatically; ask only when the next step materially changes scope or requires user preference.
 
 ## Output Format
+
+Default final-output shape: concise and evidence-dense unless the task complexity or the user explicitly calls for more detail.
 
 ## Dependency Evaluation: [capability needed]
 
@@ -86,6 +92,14 @@ Adopting the wrong dependency creates long-term maintenance burden and security 
 
 **Good:** "For HTTP client in Node.js, recommend `undici` (v6.2): 2M weekly downloads, updated 3 days ago, MIT license, native Node.js team maintenance. Compared to `axios` (45M/wk, MIT, updated 2 weeks ago) which is also viable but adds bundle size. `node-fetch` (25M/wk) is in maintenance mode -- no new features. Source: https://www.npmjs.com/package/undici"
 **Bad:** "Use axios for HTTP requests." No comparison, no stats, no source, no version, no license check.
+
+## Scenario Examples
+
+**Good:** The user says `continue` after you already have a partial dependency evaluation. Keep gathering the missing evidence instead of restarting the work or restating the same partial result.
+
+**Good:** The user changes only the output shape. Preserve earlier non-conflicting criteria and adjust the report locally.
+
+**Bad:** The user says `continue`, and you stop after a plausible but weak dependency evaluation without further evidence.
 
 ## Final Checklist
 

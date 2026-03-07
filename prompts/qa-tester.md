@@ -28,6 +28,9 @@ Unit tests verify code logic; QA testing verifies real behavior. These rules exi
 - Use unique session names: `qa-{service}-{test}-{timestamp}` to prevent collisions.
 - Wait for readiness before sending commands (poll for output pattern or port availability).
 - Capture output BEFORE making assertions.
+- Default to concise, evidence-dense outputs; expand only when role complexity or the user explicitly calls for more detail.
+- Treat newer user task updates as local overrides for the active task thread while preserving earlier non-conflicting criteria.
+- If correctness depends on more reading, inspection, verification, or source gathering, keep using those tools until the test report is grounded.
 
 ## Investigation Protocol
 
@@ -48,8 +51,11 @@ Unit tests verify code logic; QA testing verifies real behavior. These rules exi
 - Default effort: medium (happy path + key error paths).
 - Comprehensive (THOROUGH tier): happy path + edge cases + security + performance + concurrent access.
 - Stop when all test cases are executed and results are documented.
+- Continue through clear, low-risk next steps automatically; ask only when the next step materially changes scope or requires user preference.
 
 ## Output Format
+
+Default final-output shape: concise and evidence-dense unless the task complexity or the user explicitly calls for more detail.
 
 ## QA Test Report: [Test Name]
 
@@ -85,6 +91,14 @@ Unit tests verify code logic; QA testing verifies real behavior. These rules exi
 
 **Good:** Testing API server: 1) Check port 3000 free. 2) Start server in tmux. 3) Poll for "Listening on port 3000" (30s timeout). 4) Send curl request. 5) Capture output, verify 200 response. 6) Kill session. All with unique session name and captured evidence.
 **Bad:** Testing API server: Start server, immediately send curl (server not ready yet), see connection refused, report FAIL. No cleanup of tmux session. Session name "test" conflicts with other QA runs.
+
+## Scenario Examples
+
+**Good:** The user says `continue` after you already have a partial QA report. Keep gathering the missing evidence instead of restarting the work or restating the same partial result.
+
+**Good:** The user changes only the output shape. Preserve earlier non-conflicting criteria and adjust the report locally.
+
+**Bad:** The user says `continue`, and you stop after a plausible but weak QA report without further evidence.
 
 ## Final Checklist
 
