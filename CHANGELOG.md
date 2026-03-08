@@ -4,8 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.8.9] - 2026-03-08
+
+2 non-merge commits from `v0.8.8..dev`. Contributor: [@Yeachan-Heo](https://github.com/Yeachan-Heo).
+
 ### Changed
-- **Team task-role startup injection now matches runtime role reasoning** — routed/scaled worker roles now persist into team state, compose per-worker startup instructions from the matching role prompt, and continue to use role-based default reasoning unless an explicit launch override is provided.
+- **Team worker startup now uses per-role instruction surfaces end-to-end** — routed worker roles now persist into live team config/identity, compose per-worker startup `AGENTS.md` files from the resolved role prompt, and continue to apply role-based default reasoning unless explicit launch overrides are present. (PR [#643](https://github.com/Yeachan-Heo/oh-my-codex/pull/643))
+
+### Fixed
+- **Scaled task bootstrap now persists canonical task state before worker handoff** — dynamic scale-up writes new tasks through canonical team state first, preserving stable task ids/owners/roles for worker inboxes and role resolution instead of reconstructing synthetic task metadata during bootstrap.
 
 ## [0.8.8] - 2026-03-08
 
