@@ -11,7 +11,7 @@
  */
 
 import { join, resolve } from 'path';
-import { mkdir } from 'fs/promises';
+import { mkdir, rm } from 'fs/promises';
 import {
   sanitizeTeamName,
   isTmuxAvailable,
@@ -35,6 +35,8 @@ import {
   teamWriteWorkerStatus as writeWorkerStatus,
   teamWithScalingLock as withScalingLock,
   teamAppendEvent as appendTeamEvent,
+  teamCreateTask as createStateTask,
+  teamListTasks as listTasks,
   teamMarkDispatchRequestNotified as markDispatchRequestNotified,
   teamReadDispatchRequest as readDispatchRequest,
   teamTransitionDispatchRequest as transitionDispatchRequest,
@@ -176,6 +178,7 @@ export async function scaleUp(
     let nextIndex = config.next_worker_index ?? (currentCount + 1);
     const initialNextIndex = nextIndex;
     const addedWorkers: WorkerInfo[] = [];
+    const createdTaskIds: string[] = [];
 
     const rollbackScaleUp = async (error: string, paneId?: string): Promise<ScaleError> => {
       for (const w of addedWorkers) {
@@ -196,12 +199,31 @@ export async function scaleUp(
         } catch {}
       }
 
+      for (const taskId of createdTaskIds) {
+        await rm(join(leaderCwd, '.omx', 'state', 'team', sanitized, 'tasks', `task-${taskId}.json`), { force: true }).catch(() => {});
+      }
+
       config.worker_count = config.workers.length;
       config.next_worker_index = initialNextIndex;
       await saveTeamConfig(config, leaderCwd);
 
       return { ok: false, error };
     };
+
+    // Persist incoming tasks first so scaling resolves worker roles and inboxes from
+    // canonical task state (stable task ids, owner, role), matching startTeam().
+    for (const task of tasks) {
+      const createdTask = await createStateTask(sanitized, {
+        subject: task.subject,
+        description: task.description,
+        status: 'pending',
+        owner: task.owner,
+        blocked_by: task.blocked_by,
+        role: task.role,
+      }, leaderCwd);
+      createdTaskIds.push(createdTask.id);
+    }
+    const persistedTasks = await listTasks(sanitized, leaderCwd);
 
     // Resolve shared worker launch args for CLI selection.
     const sharedWorkerLaunchArgs = resolveWorkerLaunchArgsForScaling(env, agentType);
@@ -217,7 +239,7 @@ export async function scaleUp(
       await mkdir(workerDirPath, { recursive: true });
 
       // Resolve per-worker role from assigned task roles before launch so reasoning effort can vary by teammate.
-      const workerTaskRoles = tasks.filter(t => t.owner === workerName).map(t => t.role).filter(Boolean) as string[];
+      const workerTaskRoles = persistedTasks.filter(t => t.owner === workerName).map(t => t.role).filter(Boolean) as string[];
       const uniqueTaskRoles = new Set(workerTaskRoles);
       const workerRole = workerTaskRoles.length > 0 && uniqueTaskRoles.size === 1
         ? workerTaskRoles[0]
@@ -301,17 +323,9 @@ export async function scaleUp(
       }
 
       // Get assigned tasks for this worker
-      const workerTasks = tasks.filter(t => t.owner === workerName);
+      const workerTasks = persistedTasks.filter(t => t.owner === workerName);
 
-      const inbox = generateInitialInbox(workerName, sanitized, agentType, workerTasks.map((t, idx) => ({
-        id: String(idx + 1),
-        subject: t.subject,
-        description: t.description,
-        status: 'pending' as const,
-        blocked_by: t.blocked_by,
-        role: t.role,
-        created_at: new Date().toISOString(),
-      })), {
+      const inbox = generateInitialInbox(workerName, sanitized, agentType, workerTasks, {
         teamStateRoot,
         leaderCwd,
         workerRole,
