@@ -1,11 +1,11 @@
 {
   "name": "oh-my-codex",
-  "version": "0.8.7",
+  "version": "0.8.8",
   "description": "Multi-agent orchestration layer for OpenAI Codex CLI",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "omx": "./bin/omx.js"
+    "omx": "bin/omx.js"
   },
   "scripts": {
     "build": "tsc",
