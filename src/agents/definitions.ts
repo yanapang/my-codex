@@ -43,7 +43,7 @@ export const AGENT_DEFINITIONS: Record<string, AgentDefinition> = {
   'analyst': {
     name: 'analyst',
     description: 'Requirements clarity, acceptance criteria, hidden constraints',
-    reasoningEffort: 'high',
+    reasoningEffort: 'medium',
     posture: 'frontier-orchestrator',
     modelClass: 'frontier',
     routingRole: 'leader',
@@ -53,7 +53,7 @@ export const AGENT_DEFINITIONS: Record<string, AgentDefinition> = {
   'planner': {
     name: 'planner',
     description: 'Task sequencing, execution plans, risk flags',
-    reasoningEffort: 'high',
+    reasoningEffort: 'medium',
     posture: 'frontier-orchestrator',
     modelClass: 'frontier',
     routingRole: 'leader',
