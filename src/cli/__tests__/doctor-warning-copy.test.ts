@@ -40,6 +40,10 @@ describe('omx doctor onboarding warning copy', () => {
 command = "node"
 `.trimStart(),
       );
+      await writeFile(
+        join(codexDir, '.omx-config.json'),
+        JSON.stringify({ rtk: { enabled: false } }),
+      );
 
       const res = runOmx(wd, ['doctor'], {
         HOME: home,
