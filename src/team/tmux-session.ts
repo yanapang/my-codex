@@ -10,6 +10,7 @@ import {
   MODEL_FLAG,
 } from '../cli/constants.js';
 import { sleep, sleepSync } from '../utils/sleep.js';
+import { withRtkBashEnv } from '../rtk/index.js';
 
 const execFileAsync = promisify(execFile);
 import { HUD_RESIZE_RECONCILE_DELAY_SECONDS, HUD_TMUX_TEAM_HEIGHT_LINES } from '../hud/constants.js';
@@ -638,7 +639,11 @@ export function buildWorkerProcessLaunchSpec(
   workerCliOverride?: TeamWorkerCli,
   initialPrompt?: string,
 ): WorkerProcessLaunchSpec {
-  const effectiveEnv: NodeJS.ProcessEnv = { ...process.env, ...extraEnv };
+  const mergedEnv: NodeJS.ProcessEnv = { ...process.env, ...extraEnv };
+  const codexHomeOverride = typeof mergedEnv.CODEX_HOME === 'string' && mergedEnv.CODEX_HOME.trim() !== ''
+    ? mergedEnv.CODEX_HOME.trim()
+    : undefined;
+  const effectiveEnv = withRtkBashEnv(mergedEnv, codexHomeOverride);
   const fullLaunchArgs = resolveWorkerLaunchArgs(launchArgs, cwd, effectiveEnv);
   const workerCli = workerCliOverride ?? resolveTeamWorkerCli(fullLaunchArgs, effectiveEnv);
   const cliLaunchArgs = translateWorkerLaunchArgsForCli(workerCli, fullLaunchArgs, initialPrompt);
@@ -652,6 +657,9 @@ export function buildWorkerProcessLaunchSpec(
   for (const [key, value] of Object.entries(extraEnv)) {
     if (typeof value !== 'string' || value.trim() === '') continue;
     workerEnv[key] = value;
+  }
+  if (typeof effectiveEnv.BASH_ENV === 'string' && effectiveEnv.BASH_ENV.trim() !== '') {
+    workerEnv.BASH_ENV = effectiveEnv.BASH_ENV.trim();
   }
 
   return {
