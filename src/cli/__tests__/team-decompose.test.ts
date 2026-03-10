@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { decomposeTaskString } from '../team.js';
+import { buildTeamExecutionPlan, decomposeTaskString } from '../team.js';
 
 describe('decomposeTaskString', () => {
   it('splits conjunction-separated tasks', () => {
@@ -66,13 +66,13 @@ describe('decomposeTaskString', () => {
     assert.match(tasks[2].description, /write benchmark/);
   });
 
-  it('keeps long prose prompts intact instead of shattering them into sentence fragments', () => {
+  it('keeps long analytic prose prompts in a single-worker lane by default', () => {
     const task = 'Analyze OMX team mode reliability/efficiency weaknesses, focusing on orchestration progress detection, heartbeat/task-state coupling, tmux/state-plane brittleness, and verification gaps. Produce concrete findings with root cause, user impact, evidence pointers, and actionable recommendations suitable for a GitHub issue.';
-    const tasks = decomposeTaskString(task, 3, 'executor', false);
-    assert.equal(tasks.length, 3);
-    assert.match(tasks[0].subject, /^Implement:/i);
-    assert.match(tasks[1].subject, /^Test:/i);
-    assert.match(tasks[2].subject, /^Review and document:/i);
+    const plan = buildTeamExecutionPlan(task, 3, 'executor', false);
+    assert.equal(plan.workerCount, 1);
+    assert.equal(plan.tasks.length, 1);
+    assert.equal(plan.tasks[0].owner, 'worker-1');
+    assert.match(plan.tasks[0].description, /Analyze OMX team mode reliability\/efficiency weaknesses/i);
   });
 
   it('preserves backward compat: explicit agentType overrides routing', () => {
@@ -94,6 +94,14 @@ describe('decomposeTaskString', () => {
 
     const explicitTasks = decomposeTaskString('fix typo in README', 3, 'executor', false, true);
     assert.equal(explicitTasks.length, 3);
+  });
+
+  it('preserves explicit worker-count fanout for analytic prompts', () => {
+    const task = 'Analyze OMX team mode reliability/efficiency weaknesses, focusing on orchestration progress detection, heartbeat/task-state coupling, tmux/state-plane brittleness, and verification gaps. Produce concrete findings with root cause, user impact, evidence pointers, and actionable recommendations suitable for a GitHub issue.';
+    const plan = buildTeamExecutionPlan(task, 3, 'executor', false, true);
+    assert.equal(plan.workerCount, 3);
+    assert.equal(plan.tasks.length, 3);
+    assert.match(plan.tasks[0].subject, /^Implement:/i);
   });
 
   it('keeps explicit numbered tasks fanned out even on implicit default team runs', () => {

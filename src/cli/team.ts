@@ -352,8 +352,21 @@ interface DecompositionPlan {
   subtasks: DecompositionCandidate[];
 }
 
+export interface TeamExecutionPlan {
+  workerCount: number;
+  tasks: Array<{ subject: string; description: string; owner: string; role?: string }>;
+}
+
 function resolveImplicitTeamFallbackRole(agentType: string, explicitAgentType: boolean): string {
   return !explicitAgentType && agentType === 'executor' ? 'team-executor' : agentType;
+}
+
+function looksLikeLowConfidenceAnalysisTask(task: string): boolean {
+  const normalized = task.trim();
+  return ANALYSIS_TASK_PREFIX.test(normalized)
+    && (ANALYSIS_DELIVERABLE_SIGNAL.test(normalized)
+      || countWords(normalized) > 18
+      || CONTEXTUAL_DECOMPOSITION_CLAUSE.test(normalized));
 }
 
 function resolveTeamFanoutLimit(
@@ -369,6 +382,10 @@ function resolveTeamFanoutLimit(
 
   const size = classifyTaskSize(task).size;
   if (plan.strategy === 'atomic') {
+    if (looksLikeLowConfidenceAnalysisTask(task)) {
+      return 1;
+    }
+
     if (size === 'small') {
       const proseHeavyAtomicTask = countWords(task) > 18 || CONTEXTUAL_DECOMPOSITION_CLAUSE.test(task);
       if (!proseHeavyAtomicTask) return 1;
@@ -382,13 +399,13 @@ function resolveTeamFanoutLimit(
   return requestedWorkerCount;
 }
 
-export function decomposeTaskString(
+export function buildTeamExecutionPlan(
   task: string,
   workerCount: number,
   agentType: string,
   explicitAgentType: boolean,
   explicitWorkerCount = false,
-): Array<{ subject: string; description: string; owner: string; role?: string }> {
+): TeamExecutionPlan {
   const plan = splitTaskString(task);
   const effectiveWorkerCount = resolveTeamFanoutLimit(
     task,
@@ -412,11 +429,26 @@ export function decomposeTaskString(
     return { ...st, role: result.role };
   });
 
-  return distributeTasksToWorkers(tasksWithRoles, effectiveWorkerCount);
+  return {
+    workerCount: effectiveWorkerCount,
+    tasks: distributeTasksToWorkers(tasksWithRoles, effectiveWorkerCount),
+  };
+}
+
+export function decomposeTaskString(
+  task: string,
+  workerCount: number,
+  agentType: string,
+  explicitAgentType: boolean,
+  explicitWorkerCount = false,
+): Array<{ subject: string; description: string; owner: string; role?: string }> {
+  return buildTeamExecutionPlan(task, workerCount, agentType, explicitAgentType, explicitWorkerCount).tasks;
 }
 
 const ACTIONABLE_TASK_PREFIX = /^(?:add|analy(?:se|ze)|audit|benchmark|build|clean(?:\s+up)?|create|debug|design|document|draft|fix|implement|improve|investigate|migrate|optimi(?:s|z)e|profile|refactor|repair|research|review|ship|summari(?:s|z)e|test|update|validate|verify|write)\b/i;
 const TASK_LABEL_PREFIX = /^(?:task|step|phase|part)\s+[\w-]+(?:\s+[\w-]+)?$/i;
+const ANALYSIS_TASK_PREFIX = /^(?:analy(?:se|ze)|audit|assess|evaluate|explore|investigate|research|review|study|summari(?:s|z)e)\b/i;
+const ANALYSIS_DELIVERABLE_SIGNAL = /\b(?:actionable recommendations?|evidence(?: pointers?)?|findings?|issue|operator|report|root cause|summary|user impact|write-?up)\b/i;
 const CONTEXTUAL_DECOMPOSITION_CLAUSE = /\b(?:focusing on|focus on|including|covers?|covering|with|while|without|ensuring|suitable for|root cause|user impact|evidence pointers|actionable recommendations)\b/i;
 
 function countWords(text: string): number {
@@ -811,29 +843,33 @@ export async function teamCommand(args: string[], options: TeamCliOptions = {}):
   }
 
   const parsed = parseTeamArgs(teamArgs);
-  const tasks = decomposeTaskString(
+  const executionPlan = buildTeamExecutionPlan(
     parsed.task,
     parsed.workerCount,
     parsed.agentType,
     parsed.explicitAgentType,
     parsed.explicitWorkerCount,
   );
+  const tasks = executionPlan.tasks;
+  const effectiveParsed = executionPlan.workerCount === parsed.workerCount
+    ? parsed
+    : { ...parsed, workerCount: executionPlan.workerCount };
   const availableAgentTypes = await resolveAvailableAgentTypes(cwd);
   const staffingPlan = buildFollowupStaffingPlan('team', parsed.task, availableAgentTypes, {
-    workerCount: parsed.workerCount,
+    workerCount: executionPlan.workerCount,
     fallbackRole: resolveImplicitTeamFallbackRole(parsed.agentType, parsed.explicitAgentType),
   });
   const runtime = await startTeam(
     parsed.teamName,
     parsed.task,
     parsed.agentType,
-    parsed.workerCount,
+    executionPlan.workerCount,
     tasks,
     cwd,
     { worktreeMode: parsedWorktree.mode, ralph: parsed.ralph },
   );
 
-  await ensureTeamModeState(parsed, tasks);
+  await ensureTeamModeState(effectiveParsed, tasks);
   if (options.verbose) {
     console.log(`linked_ralph=${parsed.ralph}`);
   }
