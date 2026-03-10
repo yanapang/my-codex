@@ -11,7 +11,7 @@
  *   }
  * }
  *
- * Resolution: mode-specific > "default" key > DEFAULT_FRONTIER_MODEL (hardcoded fallback)
+ * Resolution: mode-specific > "default" key > OMX_MAIN_MODEL > DEFAULT_FRONTIER_MODEL (hardcoded fallback)
  */
 
 import { readFileSync, existsSync } from 'fs';
@@ -21,6 +21,9 @@ import { codexHome } from '../utils/paths.js';
 export interface ModelsConfig {
   [mode: string]: string | undefined;
 }
+
+export const OMX_MAIN_MODEL_ENV = 'OMX_MAIN_MODEL';
+export const OMX_SPARK_MODEL_ENV = 'OMX_SPARK_MODEL';
 
 function readModelsBlock(codexHomeOverride?: string): ModelsConfig | null {
   const configPath = join(codexHomeOverride || codexHome(), '.omx-config.json');
@@ -40,25 +43,56 @@ export const DEFAULT_FRONTIER_MODEL = 'gpt-5.4';
 export const HARDCODED_DEFAULT_MODEL = DEFAULT_FRONTIER_MODEL;
 export const HARDCODED_TEAM_LOW_COMPLEXITY_MODEL = 'gpt-5.3-codex-spark';
 
+function normalizeConfiguredModel(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function readModeOverride(mode: string, codexHomeOverride?: string): string | undefined {
+  return normalizeConfiguredModel(readModelsBlock(codexHomeOverride)?.[mode]);
+}
+
+function readTeamLowComplexityOverride(codexHomeOverride?: string): string | undefined {
+  const models = readModelsBlock(codexHomeOverride);
+  if (!models) return undefined;
+  for (const key of TEAM_LOW_COMPLEXITY_MODEL_KEYS) {
+    const value = normalizeConfiguredModel(models[key]);
+    if (value) return value;
+  }
+  return undefined;
+}
+
+export function getEnvConfiguredMainDefaultModel(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return normalizeConfiguredModel(env[OMX_MAIN_MODEL_ENV]);
+}
+
+export function getEnvConfiguredSparkDefaultModel(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return normalizeConfiguredModel(env[OMX_SPARK_MODEL_ENV]);
+}
+
+/**
+ * Get the envvar-backed main/default model.
+ * Resolution: OMX_MAIN_MODEL > DEFAULT_FRONTIER_MODEL
+ */
+export function getMainDefaultModel(codexHomeOverride?: string): string {
+  return getEnvConfiguredMainDefaultModel()
+    ?? DEFAULT_FRONTIER_MODEL;
+}
+
 /**
  * Get the configured model for a specific mode.
- * Resolution: mode-specific override > "default" key > DEFAULT_FRONTIER_MODEL
+ * Resolution: mode-specific override > "default" key > OMX_MAIN_MODEL > DEFAULT_FRONTIER_MODEL
  */
 export function getModelForMode(mode: string, codexHomeOverride?: string): string {
   const models = readModelsBlock(codexHomeOverride);
-  if (!models) return DEFAULT_FRONTIER_MODEL;
+  const modeValue = normalizeConfiguredModel(models?.[mode]);
+  if (modeValue) return modeValue;
 
-  const modeValue = models[mode];
-  if (typeof modeValue === 'string' && modeValue.trim() !== '') {
-    return modeValue.trim();
-  }
+  const defaultValue = normalizeConfiguredModel(models?.default);
+  if (defaultValue) return defaultValue;
 
-  const defaultValue = models['default'];
-  if (typeof defaultValue === 'string' && defaultValue.trim() !== '') {
-    return defaultValue.trim();
-  }
-
-  return DEFAULT_FRONTIER_MODEL;
+  return getMainDefaultModel(codexHomeOverride);
 }
 
 const TEAM_LOW_COMPLEXITY_MODEL_KEYS = [
@@ -68,18 +102,19 @@ const TEAM_LOW_COMPLEXITY_MODEL_KEYS = [
 ];
 
 /**
+ * Get the envvar-backed spark/low-complexity default model.
+ * Resolution: OMX_SPARK_MODEL > explicit low-complexity key(s) > hardcoded spark fallback.
+ */
+export function getSparkDefaultModel(codexHomeOverride?: string): string {
+  return getEnvConfiguredSparkDefaultModel()
+    ?? readTeamLowComplexityOverride(codexHomeOverride)
+    ?? HARDCODED_TEAM_LOW_COMPLEXITY_MODEL;
+}
+
+/**
  * Get the low-complexity team worker model.
- * Resolution: explicit low-complexity key(s) > hardcoded spark fallback.
+ * Resolution: explicit low-complexity key(s) > OMX_SPARK_MODEL > hardcoded spark fallback.
  */
 export function getTeamLowComplexityModel(codexHomeOverride?: string): string {
-  const models = readModelsBlock(codexHomeOverride);
-  if (models) {
-    for (const key of TEAM_LOW_COMPLEXITY_MODEL_KEYS) {
-      const value = models[key];
-      if (typeof value === 'string' && value.trim() !== '') {
-        return value.trim();
-      }
-    }
-  }
-  return HARDCODED_TEAM_LOW_COMPLEXITY_MODEL;
+  return readTeamLowComplexityOverride(codexHomeOverride) ?? getSparkDefaultModel(codexHomeOverride);
 }

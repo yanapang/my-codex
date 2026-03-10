@@ -396,6 +396,7 @@ OMX_TEAM_AUTO_INTERRUPT_RETRY=0  # optional: disable adaptive queue->resend fall
 
 Notes:
 - Worker launch args are still shared via `OMX_TEAM_WORKER_LAUNCH_ARGS` for model/config inheritance.
+- When no explicit worker model is provided, low-complexity worker fallback follows `OMX_SPARK_MODEL` (currently `gpt-5.3-codex-spark`).
 - `OMX_TEAM_WORKER_CLI_MAP` overrides `OMX_TEAM_WORKER_CLI` for per-worker selection.
 - Team mode now allocates `model_reasoning_effort` per teammate from the resolved worker role (`low` / `medium` / `high`) unless an explicit reasoning override already exists in `OMX_TEAM_WORKER_LAUNCH_ARGS`.
 - When a worker resolves to a concrete task role, OMX composes a per-worker startup instructions file that layers the corresponding role prompt on top of the shared team worker protocol; explicit `model_instructions_file` launch overrides still win.
@@ -417,7 +418,7 @@ Notes:
   - `notify = ["node", "..."]`
   - `model_reasoning_effort = "high"`
   - `developer_instructions = "..."`
-  - `model = "gpt-5.4"` when root `model` is absent
+  - `model = "gpt-5.4"` when root `model` is absent (matching the current `OMX_MAIN_MODEL` default)
   - if the existing root model is `gpt-5.3-codex`, interactive `omx setup` asks whether to upgrade it to `gpt-5.4`; non-interactive runs preserve the existing model
   - `model_context_window = 1000000` and `model_auto_compact_token_limit = 900000` only when the effective root model is `gpt-5.4` and both context keys are absent
   - `[features] multi_agent = true, child_agents_md = true`
