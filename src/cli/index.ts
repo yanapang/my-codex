@@ -1194,7 +1194,9 @@ function runCodex(
     ? { ...codexEnv, [OMX_NOTIFY_TEMP_CONTRACT_ENV]: notifyTempContractRaw }
     : codexEnv;
 
-  if (resolveCodexLaunchPolicy(process.env) === 'inside-tmux') {
+  const launchPolicy = resolveCodexLaunchPolicy(process.env);
+
+  if (launchPolicy === 'inside-tmux') {
     // Already in tmux: launch codex in current pane, HUD in bottom split
     const currentPaneId = process.env.TMUX_PANE;
     const staleHudPaneIds = listHudWatchPaneIdsInCurrentWindow(currentPaneId);
@@ -1239,6 +1241,10 @@ function runCodex(
         killTmuxPane(paneId);
       }
     }
+  } else if (!isTmuxAvailable()) {
+    // Detached HUD sessions require tmux. Skip the bootstrap entirely when the
+    // binary is unavailable so direct launches do not emit noisy ENOENT logs.
+    runCodexBlocking(cwd, launchArgs, codexEnvWithNotify);
   } else {
     // Not in tmux: create a new tmux session with codex + HUD pane
     const codexCmd = buildTmuxPaneCommand('codex', launchArgs);
