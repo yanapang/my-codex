@@ -11,7 +11,14 @@ import {
   TEAM_API_OPERATIONS,
   type TeamApiOperation,
 } from '../api-interop.js';
-import { initTeamState, createTask } from '../state.js';
+import {
+  initTeamState,
+  createTask,
+  sendDirectMessage,
+  enqueueDispatchRequest,
+  readDispatchRequest,
+  appendTeamEvent,
+} from '../state.js';
 
 async function setupTeam(name: string): Promise<{ cwd: string; cleanup: () => Promise<void> }> {
   const cwd = await mkdtemp(join(tmpdir(), `omx-interop-${name}-`));
@@ -46,7 +53,7 @@ describe('resolveTeamApiOperation', () => {
     assert.equal(resolveTeamApiOperation('  SEND_MESSAGE  '), 'send-message');
   });
 
-  it('resolves all 28 operations from the operation list', () => {
+  it('resolves all 30 operations from the operation list', () => {
     for (const op of TEAM_API_OPERATIONS) {
       assert.equal(resolveTeamApiOperation(op), op);
     }
@@ -88,8 +95,8 @@ describe('LEGACY_TEAM_MCP_TOOLS', () => {
 });
 
 describe('TEAM_API_OPERATIONS', () => {
-  it('contains 28 operations', () => {
-    assert.equal(TEAM_API_OPERATIONS.length, 28);
+  it('contains 30 operations', () => {
+    assert.equal(TEAM_API_OPERATIONS.length, 30);
   });
 
   it('all use kebab-case', () => {
@@ -252,7 +259,7 @@ describe('executeTeamApiOperation: mailbox-list', () => {
 // ─── mailbox-mark-delivered ───────────────────────────────────────────────
 
 describe('executeTeamApiOperation: mailbox-mark-delivered', () => {
-  it('marks a message delivered after sending', async () => {
+  it('marks a message delivered after sending and promotes matching dispatch receipt', async () => {
     const { cwd, cleanup } = await setupTeam('mark-dlv');
     try {
       // Ensure the worker-2 mailbox directory exists so sendDirectMessage can write
@@ -260,16 +267,49 @@ describe('executeTeamApiOperation: mailbox-mark-delivered', () => {
       const sendResult = await executeTeamApiOperation('send-message', {
         team_name: 'mark-dlv', from_worker: 'worker-1', to_worker: 'worker-2', body: 'ack',
       }, cwd);
-      // Send must succeed to test mark-delivered
       assert.equal(sendResult.ok, true);
       const msg = sendResult.data.message as Record<string, unknown>;
       const msgId = String(msg?.message_id ?? '');
       assert.ok(msgId, 'message should have a message_id');
+
+      const dispatch = await enqueueDispatchRequest('mark-dlv', {
+        kind: 'mailbox',
+        to_worker: 'worker-2',
+        worker_index: 2,
+        message_id: msgId,
+        trigger_message: 'check mailbox',
+      }, cwd);
+
       const result = await executeTeamApiOperation('mailbox-mark-delivered', {
         team_name: 'mark-dlv', worker: 'worker-2', message_id: msgId,
       }, cwd);
-      // Mark operation returns a valid envelope (pass or fail based on state layer)
-      assert.ok(typeof result.ok === 'boolean');
+      assert.equal(result.ok, true);
+      if (!result.ok) throw new Error('expected successful mailbox-mark-delivered result');
+      assert.equal(result.data.dispatch_request_id, dispatch.request.request_id);
+      assert.equal(result.data.dispatch_updated, true);
+
+      const updatedDispatch = await readDispatchRequest('mark-dlv', dispatch.request.request_id, cwd);
+      assert.equal(updatedDispatch?.status, 'delivered');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('reports when no matching mailbox dispatch request exists', async () => {
+    const { cwd, cleanup } = await setupTeam('mark-dlv-no-dispatch');
+    try {
+      const message = await sendDirectMessage('mark-dlv-no-dispatch', 'worker-1', 'worker-2', 'ack', cwd);
+
+      const result = await executeTeamApiOperation('mailbox-mark-delivered', {
+        team_name: 'mark-dlv-no-dispatch',
+        worker: 'worker-2',
+        message_id: message.message_id,
+      }, cwd);
+
+      assert.equal(result.ok, true);
+      if (!result.ok) throw new Error('expected success envelope');
+      assert.equal(result.data.dispatch_request_id, null);
+      assert.equal(result.data.dispatch_updated, false);
     } finally {
       await cleanup();
     }
@@ -852,6 +892,124 @@ describe('executeTeamApiOperation: append-event', () => {
       team_name: 'x',
     }, '/tmp');
     assert.equal(result.ok, false);
+  });
+});
+
+// ─── read-events ──────────────────────────────────────────────────────────
+
+describe('executeTeamApiOperation: read-events', () => {
+  it('returns canonical filtered events', async () => {
+    const { cwd, cleanup } = await setupTeam('evt-read');
+    try {
+      const first = await appendTeamEvent('evt-read', {
+        type: 'task_completed',
+        worker: 'worker-2',
+        task_id: '2',
+      }, cwd);
+      const second = await appendTeamEvent('evt-read', {
+        type: 'worker_idle',
+        worker: 'worker-1',
+        task_id: '1',
+        prev_state: 'working',
+      }, cwd);
+      await appendTeamEvent('evt-read', {
+        type: 'task_failed',
+        worker: 'worker-1',
+        task_id: '1',
+      }, cwd);
+
+      const result = await executeTeamApiOperation('read-events', {
+        team_name: 'evt-read',
+        after_event_id: first.event_id,
+        worker: 'worker-1',
+        task_id: '1',
+        type: 'worker_idle',
+      }, cwd);
+
+      assert.equal(result.ok, true);
+      if (result.ok) {
+        assert.equal(result.data.count, 1);
+        assert.equal(result.data.cursor, second.event_id);
+        const events = result.data.events as Array<{ type?: string; source_type?: string; worker?: string; task_id?: string }>;
+        assert.equal(events.length, 1);
+        assert.equal(events[0]?.type, 'worker_state_changed');
+        assert.equal(events[0]?.source_type, 'worker_idle');
+        assert.equal(events[0]?.worker, 'worker-1');
+        assert.equal(events[0]?.task_id, '1');
+      }
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('rejects invalid event filters', async () => {
+    const result = await executeTeamApiOperation('read-events', {
+      team_name: 'evt-read-invalid',
+      type: 'not_an_event',
+    }, '/tmp');
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.match(result.error.message, /type must be one of/);
+    }
+  });
+});
+
+// ─── await-event ──────────────────────────────────────────────────────────
+
+describe('executeTeamApiOperation: await-event', () => {
+  it('waits for the next matching event', async () => {
+    const { cwd, cleanup } = await setupTeam('evt-await');
+    try {
+      const waitPromise = executeTeamApiOperation('await-event', {
+        team_name: 'evt-await',
+        worker: 'worker-1',
+        task_id: '1',
+        type: 'task_completed',
+        timeout_ms: 500,
+        poll_ms: 25,
+      }, cwd);
+
+      setTimeout(() => {
+        void appendTeamEvent('evt-await', {
+          type: 'worker_state_changed',
+          worker: 'worker-2',
+          task_id: '2',
+          state: 'working',
+        }, cwd);
+      }, 25);
+
+      setTimeout(() => {
+        void appendTeamEvent('evt-await', {
+          type: 'task_completed',
+          worker: 'worker-1',
+          task_id: '1',
+        }, cwd);
+      }, 60);
+
+      const result = await waitPromise;
+      assert.equal(result.ok, true);
+      if (result.ok) {
+        assert.equal(result.data.status, 'event');
+        assert.equal(typeof result.data.cursor, 'string');
+        const event = result.data.event as { type?: string; worker?: string; task_id?: string } | null;
+        assert.equal(event?.type, 'task_completed');
+        assert.equal(event?.worker, 'worker-1');
+        assert.equal(event?.task_id, '1');
+      }
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('rejects invalid timeout values', async () => {
+    const result = await executeTeamApiOperation('await-event', {
+      team_name: 'evt-await-invalid',
+      timeout_ms: -1,
+    }, '/tmp');
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.match(result.error.message, /timeout_ms must be a non-negative integer/);
+    }
   });
 });
 

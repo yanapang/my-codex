@@ -17,6 +17,7 @@ import { hudCommand } from '../hud/index.js';
 import { teamCommand } from './team.js';
 import { ralphCommand } from './ralph.js';
 import { askCommand } from './ask.js';
+import { agentsInitCommand } from './agents-init.js';
 import {
   MADMAX_FLAG,
   CODEX_BYPASS_FLAG,
@@ -61,6 +62,7 @@ import {
 import { getPackageRoot } from '../utils/package.js';
 import { codexConfigPath } from '../utils/paths.js';
 import { HUD_TMUX_HEIGHT_LINES } from '../hud/constants.js';
+import { classifySpawnError, spawnPlatformCommandSync } from '../utils/platform-command.js';
 import { buildHookEvent } from '../hooks/extensibility/events.js';
 import { dispatchHookEvent } from '../hooks/extensibility/dispatcher.js';
 import {
@@ -91,6 +93,10 @@ Usage:
   omx doctor    Check installation health
   omx doctor --team  Check team/swarm runtime health diagnostics
   omx ask       Ask local provider CLI (claude|gemini) and write artifact output
+  omx agents-init [path]
+                Bootstrap lightweight AGENTS.md files for a repo/subtree
+  omx deepinit [path]
+                Alias for agents-init (lightweight AGENTS bootstrap only)
   omx team      Spawn parallel worker panes in tmux and bootstrap inbox/task state
   omx ralph     Launch Codex with ralph persistence mode active
   omx version   Show version information
@@ -147,7 +153,7 @@ const ALLOWED_SHELLS = new Set([
   '/usr/local/bin/bash', '/usr/local/bin/zsh', '/usr/local/bin/fish',
 ]);
 
-type CliCommand = 'launch' | 'setup' | 'uninstall' | 'doctor' | 'ask' | 'team' | 'version' | 'tmux-hook' | 'hooks' | 'hud' | 'status' | 'cancel' | 'help' | 'reasoning' | string;
+type CliCommand = 'launch' | 'setup' | 'agents-init' | 'deepinit' | 'uninstall' | 'doctor' | 'ask' | 'team' | 'version' | 'tmux-hook' | 'hooks' | 'hud' | 'status' | 'cancel' | 'help' | 'reasoning' | string;
 
 export interface ResolvedCliInvocation {
   command: CliCommand;
@@ -247,6 +253,10 @@ type ExecFileSyncFailure = NodeJS.ErrnoException & {
   signal?: NodeJS.Signals | null;
 };
 
+function hasErrnoCode(error: unknown, code: string): boolean {
+  return Boolean(error && typeof error === 'object' && 'code' in error && error.code === code);
+}
+
 export interface CodexExecFailureClassification {
   kind: 'exit' | 'launch-error';
   code?: string;
@@ -298,24 +308,33 @@ export function classifyCodexExecFailure(error: unknown): CodexExecFailureClassi
 }
 
 function runCodexBlocking(cwd: string, launchArgs: string[], codexEnv: NodeJS.ProcessEnv): void {
-  try {
-    execFileSync('codex', launchArgs, { cwd, stdio: 'inherit', env: codexEnv });
-  } catch (error) {
-    const classified = classifyCodexExecFailure(error);
-    if (classified.kind === 'exit') {
-      process.exitCode = classified.exitCode ?? 1;
-      if (classified.signal) {
-        console.error(`[omx] codex exited due to signal ${classified.signal}`);
-      }
-      return;
-    }
+  const { result } = spawnPlatformCommandSync('codex', launchArgs, {
+    cwd,
+    stdio: 'inherit',
+    env: codexEnv,
+    encoding: 'utf-8',
+  });
 
-    if (classified.code === 'ENOENT') {
+  if (result.error) {
+    const errno = result.error as NodeJS.ErrnoException;
+    const kind = classifySpawnError(errno);
+    if (kind === 'missing') {
       console.error('[omx] failed to launch codex: executable not found in PATH');
+    } else if (kind === 'blocked') {
+      console.error(`[omx] failed to launch codex: executable is present but blocked in the current environment (${errno.code || 'blocked'})`);
     } else {
-      console.error(`[omx] failed to launch codex: ${classified.message}`);
+      console.error(`[omx] failed to launch codex: ${errno.message}`);
     }
-    throw error;
+    throw result.error;
+  }
+
+  if (result.status !== 0) {
+    process.exitCode = typeof result.status === 'number'
+      ? result.status
+      : resolveSignalExitCode(result.signal);
+    if (result.signal) {
+      console.error(`[omx] codex exited due to signal ${result.signal}`);
+    }
   }
 }
 
@@ -374,7 +393,7 @@ export function buildHudPaneCleanupTargets(existingPaneIds: string[], createdPan
 
 export async function main(args: string[]): Promise<void> {
   const knownCommands = new Set([
-    'launch', 'setup', 'uninstall', 'doctor', 'ask', 'team', 'ralph', 'version', 'tmux-hook', 'hooks', 'hud', 'status', 'cancel', 'help', '--help', '-h',
+    'launch', 'setup', 'agents-init', 'deepinit', 'uninstall', 'doctor', 'ask', 'team', 'ralph', 'version', 'tmux-hook', 'hooks', 'hud', 'status', 'cancel', 'help', '--help', '-h',
   ]);
   const firstArg = args[0];
   const { command, launchArgs } = resolveCliInvocation(args);
@@ -387,7 +406,7 @@ export async function main(args: string[]): Promise<void> {
     team: flags.has('--team'),
   };
 
-  if (flags.has('--help') && !ralphHelpRequested && command !== 'team') {
+  if (flags.has('--help') && !ralphHelpRequested && !new Set(['team', 'agents-init', 'deepinit']).has(command)) {
     console.log(HELP);
     return;
   }
@@ -404,6 +423,12 @@ export async function main(args: string[]): Promise<void> {
           verbose: options.verbose,
           scope: resolveSetupScopeArg(args.slice(1)),
         });
+        break;
+      case 'agents-init':
+        await agentsInitCommand(args.slice(1));
+        break;
+      case 'deepinit':
+        await agentsInitCommand(args.slice(1));
         break;
       case 'uninstall':
         await uninstall({
@@ -534,19 +559,28 @@ async function reasoningCommand(args: string[]): Promise<void> {
 }
 
 export async function launchWithHud(args: string[]): Promise<void> {
-  // ── Win32 guard ──────────────────────────────────────────────────────
-  if (isNativeWindows() && !isTmuxAvailable()) {
-    console.error(
-      '[omx] OMX requires tmux, which was not found on this system.\n' +
-      '[omx] Install a tmux provider for your platform:\n' +
-      '[omx]   - Windows: winget install psmux  (native tmux for Windows)\n' +
-      '[omx]   - WSL2: sudo apt install tmux\n' +
-      '[omx]   - macOS: brew install tmux\n' +
-      '[omx]   - Linux: sudo apt install tmux\n' +
-      '[omx] See: https://github.com/marlocarlo/psmux',
-    );
-    process.exitCode = 1;
-    return;
+  if (isNativeWindows()) {
+    const { result } = spawnPlatformCommandSync('tmux', ['-V'], {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    if (result.error) {
+      const errno = result.error as NodeJS.ErrnoException;
+      const kind = classifySpawnError(errno);
+      if (kind === 'missing') {
+        console.warn(
+          '[omx] warning: tmux was not found on native Windows. Continuing without tmux/HUD.\n' +
+          '[omx] To enable tmux-backed features, install psmux:\n' +
+          '[omx]   winget install psmux\n' +
+          '[omx] See: https://github.com/marlocarlo/psmux',
+        );
+      } else {
+        console.warn(`[omx] warning: tmux probe failed on native Windows (${errno.code || errno.message}). Continuing without tmux/HUD.`);
+      }
+    } else if (result.status !== 0 && !isTmuxAvailable()) {
+      const stderr = (result.stderr || '').trim();
+      console.warn(`[omx] warning: tmux reported an error on native Windows${stderr ? ` (${stderr})` : ''}. Continuing without tmux/HUD.`);
+    }
   }
 
   const launchCwd = process.cwd();
@@ -704,6 +738,65 @@ function shouldBypassDefaultSystemPrompt(env: NodeJS.ProcessEnv): boolean {
 function buildModelInstructionsOverride(cwd: string, env: NodeJS.ProcessEnv, defaultFilePath?: string): string {
   const filePath = env[OMX_MODEL_INSTRUCTIONS_FILE_ENV] || defaultFilePath || join(cwd, 'AGENTS.md');
   return `${MODEL_INSTRUCTIONS_FILE_KEY}="${escapeTomlString(filePath)}"`;
+}
+
+function tryReadGitValue(cwd: string, args: string[]): string | undefined {
+  try {
+    const value = execFileSync('git', args, {
+      cwd,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 2000,
+    }).trim();
+    return value || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractIssueNumber(text: string): number | undefined {
+  const explicit = text.match(/\bissue\s*#(\d+)\b/i);
+  if (explicit) return Number.parseInt(explicit[1], 10);
+  const generic = text.match(/(^|[^\w/])#(\d+)\b/);
+  return generic ? Number.parseInt(generic[2], 10) : undefined;
+}
+
+function resolveNativeSessionName(cwd: string, sessionId: string): string {
+  if (process.env.TMUX) {
+    try {
+      const tmuxSession = execFileSync('tmux', ['display-message', '-p', '#S'], {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 2000,
+      }).trim();
+      if (tmuxSession) return tmuxSession;
+    } catch {
+      // best effort only
+    }
+  }
+  return buildTmuxSessionName(cwd, sessionId);
+}
+
+function buildNativeHookBaseContext(
+  cwd: string,
+  sessionId: string,
+  normalizedEvent: 'started' | 'blocked' | 'finished' | 'failed',
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const repoPath = tryReadGitValue(cwd, ['rev-parse', '--show-toplevel']) || cwd;
+  const branch = tryReadGitValue(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  const issueNumber = extractIssueNumber([branch, basename(cwd)].filter(Boolean).join(' '));
+
+  return {
+    normalized_event: normalizedEvent,
+    session_name: resolveNativeSessionName(cwd, sessionId),
+    repo_path: repoPath,
+    repo_name: basename(repoPath),
+    worktree_path: cwd,
+    ...(branch ? { branch } : {}),
+    ...(issueNumber !== undefined ? { issue_number: issueNumber } : {}),
+    ...extra,
+  };
 }
 
 export function injectModelInstructionsBypassArgs(
@@ -1050,10 +1143,11 @@ async function preLaunch(cwd: string, sessionId: string, notifyTempContract?: No
   try {
     await emitNativeHookEvent(cwd, 'session-start', {
       session_id: sessionId,
-      context: {
+      context: buildNativeHookBaseContext(cwd, sessionId, 'started', {
         project_path: cwd,
         project_name: basename(cwd),
-      },
+        status: 'started',
+      }),
     });
   } catch (err) {
     process.stderr.write(`[cli/index] operation failed: ${err}\n`);
@@ -1395,14 +1489,21 @@ async function postLaunch(cwd: string, sessionId: string): Promise<void> {
     const durationMs = sessionStartedAt
       ? Date.now() - new Date(sessionStartedAt).getTime()
       : undefined;
+    const normalizedEvent = process.exitCode && process.exitCode !== 0 ? 'failed' : 'finished';
+    const errorSummary = normalizedEvent === 'failed'
+      ? `codex exited with code ${process.exitCode}`
+      : undefined;
     await emitNativeHookEvent(cwd, 'session-end', {
       session_id: sessionId,
-      context: {
+      context: buildNativeHookBaseContext(cwd, sessionId, normalizedEvent, {
         project_path: cwd,
         project_name: basename(cwd),
         duration_ms: durationMs,
         reason: 'session_exit',
-      },
+        status: normalizedEvent === 'failed' ? 'failed' : 'finished',
+        ...(process.exitCode !== undefined ? { exit_code: process.exitCode } : {}),
+        ...(errorSummary ? { error_summary: errorSummary } : {}),
+      }),
     });
   } catch (err) {
     process.stderr.write(`[cli/index] operation failed: ${err}\n`);
@@ -1483,10 +1584,12 @@ async function startNotifyFallbackWatcher(cwd: string): Promise<void> {
         tryKillPid(prevPid, 'SIGTERM');
       }
     } catch (error: unknown) {
-      console.warn('[omx] warning: failed to stop stale notify fallback watcher', {
-        path: pidPath,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      if (!hasErrnoCode(error, 'ESRCH')) {
+        console.warn('[omx] warning: failed to stop stale notify fallback watcher', {
+          path: pidPath,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   }
 
@@ -1594,10 +1697,12 @@ async function stopNotifyFallbackWatcher(cwd: string): Promise<void> {
       tryKillPid(pid, 'SIGTERM');
     }
   } catch (error: unknown) {
-    console.warn('[omx] warning: failed to stop notify fallback watcher process', {
-      path: pidPath,
-      error: error instanceof Error ? error.message : String(error),
-    });
+    if (!hasErrnoCode(error, 'ESRCH')) {
+      console.warn('[omx] warning: failed to stop notify fallback watcher process', {
+        path: pidPath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   await unlink(pidPath).catch((error: unknown) => {

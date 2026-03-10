@@ -58,8 +58,13 @@ OMX is best used as an **outer CLI orchestration layer**:
 - **Capability/state plane (MCP):** task state, mailbox, memory, diagnostics tools
 
 Practical mode split:
-- **`$team` / `omx team`**: durable, inspectable, resumable multi-worker execution
+- **`$team` / `omx team`**: durable, inspectable, resumable multi-worker execution with live lanes, shared blockers, and visible handoff / rebalancing when one worker gets stuck
 - **`$ultrawork`**: lightweight parallel fanout for independent tasks (component mode)
+
+Why team mode exists even when ultrawork already exists:
+- Use **ultrawork** when tasks are mostly independent and the leader can merge results afterward.
+- Use **team mode** when the work benefits from shared situational awareness: workers can discover blockers early, hand work across lanes, and keep execution visible through tmux panes plus durable state.
+- Team mode is the better fit for orchestration-heavy or edge-case-heavy work where runtime control, recovery, and inspectability matter as much as raw fanout.
 
 Low-token team profile example:
 
@@ -196,7 +201,8 @@ This experiment currently changes native prompt generation and metadata, not the
 
 ```bash
 omx                # Launch Codex (+ HUD in tmux when available)
-omx setup          # Install prompts/skills/config by scope + project AGENTS.md/.omx
+omx setup          # Install prompts/skills/config by scope + project .omx (AGENTS.md only for project scope)
+omx agents-init .  # Bootstrap lightweight AGENTS.md files for a repo/subtree
 omx doctor         # Installation/runtime diagnostics
 omx doctor --team  # Team/swarm diagnostics
 omx ask ...        # Ask local provider advisor (claude|gemini), writes .omx/artifacts/*
@@ -314,6 +320,56 @@ omx team shutdown <team-name>
 
 Important rule: do not shutdown while tasks are still `in_progress` unless aborting.
 
+### Recommended high-control workflow: `ralplan -> team -> ralph`
+
+For contributors who want tighter control than `autopilot` but more coordination than `$ultrawork`, the strongest workflow is:
+
+```text
+ralplan -> team -> ralph
+```
+
+Why this combination works well:
+- **`ralplan`** turns a rough request into a spec, acceptance checks, and a lane-ready breakdown before workers start.
+- **`$team`** executes that plan with durable worker coordination, visible runtime state, and better handling of blockers than simple fanout.
+- **`$ralph`** keeps the loop alive until verification is real, evidence is fresh, and cleanup is explicit.
+
+In practice, this is the right workflow when you want to stay in control of planning and orchestration while still getting parallel execution. `autopilot` can chain these modes for you, but advanced users will often prefer running the sequence directly so they can tune worker roles, follow-up stages, and verification thresholds themselves.
+
+Example:
+
+```bash
+omx ask --agent-prompt planner "ralplan: break this feature into worker lanes and acceptance checks"
+omx team 3:executor "execute the approved ralplan with shared runtime coordination"
+```
+
+Planned documentation/product direction: make `ralplan` produce stronger team follow-up guidance by default, including worker placement hints and an explicit follow-up path such as `--followup team`.
+
+### Why `omx team ralph` is a distinct launch mode
+
+Use `omx team ralph ...` when the team run and Ralph follow-up should behave as
+one linked lifecycle, not as two unrelated commands.
+
+- **Linked lifecycle/state:** team starts with `linked_ralph=true`, Ralph tracks
+  `linked_team=true`, and terminal team phases propagate into Ralph state. That
+  gives one operator-visible chain for resume/cancel/final verification instead
+  of a manual handoff after the fact.
+- **Cleanup/shutdown:** linked shutdown uses the Ralph-aware cleanup policy.
+  Team cleanup happens first, Ralph is terminalized from the linked team result,
+  branch rollback preserves worktree branches, and the run records linked
+  terminal metadata plus Ralph cleanup events.
+- **Why not just `team` then later `ralph`:** if you start plain `team` and only
+  launch Ralph afterward, OMX treats them as separate runs. You do not get
+  linked terminal propagation, linked cancel ordering, or automatic Ralph-aware
+  shutdown semantics for that original team run.
+
+Use this quick rule:
+
+| Path | Use when |
+|---|---|
+| `omx team ...` | You want parallel worker coordination only; you will inspect/close the run yourself. |
+| `omx team ralph ...` | You already know the team run should roll straight into persistent Ralph verification and linked cleanup. |
+| `omx team ...` then later `omx ask ... ralph` | You intentionally want a separate, manual second pass after reviewing team output or changing scope. |
+
 ### Ralph Cleanup Policy
 
 When a team runs in ralph mode (`omx team ralph ...`), the shutdown cleanup
@@ -340,6 +396,7 @@ OMX_TEAM_AUTO_INTERRUPT_RETRY=0  # optional: disable adaptive queue->resend fall
 
 Notes:
 - Worker launch args are still shared via `OMX_TEAM_WORKER_LAUNCH_ARGS` for model/config inheritance.
+- When no explicit worker model is provided, low-complexity worker fallback follows `OMX_SPARK_MODEL` (currently `gpt-5.3-codex-spark`).
 - `OMX_TEAM_WORKER_CLI_MAP` overrides `OMX_TEAM_WORKER_CLI` for per-worker selection.
 - Team mode now allocates `model_reasoning_effort` per teammate from the resolved worker role (`low` / `medium` / `high`) unless an explicit reasoning override already exists in `OMX_TEAM_WORKER_LAUNCH_ARGS`.
 - When a worker resolves to a concrete task role, OMX composes a per-worker startup instructions file that layers the corresponding role prompt on top of the shared team worker protocol; explicit `model_instructions_file` launch overrides still win.
@@ -353,24 +410,43 @@ Notes:
   - `user`: `~/.codex/prompts/`, `~/.agents/skills/`, `~/.codex/config.toml`, `~/.omx/agents/`
   - `project`: `./.codex/prompts/`, `./.agents/skills/`, `./.codex/config.toml`, `./.omx/agents/`
 - Launch behavior: if persisted scope is `project`, `omx` launch auto-uses `CODEX_HOME=./.codex` (unless `CODEX_HOME` is already set).
-- Managed OMX artifacts refresh by default in both interactive and non-interactive runs: prompts, skills, native agent configs, project `AGENTS.md`, and the managed OMX portion of `config.toml`
+- Managed OMX artifacts refresh by default in both interactive and non-interactive runs: prompts, skills, native agent configs, and the managed OMX portion of `config.toml`
+- Project `AGENTS.md` is only generated/refreshed for `project` scope; `user` scope leaves any existing project `AGENTS.md` unchanged
 - If a managed file differs and will be overwritten, setup creates a backup first under `.omx/backups/setup/<timestamp>/...` (project scope) or `~/.omx/backups/setup/<timestamp>/...` (user scope)
 - Active-session safety still blocks `AGENTS.md` overwrite while an OMX session is running
 - `config.toml` updates (for both scopes):
   - `notify = ["node", "..."]`
   - `model_reasoning_effort = "high"`
   - `developer_instructions = "..."`
-  - `model = "gpt-5.4"` when root `model` is absent
+  - `model = "gpt-5.4"` when root `model` is absent (matching the current `OMX_MAIN_MODEL` default)
   - if the existing root model is `gpt-5.3-codex`, interactive `omx setup` asks whether to upgrade it to `gpt-5.4`; non-interactive runs preserve the existing model
   - `model_context_window = 1000000` and `model_auto_compact_token_limit = 900000` only when the effective root model is `gpt-5.4` and both context keys are absent
   - `[features] multi_agent = true, child_agents_md = true`
   - MCP server entries (`omx_state`, `omx_memory`, `omx_code_intel`, `omx_trace`)
   - `[tui] status_line`
-- Project `AGENTS.md`
+- Project `AGENTS.md` (project scope only)
 - `.omx/` runtime directories and HUD config
 - Default setup output includes a compact per-category refresh summary; `--verbose` adds changed-file detail
 - `--force` is reserved for stronger maintenance behavior such as stale/deprecated skill cleanup; it is no longer required for ordinary refresh
 - The 1M GPT-5.4 context settings are experimental and can increase usage because requests beyond the standard context budget may count more heavily
+
+## Lightweight AGENTS bootstrap
+
+Use `omx agents-init [path]` when you only want a narrow AGENTS.md bootstrap helper instead of full OMX setup.
+
+- creates or refreshes `AGENTS.md` in the target directory plus its immediate child directories
+- skips generated/vendor/tooling directories such as `.git`, `.omx`, `.codex`, `.agents`, `node_modules`, `dist`, and `build`
+- preserves the `<!-- OMX:AGENTS-MANUAL:* -->` section on refresh
+- skips unmanaged existing `AGENTS.md` files unless you pass `--force`
+- does **not** install prompts, skills, config, or replace planning/execution workflows such as `team`, `ralph`, or `ralplan`
+
+Examples:
+
+```bash
+omx agents-init .
+omx agents-init ./src --dry-run
+omx agents-init . --force
+```
 
 ## Agents and Skills
 

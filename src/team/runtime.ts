@@ -104,6 +104,7 @@ import { resolveCanonicalTeamStateRoot } from './state-root.js';
 import { inferPhaseTargetFromTaskCounts, reconcilePhaseStateForMonitor } from './phase-controller.js';
 import { getTeamTmuxSessions } from '../notifications/tmux.js';
 import { hasStructuredVerificationEvidence } from '../verification/verifier.js';
+import { readModeState, updateModeState } from '../modes/base.js';
 import {
   ensureWorktree,
   planWorktreeTarget,
@@ -146,6 +147,41 @@ export interface TeamSnapshot {
   };
 }
 
+async function syncRootTeamModeStateOnTerminalPhase(
+  teamName: string,
+  phase: TeamPhase | TerminalPhase,
+  cwd: string,
+): Promise<void> {
+  if (phase !== 'complete' && phase !== 'failed' && phase !== 'cancelled') return;
+
+  try {
+    const teamState = await readModeState('team', cwd);
+    if (!teamState) return;
+
+    const stateTeamName = typeof teamState.team_name === 'string' ? teamState.team_name.trim() : '';
+    if (stateTeamName && stateTeamName !== teamName) return;
+
+    const alreadySynced = teamState.active === false
+      && teamState.current_phase === phase
+      && typeof teamState.completed_at === 'string'
+      && teamState.completed_at.length > 0;
+    if (alreadySynced) return;
+
+    const updates: Record<string, unknown> = {
+      active: false,
+      current_phase: phase,
+      team_name: teamName,
+    };
+    if (typeof teamState.completed_at !== 'string' || !teamState.completed_at) {
+      updates.completed_at = new Date().toISOString();
+    }
+
+    await updateModeState('team', updates, cwd);
+  } catch {
+    // Best-effort compatibility sync only.
+  }
+}
+
 /** Runtime handle returned by startTeam */
 export interface TeamRuntime {
   teamName: string;
@@ -159,6 +195,35 @@ interface ShutdownOptions {
   force?: boolean;
   /** When true, applies ralph-specific cleanup policy: no force-kill on failure, detailed audit logging. */
   ralph?: boolean;
+}
+
+function collectProvisionedShutdownWorktrees(config: TeamConfig): EnsureWorktreeResult[] {
+  const seenWorktreePaths = new Set<string>();
+  const worktrees: EnsureWorktreeResult[] = [];
+
+  for (const worker of config.workers) {
+    if (worker.worktree_created !== true) continue;
+    if (worker.worktree_detached !== true) continue;
+    if (!worker.worktree_repo_root || !worker.worktree_path) continue;
+    if (!existsSync(worker.worktree_path)) continue;
+
+    const worktreePath = resolve(worker.worktree_path);
+    if (seenWorktreePaths.has(worktreePath)) continue;
+    seenWorktreePaths.add(worktreePath);
+
+    worktrees.push({
+      enabled: true,
+      repoRoot: worker.worktree_repo_root,
+      worktreePath,
+      detached: true,
+      branchName: null,
+      created: true,
+      reused: false,
+      createdBranch: false,
+    });
+  }
+
+  return worktrees;
 }
 
 export interface TeamStartOptions {
@@ -180,6 +245,9 @@ interface ShutdownGateCounts {
 const MODEL_INSTRUCTIONS_FILE_ENV = 'OMX_MODEL_INSTRUCTIONS_FILE';
 const TEAM_STATE_ROOT_ENV = 'OMX_TEAM_STATE_ROOT';
 const TEAM_LEADER_CWD_ENV = 'OMX_TEAM_LEADER_CWD';
+const WORKTREE_TRIGGER_STATE_ROOT = '$OMX_TEAM_STATE_ROOT';
+const STARTUP_EVIDENCE_TIMEOUT_MS = 2_000;
+const STARTUP_EVIDENCE_POLL_MS = 100;
 
 interface PromptWorkerHandle {
   child: ChildProcessByStdio<Writable, null, null>;
@@ -192,11 +260,75 @@ const PROMPT_WORKER_SIGTERM_WAIT_MS = 3_000;
 const PROMPT_WORKER_SIGKILL_WAIT_MS = 2_000;
 const PROMPT_WORKER_EXIT_POLL_MS = 100;
 
+function resolveInstructionStateRoot(worktreePath?: string | null): string | undefined {
+  return worktreePath ? WORKTREE_TRIGGER_STATE_ROOT : undefined;
+}
+
 function resolveWorkerReadyTimeoutMs(env: NodeJS.ProcessEnv): number {
   const raw = env.OMX_TEAM_READY_TIMEOUT_MS;
   const parsed = Number.parseInt(String(raw ?? ''), 10);
   if (Number.isFinite(parsed) && parsed >= 5_000) return parsed;
   return 45_000;
+}
+
+type WorkerStartupEvidence = 'task_claim' | 'worker_progress' | 'leader_ack' | 'none';
+
+async function readWorkerStartupEvidence(
+  teamName: string,
+  workerName: string,
+  cwd: string,
+): Promise<WorkerStartupEvidence> {
+  const status = await readWorkerStatus(teamName, workerName, cwd);
+  if (typeof status.current_task_id === 'string' && status.current_task_id.trim() !== '') {
+    return 'task_claim';
+  }
+  if (status.state === 'working' || status.state === 'blocked' || status.state === 'done' || status.state === 'failed') {
+    return 'worker_progress';
+  }
+  const leaderMailbox = await listMailboxMessages(teamName, 'leader-fixed', cwd).catch(() => []);
+  if (leaderMailbox.some((message) => message?.from_worker === workerName)) {
+    return 'leader_ack';
+  }
+  return 'none';
+}
+
+function doesStartupEvidenceSettle(
+  workerCli: TeamWorkerCli,
+  evidence: WorkerStartupEvidence,
+): boolean {
+  if (evidence === 'none') return false;
+  if (workerCli === 'codex' && evidence === 'leader_ack') return false;
+  return true;
+}
+
+export async function waitForWorkerStartupEvidence(params: {
+  teamName: string;
+  workerName: string;
+  workerCli: TeamWorkerCli;
+  cwd: string;
+  timeoutMs?: number;
+  pollMs?: number;
+}): Promise<WorkerStartupEvidence> {
+  const timeoutMs = Math.max(0, Math.floor(params.timeoutMs ?? STARTUP_EVIDENCE_TIMEOUT_MS));
+  const pollMs = Math.max(25, Math.floor(params.pollMs ?? STARTUP_EVIDENCE_POLL_MS));
+  const deadline = Date.now() + timeoutMs;
+
+  while (true) {
+    const evidence = await readWorkerStartupEvidence(params.teamName, params.workerName, params.cwd);
+    if (doesStartupEvidenceSettle(params.workerCli, evidence)) return evidence;
+    if (Date.now() >= deadline) return 'none';
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+}
+
+export async function waitForClaudeStartupEvidence(params: {
+  teamName: string;
+  workerName: string;
+  cwd: string;
+  timeoutMs?: number;
+  pollMs?: number;
+}): Promise<WorkerStartupEvidence> {
+  return await waitForWorkerStartupEvidence({ ...params, workerCli: 'claude' });
 }
 
 function shouldSkipWorkerReadyWait(env: NodeJS.ProcessEnv): boolean {
@@ -262,6 +394,7 @@ function isPidAlive(pid: number): boolean {
     process.kill(pid, 0);
     return true;
   } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ESRCH') return false;
     process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
     return false;
   }
@@ -309,7 +442,9 @@ async function teardownPromptWorker(
       process.kill(pid, 'SIGTERM');
     }
   } catch (err) {
-    process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+    if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+      process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+    }
     // Best effort.
   }
 
@@ -336,7 +471,9 @@ async function teardownPromptWorker(
       process.kill(pid, 'SIGKILL');
     }
   } catch (err) {
-    process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+    if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+      process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+    }
     // Best effort.
   }
 
@@ -366,14 +503,7 @@ async function teardownPromptWorker(
 function isPromptWorkerAlive(config: TeamConfig, worker: WorkerInfo): boolean {
   const handle = getPromptWorkerHandle(config.name, worker.name);
   if (handle?.child.exitCode === null && !handle.child.killed) return true;
-  if (!Number.isFinite(worker.pid) || (worker.pid ?? 0) <= 0) return false;
-  try {
-    process.kill(worker.pid as number, 0);
-    return true;
-  } catch (err) {
-    process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
-    return false;
-  }
+  return isPidAlive(worker.pid as number);
 }
 
 export { TEAM_LOW_COMPLEXITY_DEFAULT_MODEL };
@@ -524,9 +654,11 @@ export async function startTeam(
   const workspaceMode: 'single' | 'worktree' = activeWorktreeMode ? 'worktree' : 'single';
   const workerWorkspaceByName = new Map<string, {
     cwd: string;
+    worktreeRepoRoot?: string;
     worktreePath?: string;
     worktreeBranch?: string;
     worktreeDetached?: boolean;
+    worktreeCreated?: boolean;
   }>();
   const provisionedWorktrees: Array<EnsureWorktreeResult | { enabled: false }> = [];
   for (let i = 1; i <= workerCount; i++) {
@@ -548,9 +680,11 @@ export async function startTeam(
       if (ensured.enabled) {
         workerWorkspaceByName.set(workerName, {
           cwd: ensured.worktreePath,
+          worktreeRepoRoot: ensured.repoRoot,
           worktreePath: ensured.worktreePath,
           worktreeBranch: ensured.branchName ?? undefined,
           worktreeDetached: ensured.detached,
+          worktreeCreated: ensured.created,
         });
       }
     }
@@ -624,7 +758,14 @@ export async function startTeam(
     const allTasks = await listTasks(sanitized, leaderCwd);
     const workerBootstrapPlans = [] as Array<{
       workerName: string;
-      workerWorkspace: { cwd: string; worktreePath?: string; worktreeBranch?: string; worktreeDetached?: boolean; };
+      workerWorkspace: {
+        cwd: string;
+        worktreeRepoRoot?: string;
+        worktreePath?: string;
+        worktreeBranch?: string;
+        worktreeDetached?: boolean;
+        worktreeCreated?: boolean;
+      };
       workerTasks: TeamTask[];
       workerRole: string;
       rolePromptContent: string | null;
@@ -656,7 +797,11 @@ export async function startTeam(
         workerRole,
         rolePromptContent: rolePromptContent ?? undefined,
       });
-      const trigger = generateTriggerMessage(workerName, sanitized);
+      const trigger = generateTriggerMessage(
+        workerName,
+        sanitized,
+        resolveInstructionStateRoot(workerWorkspace.worktreePath),
+      );
       const preferredReasoning = resolveAgentReasoningEffort(workerRole) ?? resolveAgentReasoningEffort(agentType);
       const workerLaunchArgs = resolveWorkerLaunchArgsFromEnv(
         process.env,
@@ -782,9 +927,11 @@ export async function startTeam(
         worker_cli: workerCliPlan[i - 1],
         assigned_tasks: workerTasks.map(t => t.id),
         working_dir: workerWorkspace.cwd,
+        worktree_repo_root: workerWorkspace.worktreeRepoRoot,
         worktree_path: workerWorkspace.worktreePath,
         worktree_branch: workerWorkspace.worktreeBranch,
         worktree_detached: workerWorkspace.worktreeDetached,
+        worktree_created: workerWorkspace.worktreeCreated,
         team_state_root: teamStateRoot,
       };
 
@@ -801,9 +948,11 @@ export async function startTeam(
         config.workers[i - 1].role = workerRole;
         config.workers[i - 1].worker_cli = workerCliPlan[i - 1];
         config.workers[i - 1].working_dir = workerWorkspace.cwd;
+        config.workers[i - 1].worktree_repo_root = workerWorkspace.worktreeRepoRoot;
         config.workers[i - 1].worktree_path = workerWorkspace.worktreePath;
         config.workers[i - 1].worktree_branch = workerWorkspace.worktreeBranch;
         config.workers[i - 1].worktree_detached = workerWorkspace.worktreeDetached;
+        config.workers[i - 1].worktree_created = workerWorkspace.worktreeCreated;
         config.workers[i - 1].team_state_root = teamStateRoot;
       }
 
@@ -833,11 +982,13 @@ export async function startTeam(
             workerName,
             workerIndex: i,
             paneId,
+            workerCli: workerCliPlan[i - 1],
             inbox,
             triggerMessage: trigger,
             cwd: leaderCwd,
             dispatchPolicy,
             inboxCorrelationKey: `startup:${workerName}`,
+            requireWorkerStartupEvidence: true,
           });
           if (dispatchOutcome.ok) break;
           if (attempt < maxStartupDispatchRetries) {
@@ -1084,20 +1235,31 @@ export async function monitorTeam(teamName: string, cwd: string): Promise<TeamSn
   }
 
   const allTasksTerminal = taskCounts.pending === 0 && taskCounts.blocked === 0 && taskCounts.in_progress === 0;
+  const deadWorkerStall =
+    config.worker_launch_mode === 'prompt'
+    && config.workers.length > 0
+    && deadWorkers.length >= config.workers.length
+    && !allTasksTerminal;
 
   const persistedPhase = await readTeamPhaseState(sanitized, cwd);
-  const targetPhase = inferPhaseTargetFromTaskCounts(taskCounts, {
-    verificationPending: verificationPendingTasks.length > 0,
-  });
+  const targetPhase = deadWorkerStall
+    ? 'failed'
+    : inferPhaseTargetFromTaskCounts(taskCounts, {
+      verificationPending: verificationPendingTasks.length > 0,
+    });
   const phaseState: TeamPhaseState = reconcilePhaseStateForMonitor(persistedPhase, targetPhase);
   await writeTeamPhaseState(sanitized, phaseState, cwd);
   const phase: TeamPhase | TerminalPhase = phaseState.current_phase;
+  await syncRootTeamModeStateOnTerminalPhase(sanitized, phase, cwd);
 
   for (const taskId of reclaimedTaskIds) {
     recommendations.push(`Reclaimed expired claim for task-${taskId}`);
   }
+  if (deadWorkerStall) {
+    recommendations.push('All workers are dead while work remains; mark the team failed or restart with fresh workers.');
+  }
 
-  await emitMonitorDerivedEvents(sanitized, taskView, workers, previousSnapshot, cwd);
+  await emitMonitorDerivedEvents(sanitized, taskView, workers, previousSnapshot, config.worker_launch_mode, cwd);
   const mailboxDeliveryStartMs = performance.now();
   const mailboxNotifiedByMessageId = await deliverPendingMailboxMessages(
     sanitized,
@@ -1222,7 +1384,11 @@ export async function assignTask(
         workerIndex: workerInfo.index,
         paneId: workerInfo.pane_id,
         inbox,
-        triggerMessage: generateTriggerMessage(workerName, sanitized),
+        triggerMessage: generateTriggerMessage(
+          workerName,
+          sanitized,
+          resolveInstructionStateRoot(workerInfo.worktree_path),
+        ),
         cwd,
         dispatchPolicy,
         inboxCorrelationKey: `assign:${taskId}:${workerName}`,
@@ -1372,7 +1538,11 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
         workerIndex: w.index,
         paneId: w.pane_id,
         inbox: generateShutdownInbox(sanitized, w.name),
-        triggerMessage: generateTriggerMessage(w.name, sanitized),
+        triggerMessage: generateTriggerMessage(
+          w.name,
+          sanitized,
+          resolveInstructionStateRoot(w.worktree_path),
+        ),
         cwd,
         dispatchPolicy,
         inboxCorrelationKey: `shutdown:${w.name}`,
@@ -1510,8 +1680,28 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
     ).catch(() => {});
   }
 
+  const cleanupErrors: string[] = [];
+  const provisionedWorktrees = collectProvisionedShutdownWorktrees(config);
+  if (provisionedWorktrees.length > 0) {
+    try {
+      await rollbackProvisionedWorktrees(provisionedWorktrees, {
+        skipBranchDeletion: options.ralph === true,
+      });
+    } catch (err) {
+      cleanupErrors.push(`rollbackProvisionedWorktrees: ${String(err)}`);
+    }
+  }
+
   // 7. Cleanup state
-  await cleanupTeamState(sanitized, cwd);
+  try {
+    await cleanupTeamState(sanitized, cwd);
+  } catch (err) {
+    cleanupErrors.push(`cleanupTeamState: ${String(err)}`);
+  }
+
+  if (cleanupErrors.length > 0) {
+    throw new Error(cleanupErrors.join(' | '));
+  }
 }
 
 /**
@@ -1529,13 +1719,7 @@ export async function resumeTeam(teamName: string, cwd: string): Promise<TeamRun
     const missingHandles = config.workers
       .filter((worker) => {
         if (!Number.isFinite(worker.pid) || (worker.pid ?? 0) <= 0) return false;
-        try {
-          process.kill(worker.pid as number, 0);
-          return true;
-        } catch (err) {
-          process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
-          return false;
-        }
+        return isPidAlive(worker.pid as number);
       })
       .filter((worker) => !getPromptWorkerHandle(sanitized, worker.name));
     if (missingHandles.length > 0) {
@@ -1625,15 +1809,14 @@ async function emitMonitorDerivedEvents(
   tasks: TeamTask[],
   workers: TeamSnapshot['workers'],
   previous: TeamMonitorSnapshotState | null,
+  workerLaunchMode: TeamConfig['worker_launch_mode'],
   cwd: string,
 ): Promise<void> {
-  if (!previous) return;
-
   for (const task of tasks) {
-    const prevStatus = previous.taskStatusById[task.id];
+    const prevStatus = previous?.taskStatusById[task.id];
     if (prevStatus && prevStatus !== 'completed' && task.status === 'completed') {
       // Skip if a task_completed event was already emitted by transitionTaskStatus (issue #161).
-      if (previous.completedEventTaskIds?.[task.id]) continue;
+      if (previous?.completedEventTaskIds?.[task.id]) continue;
       await appendTeamEvent(
         teamName,
         {
@@ -1649,8 +1832,9 @@ async function emitMonitorDerivedEvents(
   }
 
   for (const worker of workers) {
-    const prevAlive = previous.workerAliveByName[worker.name];
-    if (prevAlive === true && worker.alive === false) {
+    const prevAlive = previous?.workerAliveByName[worker.name];
+    const shouldEmitInitialPromptWorkerStop = workerLaunchMode === 'prompt' && prevAlive === undefined;
+    if ((prevAlive === true || shouldEmitInitialPromptWorkerStop) && worker.alive === false) {
       await appendTeamEvent(
         teamName,
         {
@@ -1664,7 +1848,7 @@ async function emitMonitorDerivedEvents(
       );
     }
 
-    const prevState = previous.workerStateByName[worker.name];
+    const prevState = previous?.workerStateByName[worker.name];
     if (prevState && prevState !== worker.status.state) {
       await appendTeamEvent(
         teamName,
@@ -1786,13 +1970,28 @@ async function dispatchCriticalInboxInstruction(params: {
   workerName: string;
   workerIndex: number;
   paneId?: string;
+  workerCli?: TeamWorkerCli;
   inbox: string;
   triggerMessage: string;
   cwd: string;
   dispatchPolicy: TeamPolicy;
   inboxCorrelationKey: string;
+  requireWorkerStartupEvidence?: boolean;
 }): Promise<DispatchOutcome> {
-  const { teamName, config, workerName, workerIndex, paneId, inbox, triggerMessage, cwd, dispatchPolicy, inboxCorrelationKey } = params;
+  const {
+    teamName,
+    config,
+    workerName,
+    workerIndex,
+    paneId,
+    workerCli,
+    inbox,
+    triggerMessage,
+    cwd,
+    dispatchPolicy,
+    inboxCorrelationKey,
+    requireWorkerStartupEvidence,
+  } = params;
 
   if (config.worker_launch_mode === 'prompt') {
     return await queueInboxInstruction({
@@ -1846,8 +2045,30 @@ async function dispatchCriticalInboxInstruction(params: {
     timeoutMs: dispatchPolicy.dispatch_ack_timeout_ms,
     pollMs: 50,
   });
-  if (receipt && (receipt.status === 'notified' || receipt.status === 'delivered')) {
-    return { ok: true, transport: 'hook', reason: `hook_receipt_${receipt.status}`, request_id: queued.request_id };
+  if (receipt?.status === 'delivered') {
+    return { ok: true, transport: 'hook', reason: 'hook_receipt_delivered', request_id: queued.request_id };
+  }
+  const requiresObservedStartupEvidence = requireWorkerStartupEvidence === true
+    && (workerCli === 'claude' || workerCli === 'codex');
+  let startupEvidence: WorkerStartupEvidence = 'none';
+  if (receipt?.status === 'notified') {
+    if (!requiresObservedStartupEvidence) {
+      return { ok: true, transport: 'hook', reason: 'hook_receipt_notified', request_id: queued.request_id };
+    }
+    startupEvidence = await waitForWorkerStartupEvidence({
+      teamName,
+      workerName,
+      workerCli,
+      cwd,
+    });
+    if (startupEvidence !== 'none') {
+      return {
+        ok: true,
+        transport: 'hook',
+        reason: `hook_receipt_notified_with_${startupEvidence}`,
+        request_id: queued.request_id,
+      };
+    }
   }
   if (receipt?.status === 'failed') {
     const fallback = await notifyWorkerOutcome(config, workerIndex, triggerMessage, paneId);
@@ -1884,6 +2105,12 @@ async function dispatchCriticalInboxInstruction(params: {
   }
 
   const fallback = await notifyWorkerOutcome(config, workerIndex, triggerMessage, paneId);
+  const startupFallbackLabel = receipt?.status === 'notified' && requiresObservedStartupEvidence
+    ? `${workerCli}_startup_no_evidence`
+    : null;
+  const fallbackFailureReason = startupFallbackLabel
+    ? `${startupFallbackLabel}_fallback_failed:${fallback.reason}`
+    : `fallback_attempted_but_unconfirmed:${fallback.reason}`;
   if (fallback.ok) {
     const marked = await markDispatchRequestNotified(
       teamName,
@@ -1904,7 +2131,9 @@ async function dispatchCriticalInboxInstruction(params: {
     return {
       ok: true,
       transport: fallback.transport,
-      reason: `hook_timeout_fallback_confirmed:${fallback.reason}`,
+      reason: startupFallbackLabel
+        ? `${startupFallbackLabel}_fallback_confirmed:${fallback.reason}`
+        : `hook_timeout_fallback_confirmed:${fallback.reason}`,
       request_id: queued.request_id,
     };
   }
@@ -1916,14 +2145,14 @@ async function dispatchCriticalInboxInstruction(params: {
       queued.request_id,
       current.status,
       'failed',
-      { last_reason: `fallback_attempted_but_unconfirmed:${fallback.reason}` },
+      { last_reason: fallbackFailureReason },
       cwd,
     ).catch(() => {});
   }
   return {
     ok: false,
     transport: fallback.transport,
-    reason: `fallback_attempted_but_unconfirmed:${fallback.reason}`,
+    reason: fallbackFailureReason,
     request_id: queued.request_id,
   };
 }
@@ -2131,7 +2360,12 @@ async function deliverPendingMailboxMessages(
     if (!worker.alive) continue;
 
     for (const msg of unnotified) {
-      const triggerMessage = generateMailboxTriggerMessage(worker.name, teamName, 1);
+      const triggerMessage = generateMailboxTriggerMessage(
+        worker.name,
+        teamName,
+        1,
+        resolveInstructionStateRoot(workerInfo.worktree_path),
+      );
       const transportPreference = config.worker_launch_mode === 'prompt'
         ? 'prompt_stdin'
         : (dispatchPolicy.dispatch_mode === 'transport_direct' ? 'transport_direct' : 'hook_preferred_with_fallback');
@@ -2267,7 +2501,12 @@ export async function sendWorkerMessage(
   const recipient = config.workers.find((w) => w.name === toWorker);
   if (!recipient) throw new Error(`Worker ${toWorker} not found in team`);
 
-  const triggerMessage = generateMailboxTriggerMessage(toWorker, sanitized, 1);
+  const triggerMessage = generateMailboxTriggerMessage(
+    toWorker,
+    sanitized,
+    1,
+    resolveInstructionStateRoot(recipient.worktree_path),
+  );
   const transportPreference = config.worker_launch_mode === 'prompt'
     ? 'prompt_stdin'
     : (dispatchPolicy.dispatch_mode === 'transport_direct' ? 'transport_direct' : 'hook_preferred_with_fallback');
@@ -2330,7 +2569,12 @@ export async function broadcastWorkerMessage(
     recipients: config.workers.map((w) => ({ workerName: w.name, workerIndex: w.index, paneId: w.pane_id })),
     body,
     cwd,
-    triggerFor: (workerName) => generateMailboxTriggerMessage(workerName, sanitized, 1),
+    triggerFor: (workerName) => generateMailboxTriggerMessage(
+      workerName,
+      sanitized,
+      1,
+      resolveInstructionStateRoot(config.workers.find((worker) => worker.name === workerName)?.worktree_path),
+    ),
     transportPreference,
     fallbackAllowed: transportPreference === 'hook_preferred_with_fallback',
     notify: async (target, message) =>
@@ -2364,7 +2608,12 @@ export async function broadcastWorkerMessage(
       workerIndex: target.index,
       paneId: target.pane_id,
       messageId: outcome.message_id,
-      triggerMessage: generateMailboxTriggerMessage(target.name, sanitized, 1),
+      triggerMessage: generateMailboxTriggerMessage(
+        target.name,
+        sanitized,
+        1,
+        resolveInstructionStateRoot(target.worktree_path),
+      ),
       config,
       dispatchPolicy,
       cwd,

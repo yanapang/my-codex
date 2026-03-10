@@ -4,6 +4,24 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.8.11] - 2026-03-10
+
+Generated from the latest merged `dev` runtime/model-default work and validated on `dev` before release.
+
+### Added
+- **Additive team event-query APIs** — `omx team api` now exposes dedicated event-query operations so team runtime signals can be consumed more structurally. (PR [#714](https://github.com/Yeachan-Heo/oh-my-codex/pull/714))
+- **Explicit model-default contract** — runtime/docs/tests now align around the intended main/spark default model behavior (`gpt-5.4` / `gpt-5.3-codex-spark`). (PR [#718](https://github.com/Yeachan-Heo/oh-my-codex/pull/718))
+
+### Changed
+- **Team prompt decomposition is less brittle for prose prompts** — natural-language task prompts are no longer fragmented into pathological subtasks as easily. (PR [#712](https://github.com/Yeachan-Heo/oh-my-codex/pull/712))
+
+### Fixed
+- **Shell-pane notification cleanup after terminal team states** — team notify injection now stays out of shell panes after completion. (PR [#668](https://github.com/Yeachan-Heo/oh-my-codex/pull/668))
+- **Clawhip lifecycle event noise reduction** — operational event emission is quieter while preserving needed visibility. (PR [#713](https://github.com/Yeachan-Heo/oh-my-codex/pull/713))
+- **Team runtime hardening across startup/worktree/idle-launch-arg paths** — includes the merged fixes from PRs [#696](https://github.com/Yeachan-Heo/oh-my-codex/pull/696), [#697](https://github.com/Yeachan-Heo/oh-my-codex/pull/697), [#700](https://github.com/Yeachan-Heo/oh-my-codex/pull/700), [#707](https://github.com/Yeachan-Heo/oh-my-codex/pull/707), [#708](https://github.com/Yeachan-Heo/oh-my-codex/pull/708), and [#711](https://github.com/Yeachan-Heo/oh-my-codex/pull/711).
+- **Release gate stability for setup refresh tests** — setup AGENTS overwrite coverage now stays non-interactive under test so the release gate no longer hangs on a model-upgrade prompt.
+
+
 ## [0.8.10] - 2026-03-09
 
 5 non-merge commits from `v0.8.9..dev`. Contributors: [@Yeachan-Heo](https://github.com/Yeachan-Heo), [@HaD0Yun](https://github.com/HaD0Yun).

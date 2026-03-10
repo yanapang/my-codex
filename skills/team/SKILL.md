@@ -42,6 +42,22 @@ omx team "debug flaky integration tests"
 omx team ralph "ship end-to-end fix with verification"
 ```
 
+### Why `team ralph` exists as a separate launch form
+
+`omx team ralph ...` is not just shorthand for "run team now, decide on Ralph
+later." It creates a linked team+Ralph lifecycle from launch time.
+
+- **Linked lifecycle/state:** the team run is marked `linked_ralph`, Ralph is
+  marked `linked_team`, and team terminal phases can propagate into Ralph state.
+- **Cleanup/shutdown:** linked cancellation and shutdown happen in order: team
+  cleanup first, then Ralph terminalization/cleanup metadata.
+- **Operator choice:**
+  - use plain `omx team ...` when you only want coordinated workers
+  - use `omx team ralph ...` when persistent Ralph verification/cleanup is part
+    of the plan from the start
+  - use plain `team` and start Ralph later only when you want a deliberately
+    separate manual follow-up after reviewing output or changing scope
+
 ### Claude teammates (v0.6.0+)
 
 Important: `N:agent-type` (for example `2:executor`) selects the **worker role prompt**, not the worker CLI (`codex` vs `claude`).
@@ -94,6 +110,17 @@ Before launching `omx team`, require a grounded context snapshot:
 
 Do not start worker panes until this gate is satisfied; if forced to proceed quickly, state explicit scope/risk limitations in the launch report.
 
+## Follow-up Staffing Contract
+
+When `$team` is used as a follow-up mode from ralplan, carry forward the approved plan's explicit **available-agent-types roster** and convert it into concrete staffing guidance before launch:
+
+- keep worker-role choices inside the known roster
+- state the recommended headcount and role counts
+- state the suggested reasoning level for each lane when available
+- explain why each lane exists (delivery, verification, specialist support)
+- include an explicit launch hint (`omx team ralph N "<task>"` / `$team ralph N "<task>"`) when the plan expects Ralph to verify after team delivery
+- if the ideal role is unavailable, choose the closest role from the roster and say so
+
 ## Current Runtime Behavior (As Implemented)
 
 `omx team` currently performs:
@@ -142,7 +169,7 @@ Team mode resolves worker **model flags** from one shared launch-arg set (not pe
 Model precedence (highest to lowest):
 1. Explicit worker model in `OMX_TEAM_WORKER_LAUNCH_ARGS`
 2. Inherited leader `--model` flag
-3. Injected low-complexity default: `gpt-5.3-codex-spark` (only when 1+2 are absent and team `agentType` is low-complexity)
+3. Low-complexity default from `OMX_SPARK_MODEL` (currently `gpt-5.3-codex-spark`) when 1+2 are absent and team `agentType` is low-complexity
 
 Thinking-level rule (critical):
 - **No model-name heuristic mapping.**

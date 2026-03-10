@@ -1,10 +1,16 @@
 import { updateModeState, startMode, readModeState } from '../modes/base.js';
-import { monitorTeam, resumeTeam, shutdownTeam, startTeam, type TeamRuntime } from '../team/runtime.js';
+import { monitorTeam, resumeTeam, shutdownTeam, startTeam, type TeamRuntime, type TeamSnapshot } from '../team/runtime.js';
 import { DEFAULT_MAX_WORKERS } from '../team/state.js';
 import { sanitizeTeamName } from '../team/tmux-session.js';
-import { waitForTeamEvent } from '../team/state/events.js';
+import { readTeamEvents, waitForTeamEvent } from '../team/state/events.js';
+import type { TeamEvent } from '../team/state.js';
 import { parseWorktreeMode, type WorktreeMode } from '../team/worktree.js';
 import { routeTaskToRole } from '../team/role-router.js';
+import {
+  buildFollowupStaffingPlan,
+  resolveAvailableAgentTypes,
+  type FollowupStaffingPlan,
+} from '../team/followup-planner.js';
 import {
   TEAM_API_OPERATIONS,
   resolveTeamApiOperation,
@@ -77,6 +83,8 @@ const TEAM_API_OPERATION_REQUIRED_FIELDS: Record<TeamApiOperation, string[]> = {
   'write-worker-inbox': ['team_name', 'worker', 'content'],
   'write-worker-identity': ['team_name', 'worker', 'index', 'role'],
   'append-event': ['team_name', 'type', 'worker'],
+  'read-events': ['team_name'],
+  'await-event': ['team_name'],
   'get-summary': ['team_name'],
   'cleanup': ['team_name'],
   'write-shutdown-request': ['team_name', 'worker', 'requested_by'],
@@ -97,6 +105,8 @@ const TEAM_API_OPERATION_OPTIONAL_FIELDS: Partial<Record<TeamApiOperation, strin
     'worktree_path', 'worktree_branch', 'worktree_detached', 'team_state_root',
   ],
   'append-event': ['task_id', 'message_id', 'reason'],
+  'read-events': ['after_event_id', 'wakeable_only', 'type', 'worker', 'task_id'],
+  'await-event': ['after_event_id', 'timeout_ms', 'poll_ms', 'wakeable_only', 'type', 'worker', 'task_id'],
   'write-task-approval': ['required'],
 };
 
@@ -104,6 +114,8 @@ const TEAM_API_OPERATION_NOTES: Partial<Record<TeamApiOperation, string>> = {
   'update-task': 'Only non-lifecycle task metadata can be updated.',
   'release-task-claim': 'Use this only for rollback/requeue to pending (not for completion).',
   'transition-task-status': 'Lifecycle flow is claim-safe and typically transitions in_progress -> completed|failed.',
+  'read-events': 'Events are returned in canonical form; worker_idle log entries normalize to type worker_state_changed with source_type worker_idle. wakeable_only defaults to false; set wakeable_only=true to mirror omx team await semantics.',
+  'await-event': 'Waits for the next matching event and returns status=timeout when no matching event arrives before timeout_ms. wakeable_only defaults to false; set wakeable_only=true to mirror omx team await semantics.',
 };
 
 function sampleValueForTeamApiField(field: string): unknown {
@@ -130,6 +142,10 @@ function sampleValueForTeamApiField(field: string): unknown {
     case 'assigned_tasks': return ['1', '2'];
     case 'type': return 'task_completed';
     case 'requested_by': return 'leader-fixed';
+    case 'after_event_id': return 'evt-123';
+    case 'wakeable_only': return true;
+    case 'timeout_ms': return 500;
+    case 'poll_ms': return 100;
     case 'min_updated_at': return '2026-03-04T00:00:00.000Z';
     case 'snapshot':
       return {
@@ -241,6 +257,26 @@ function slugifyTask(task: string): string {
     .slice(0, 30) || 'team-task';
 }
 
+function snapshotHasDeadWorkerStall(snapshot: TeamSnapshot): boolean {
+  return snapshot.deadWorkers.length > 0 && (snapshot.tasks.pending + snapshot.tasks.in_progress) > 0;
+}
+
+function buildDeadWorkerAwaitEvent(teamName: string, snapshot: TeamSnapshot): TeamEvent | null {
+  const deadWorker = snapshot.workers.find((worker) => worker.alive === false);
+  if (!deadWorker) return null;
+  return {
+    event_id: `snapshot-${Date.now()}`,
+    team: sanitizeTeamName(teamName),
+    type: 'worker_stopped',
+    worker: deadWorker.name,
+    task_id: deadWorker.status.current_task_id,
+    message_id: null,
+    reason: deadWorker.status.reason ?? 'dead_worker_detected_during_await',
+    created_at: deadWorker.status.updated_at || new Date().toISOString(),
+    source_type: 'await_snapshot',
+  };
+}
+
 function parseTeamArgs(args: string[]): ParsedTeamArgs {
   const tokens = [...args];
   let ralph = false;
@@ -323,7 +359,27 @@ export function decomposeTaskString(
   return distributeTasksToWorkers(tasksWithRoles, workerCount);
 }
 
-/** Split a task string into sub-tasks using numbered lists or conjunctions. */
+const ACTIONABLE_TASK_PREFIX = /^(?:add|analy(?:se|ze)|audit|benchmark|build|clean(?:\s+up)?|create|debug|design|document|draft|fix|implement|improve|investigate|migrate|optimi(?:s|z)e|profile|refactor|repair|research|review|ship|summari(?:s|z)e|test|update|validate|verify|write)\b/i;
+const TASK_LABEL_PREFIX = /^(?:task|step|phase|part)\s+[\w-]+(?:\s+[\w-]+)?$/i;
+const CONTEXTUAL_DECOMPOSITION_CLAUSE = /\b(?:focusing on|focus on|including|covers?|covering|with|while|without|ensuring|suitable for|root cause|user impact|evidence pointers|actionable recommendations)\b/i;
+
+function countWords(text: string): number {
+  return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+function looksLikeStandaloneWeakSubtask(part: string): boolean {
+  const normalized = part.trim().replace(/^[*-]\s*/, '');
+  return ACTIONABLE_TASK_PREFIX.test(normalized) || TASK_LABEL_PREFIX.test(normalized);
+}
+
+function canSafelySplitWeakTaskList(task: string, parts: string[]): boolean {
+  if (parts.length < 2) return false;
+  if (countWords(task) > 18) return false;
+  if (CONTEXTUAL_DECOMPOSITION_CLAUSE.test(task)) return false;
+  return parts.every((part) => countWords(part) <= 8 && looksLikeStandaloneWeakSubtask(part));
+}
+
+/** Split a task string into sub-tasks using numbered lists or conservative delimiters. */
 function splitTaskString(task: string): Array<{ subject: string; description: string }> {
   // Try numbered list: "1. foo 2. bar 3. baz" or "1) foo 2) bar"
   const numberedPattern = /(?:^|\s)(\d+)[.)]\s+/g;
@@ -342,12 +398,15 @@ function splitTaskString(task: string): Array<{ subject: string; description: st
     if (parts.length >= 2) return parts;
   }
 
-  // Try conjunction splitting: " and ", ", ", "; "
-  // Only split on top-level conjunctions (not inside quoted strings)
-  const conjunctionPattern = /(?:,\s+|\s+and\s+|;\s+)/i;
-  const parts = task.split(conjunctionPattern).map(s => s.trim()).filter(s => s.length > 0);
-  if (parts.length >= 2) {
-    return parts.map(p => ({ subject: p.slice(0, 80), description: p }));
+  const strongParts = task.split(/;\s+/).map(s => s.trim()).filter(s => s.length > 0);
+  if (strongParts.length >= 2) {
+    return strongParts.map((part) => ({ subject: part.slice(0, 80), description: part }));
+  }
+
+  // Commas / "and" only split when the overall input already looks like a flat task list.
+  const weakParts = task.split(/(?:,\s+and\s+|,\s+|\s+and\s+)/i).map(s => s.trim()).filter(s => s.length > 0);
+  if (canSafelySplitWeakTaskList(task, weakParts)) {
+    return weakParts.map((part) => ({ subject: part.slice(0, 80), description: part }));
   }
 
   // Single atomic task
@@ -396,6 +455,12 @@ async function ensureTeamModeState(
     ? [...new Set(tasks.map(t => t.role ?? parsed.agentType))].join(',')
     : parsed.agentType;
 
+  const availableAgentTypes = await resolveAvailableAgentTypes(process.cwd());
+  const staffingPlan = buildFollowupStaffingPlan('team', parsed.task, availableAgentTypes, {
+    workerCount: parsed.workerCount,
+    fallbackRole: parsed.agentType,
+  });
+
   const existing = await readModeState('team');
   if (existing?.active) {
     await updateModeState('team', {
@@ -405,6 +470,9 @@ async function ensureTeamModeState(
       team_name: parsed.teamName,
       agent_count: parsed.workerCount,
       agent_types: roleDistribution,
+      available_agent_types: availableAgentTypes,
+      staffing_summary: staffingPlan.staffingSummary,
+      staffing_allocations: staffingPlan.allocations,
     });
     return;
   }
@@ -416,14 +484,21 @@ async function ensureTeamModeState(
     team_name: parsed.teamName,
     agent_count: parsed.workerCount,
     agent_types: roleDistribution,
+    available_agent_types: availableAgentTypes,
+    staffing_summary: staffingPlan.staffingSummary,
+    staffing_allocations: staffingPlan.allocations,
   });
 }
 
-async function renderStartSummary(runtime: TeamRuntime): Promise<void> {
+async function renderStartSummary(runtime: TeamRuntime, staffingPlan?: FollowupStaffingPlan): Promise<void> {
   console.log(`Team started: ${runtime.teamName}`);
   console.log(`tmux target: ${runtime.sessionName}`);
   console.log(`workers: ${runtime.config.worker_count}`);
   console.log(`agent_type: ${runtime.config.agent_type}`);
+  if (staffingPlan) {
+    console.log(`available_agent_types: ${staffingPlan.rosterSummary}`);
+    console.log(`staffing_plan: ${staffingPlan.staffingSummary}`);
+  }
 
   const snapshot = await monitorTeam(runtime.teamName, runtime.cwd);
   if (!snapshot) {
@@ -553,12 +628,37 @@ export async function teamCommand(args: string[], options: TeamCliOptions = {}):
       return;
     }
 
-    const result = await waitForTeamEvent(name, cwd, {
-      afterEventId: afterEventId || undefined,
-      timeoutMs,
-      pollMs: 100,
+    const baselineCursor = afterEventId || (await readTeamEvents(name, cwd, { wakeableOnly: true }).then((events) => events.at(-1)?.event_id ?? ''));
+    const snapshot = await monitorTeam(name, cwd);
+    const immediateEvent = await readTeamEvents(name, cwd, {
+      afterEventId: baselineCursor || undefined,
       wakeableOnly: true,
-    });
+    }).then((events) => events[0]);
+
+    const result =
+      immediateEvent
+        ? { status: 'event' as const, cursor: immediateEvent.event_id, event: immediateEvent }
+        : snapshot && snapshotHasDeadWorkerStall(snapshot)
+          ? await readTeamEvents(name, cwd, { wakeableOnly: true }).then((events) => {
+            const latestWakeableEvent = events.at(-1);
+            if (latestWakeableEvent) {
+              return {
+                status: 'event' as const,
+                cursor: latestWakeableEvent.event_id,
+                event: latestWakeableEvent,
+              };
+            }
+            const fallbackEvent = buildDeadWorkerAwaitEvent(name, snapshot);
+            return fallbackEvent
+              ? { status: 'event' as const, cursor: baselineCursor, event: fallbackEvent }
+              : { status: 'timeout' as const, cursor: baselineCursor };
+          })
+          : await waitForTeamEvent(name, cwd, {
+            afterEventId: baselineCursor || undefined,
+            timeoutMs,
+            pollMs: 100,
+            wakeableOnly: true,
+          });
 
     if (wantsJson) {
       console.log(JSON.stringify({
@@ -609,7 +709,12 @@ export async function teamCommand(args: string[], options: TeamCliOptions = {}):
       teamName: runtime.teamName,
       ralph: preservedRalph,
     });
-    await renderStartSummary(runtime);
+    const availableAgentTypes = await resolveAvailableAgentTypes(cwd);
+    const staffingPlan = buildFollowupStaffingPlan('team', runtime.config.task, availableAgentTypes, {
+      workerCount: runtime.config.worker_count,
+      fallbackRole: runtime.config.agent_type,
+    });
+    await renderStartSummary(runtime, staffingPlan);
     return;
   }
 
@@ -641,6 +746,11 @@ export async function teamCommand(args: string[], options: TeamCliOptions = {}):
 
   const parsed = parseTeamArgs(teamArgs);
   const tasks = decomposeTaskString(parsed.task, parsed.workerCount, parsed.agentType, parsed.explicitAgentType);
+  const availableAgentTypes = await resolveAvailableAgentTypes(cwd);
+  const staffingPlan = buildFollowupStaffingPlan('team', parsed.task, availableAgentTypes, {
+    workerCount: parsed.workerCount,
+    fallbackRole: parsed.agentType,
+  });
   const runtime = await startTeam(
     parsed.teamName,
     parsed.task,
@@ -655,5 +765,5 @@ export async function teamCommand(args: string[], options: TeamCliOptions = {}):
   if (options.verbose) {
     console.log(`linked_ralph=${parsed.ralph}`);
   }
-  await renderStartSummary(runtime);
+  await renderStartSummary(runtime, staffingPlan);
 }

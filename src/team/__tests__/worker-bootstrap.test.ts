@@ -310,6 +310,17 @@ describe('worker bootstrap', () => {
   it('generateTriggerMessage contains the inbox path', () => {
     const message = generateTriggerMessage('worker-9', 'team-path');
     assert.match(message, /\.omx\/state\/team\/team-path\/workers\/worker-9\/inbox\.md/);
+    assert.match(message, /start work now/i);
+    assert.match(message, /concrete progress/i);
+    assert.match(message, /ACK-only/);
+  });
+
+  it('generateTriggerMessage uses provided state-root reference for worktree workers', () => {
+    const message = generateTriggerMessage('worker-9', 'team-path', '$OMX_TEAM_STATE_ROOT');
+    assert.match(message, /\$OMX_TEAM_STATE_ROOT\/team\/team-path\/workers\/worker-9\/inbox\.md/);
+    assert.match(message, /work now/i);
+    assert.match(message, /report progress/i);
+    assert.ok(message.length < 200);
   });
 
   it('generateMailboxTriggerMessage is always < 200 characters', () => {
@@ -321,6 +332,18 @@ describe('worker bootstrap', () => {
     const message = generateMailboxTriggerMessage('worker-2', 'team-mail', 3);
     assert.match(message, /3 new message/);
     assert.match(message, /\.omx\/state\/team\/team-mail\/mailbox\/worker-2\.json/);
+    assert.match(message, /act now/i);
+    assert.match(message, /concrete progress/i);
+    assert.match(message, /ACK-only/);
+  });
+
+  it('generateMailboxTriggerMessage uses provided state-root reference for worktree workers', () => {
+    const message = generateMailboxTriggerMessage('worker-2', 'team-mail', 3, '$OMX_TEAM_STATE_ROOT');
+    assert.match(message, /3 new msg/);
+    assert.match(message, /\$OMX_TEAM_STATE_ROOT\/team\/team-mail\/mailbox\/worker-2\.json/);
+    assert.match(message, /act/i);
+    assert.match(message, /report progress/i);
+    assert.ok(message.length < 200);
   });
 
   it('writeTeamWorkerInstructionsFile composes base AGENTS.md with overlay', async () => {

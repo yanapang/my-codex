@@ -11,12 +11,16 @@ import {
   type TeamEventType,
   type TeamTaskApprovalStatus,
 } from './contracts.js';
+import { readTeamEvents, waitForTeamEvent } from './state/events.js';
 import {
   teamSendMessage as sendDirectMessage,
   teamBroadcast as broadcastMessage,
   teamListMailbox as listMailboxMessages,
   teamMarkMessageDelivered as markMessageDelivered,
   teamMarkMessageNotified as markMessageNotified,
+  teamListDispatchRequests,
+  teamMarkDispatchRequestNotified,
+  teamMarkDispatchRequestDelivered,
   teamCreateTask,
   teamReadTask,
   teamListTasks,
@@ -98,6 +102,8 @@ export const TEAM_API_OPERATIONS = [
   'write-worker-inbox',
   'write-worker-identity',
   'append-event',
+  'read-events',
+  'await-event',
   'get-summary',
   'cleanup',
   'write-shutdown-request',
@@ -114,8 +120,66 @@ export type TeamApiEnvelope =
   | { ok: true; operation: TeamApiOperation; data: Record<string, unknown> }
   | { ok: false; operation: TeamApiOperation | 'unknown'; error: { code: string; message: string } };
 
+async function markLatestMailboxDispatchDelivered(
+  teamName: string,
+  worker: string,
+  messageId: string,
+  cwd: string,
+): Promise<{ matched_request_id: string | null; dispatch_updated: boolean }> {
+  const requests = await teamListDispatchRequests(teamName, cwd, { kind: 'mailbox', to_worker: worker });
+  const matching = requests
+    .filter((request) => request.message_id === messageId)
+    .sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at));
+
+  const latest = matching[0];
+  if (!latest) {
+    return { matched_request_id: null, dispatch_updated: false };
+  }
+
+  if (latest.status === 'pending') {
+    await teamMarkDispatchRequestNotified(teamName, latest.request_id, { message_id: messageId }, cwd);
+  }
+
+  const delivered = await teamMarkDispatchRequestDelivered(teamName, latest.request_id, { message_id: messageId }, cwd);
+  return {
+    matched_request_id: latest.request_id,
+    dispatch_updated: delivered?.status === 'delivered',
+  };
+}
+
 function isFiniteInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && Number.isFinite(value);
+}
+
+function parseOptionalNonNegativeInteger(value: unknown, fieldName: string): number | null {
+  if (value === undefined) return null;
+  if (!isFiniteInteger(value) || value < 0) {
+    throw new Error(`${fieldName} must be a non-negative integer when provided`);
+  }
+  return value;
+}
+
+function parseOptionalBoolean(value: unknown, fieldName: string): boolean | null {
+  if (value === undefined) return null;
+  if (typeof value !== 'boolean') {
+    throw new Error(`${fieldName} must be a boolean when provided`);
+  }
+  return value;
+}
+
+function parseOptionalEventType(value: unknown): TeamEventType | 'worker_idle' | null {
+  if (value === undefined) return null;
+  if (typeof value !== 'string') {
+    throw new Error('type must be a string when provided');
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    throw new Error('type cannot be empty when provided');
+  }
+  if (!TEAM_EVENT_TYPES.includes(normalized as TeamEventType)) {
+    throw new Error(`type must be one of: ${TEAM_EVENT_TYPES.join(', ')}`);
+  }
+  return normalized as TeamEventType | 'worker_idle';
 }
 
 function parseValidatedTaskIdArray(value: unknown, fieldName: string): string[] {
@@ -310,7 +374,18 @@ export async function executeTeamApiOperation(
           return { ok: false, operation, error: { code: 'invalid_input', message: 'team_name, worker, message_id are required' } };
         }
         const updated = await markMessageDelivered(teamName, worker, messageId, cwd);
-        return { ok: true, operation, data: { worker, message_id: messageId, updated } };
+        const dispatch = await markLatestMailboxDispatchDelivered(teamName, worker, messageId, cwd);
+        return {
+          ok: true,
+          operation,
+          data: {
+            worker,
+            message_id: messageId,
+            updated,
+            dispatch_request_id: dispatch.matched_request_id,
+            dispatch_updated: dispatch.dispatch_updated,
+          },
+        };
       }
       case 'mailbox-mark-notified': {
         const teamName = String(args.team_name || '').trim();
@@ -538,8 +613,65 @@ export async function executeTeamApiOperation(
           prev_state: args.prev_state as string | undefined,
           to_worker: args.to_worker as string | undefined,
           worker_count: typeof args.worker_count === 'number' ? args.worker_count : undefined,
+          source_type: args.source_type as string | undefined,
         }, cwd);
         return { ok: true, operation, data: { event } };
+      }
+      case 'read-events': {
+        const teamName = String(args.team_name || '').trim();
+        if (!teamName) {
+          return { ok: false, operation, error: { code: 'invalid_input', message: 'team_name is required' } };
+        }
+        const wakeableOnly = parseOptionalBoolean(args.wakeable_only, 'wakeable_only');
+        const eventType = parseOptionalEventType(args.type);
+        const worker = typeof args.worker === 'string' ? args.worker.trim() : '';
+        const taskId = typeof args.task_id === 'string' ? args.task_id.trim() : '';
+        const events = await readTeamEvents(teamName, cwd, {
+          afterEventId: typeof args.after_event_id === 'string' ? args.after_event_id.trim() || undefined : undefined,
+          wakeableOnly: wakeableOnly ?? false,
+          type: eventType ?? undefined,
+          worker: worker || undefined,
+          taskId: taskId || undefined,
+        });
+        return {
+          ok: true,
+          operation,
+          data: {
+            count: events.length,
+            cursor: events.at(-1)?.event_id ?? (typeof args.after_event_id === 'string' ? args.after_event_id.trim() : ''),
+            events,
+          },
+        };
+      }
+      case 'await-event': {
+        const teamName = String(args.team_name || '').trim();
+        if (!teamName) {
+          return { ok: false, operation, error: { code: 'invalid_input', message: 'team_name is required' } };
+        }
+        const timeoutMs = parseOptionalNonNegativeInteger(args.timeout_ms, 'timeout_ms') ?? 30_000;
+        const pollMs = parseOptionalNonNegativeInteger(args.poll_ms, 'poll_ms');
+        const wakeableOnly = parseOptionalBoolean(args.wakeable_only, 'wakeable_only');
+        const eventType = parseOptionalEventType(args.type);
+        const worker = typeof args.worker === 'string' ? args.worker.trim() : '';
+        const taskId = typeof args.task_id === 'string' ? args.task_id.trim() : '';
+        const result = await waitForTeamEvent(teamName, cwd, {
+          afterEventId: typeof args.after_event_id === 'string' ? args.after_event_id.trim() || undefined : undefined,
+          timeoutMs,
+          pollMs: pollMs ?? undefined,
+          wakeableOnly: wakeableOnly ?? false,
+          type: eventType ?? undefined,
+          worker: worker || undefined,
+          taskId: taskId || undefined,
+        });
+        return {
+          ok: true,
+          operation,
+          data: {
+            status: result.status,
+            cursor: result.cursor,
+            event: result.event ?? null,
+          },
+        };
       }
       case 'get-summary': {
         const teamName = String(args.team_name || '').trim();

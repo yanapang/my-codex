@@ -28,6 +28,21 @@ const DISPATCH_TRIGGER_COOLDOWN_ENV = 'OMX_TEAM_DISPATCH_TRIGGER_COOLDOWN_MS';
 const LEADER_PANE_MISSING_DEFERRED_REASON = 'leader_pane_missing_deferred';
 const LEADER_NOTIFICATION_DEFERRED_TYPE = 'leader_notification_deferred';
 
+async function emitOperationalHookEvent(cwd, eventName, context) {
+  try {
+    const { buildNativeHookEvent } = await import('../../dist/hooks/extensibility/events.js');
+    const { dispatchHookEvent } = await import('../../dist/hooks/extensibility/dispatcher.js');
+    const event = buildNativeHookEvent(eventName, {
+      normalized_event: eventName,
+      scope: 'team-dispatch',
+      ...context,
+    });
+    await dispatchHookEvent(event, { cwd });
+  } catch {
+    // best effort only
+  }
+}
+
 function resolveIssueDispatchCooldownMs(env = process.env) {
   const raw = safeString(env[ISSUE_DISPATCH_COOLDOWN_ENV]).trim();
   if (raw === '') return DEFAULT_ISSUE_DISPATCH_COOLDOWN_MS;
@@ -211,6 +226,7 @@ async function appendLeaderNotificationDeferredEvent({
   nowIso,
   tmuxSession = '',
   leaderPaneId = '',
+  sourceType = 'team_dispatch',
 }) {
   const eventsDir = join(stateDir, 'team', teamName, 'events');
   const eventsPath = join(eventsDir, 'events.ndjson');
@@ -227,6 +243,7 @@ async function appendLeaderNotificationDeferredEvent({
     tmux_session: tmuxSession || null,
     leader_pane_id: leaderPaneId || null,
     tmux_injection_attempted: false,
+    source_type: sourceType,
   };
   await mkdir(eventsDir, { recursive: true }).catch(() => {});
   await appendFile(eventsPath, JSON.stringify(event) + '\n').catch(() => {});
@@ -522,6 +539,7 @@ export async function drainPendingTeamDispatch({
               nowIso,
               tmuxSession: safeString(config?.tmux_session).trim(),
               leaderPaneId: safeString(config?.leader_pane_id).trim(),
+              sourceType: 'team_dispatch',
             });
           }
           continue;
@@ -580,6 +598,15 @@ export async function drainPendingTeamDispatch({
               attempt: request.attempt_count,
               reason: result.reason,
             });
+            await emitOperationalHookEvent(cwd, 'retry-needed', {
+              team: teamName,
+              worker: request.to_worker,
+              request_id: request.request_id,
+              attempt: request.attempt_count,
+              command: request.trigger_message,
+              reason: result.reason,
+              status: 'retry-needed',
+            });
             continue;
           }
           if (result.reason === 'tmux_send_keys_unconfirmed') {
@@ -596,6 +623,16 @@ export async function drainPendingTeamDispatch({
               worker: request.to_worker,
               message_id: request.message_id || null,
               reason: request.last_reason,
+            });
+            await emitOperationalHookEvent(cwd, 'failed', {
+              team: teamName,
+              worker: request.to_worker,
+              request_id: request.request_id,
+              message_id: request.message_id || null,
+              command: request.trigger_message,
+              reason: request.last_reason,
+              error_summary: request.last_reason,
+              status: 'failed',
             });
             continue;
           }
@@ -629,6 +666,17 @@ export async function drainPendingTeamDispatch({
             worker: request.to_worker,
             message_id: request.message_id || null,
             reason: result.reason,
+          });
+          await emitOperationalHookEvent(cwd, result.reason === LEADER_PANE_MISSING_DEFERRED_REASON ? 'handoff-needed' : 'failed', {
+            team: teamName,
+            worker: request.to_worker,
+            request_id: request.request_id,
+            message_id: request.message_id || null,
+            command: request.trigger_message,
+            reason: result.reason,
+            ...(result.reason === LEADER_PANE_MISSING_DEFERRED_REASON
+              ? { status: 'handoff-needed' }
+              : { status: 'failed', error_summary: result.reason }),
           });
         }
       }

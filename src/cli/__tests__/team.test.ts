@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parseTeamStartArgs, teamCommand } from '../team.js';
@@ -159,6 +159,76 @@ describe('teamCommand api', () => {
       assert.match(logs[0] ?? '', /expected_version/);
     } finally {
       console.log = originalLog;
+    }
+  });
+
+  it('prints event query help for omx team api read-events help alias', async () => {
+    const logs: string[] = [];
+    const originalLog = console.log;
+    try {
+      console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
+      await teamCommand(['api', 'read-events', 'help']);
+      assert.equal(logs.length, 1);
+      assert.match(logs[0] ?? '', /Usage: omx team api read-events --input <json> \[--json\]/);
+      assert.match(logs[0] ?? '', /after_event_id/);
+      assert.match(logs[0] ?? '', /wakeable_only/);
+      assert.match(logs[0] ?? '', /worker_idle/);
+    } finally {
+      console.log = originalLog;
+    }
+  });
+
+  it('executes read-events via CLI api with canonical JSON results', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-team-api-read-events-'));
+    const previousCwd = process.cwd();
+    const logs: string[] = [];
+    const originalLog = console.log;
+    try {
+      process.chdir(wd);
+      await initTeamState('api-read-events', 'api event test', 'executor', 1, wd);
+      await appendTeamEvent('api-read-events', {
+        type: 'worker_idle',
+        worker: 'worker-1',
+        task_id: '1',
+        prev_state: 'working',
+      }, wd);
+      console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
+
+      await teamCommand([
+        'api',
+        'read-events',
+        '--input',
+        JSON.stringify({
+          team_name: 'api-read-events',
+          type: 'worker_idle',
+          worker: 'worker-1',
+          task_id: '1',
+        }),
+        '--json',
+      ]);
+
+      assert.equal(logs.length, 1);
+      const envelope = JSON.parse(logs[0]) as {
+        command?: string;
+        ok?: boolean;
+        operation?: string;
+        data?: {
+          count?: number;
+          events?: Array<{ type?: string; source_type?: string; worker?: string; task_id?: string }>;
+        };
+      };
+      assert.equal(envelope.command, 'omx team api read-events');
+      assert.equal(envelope.ok, true);
+      assert.equal(envelope.operation, 'read-events');
+      assert.equal(envelope.data?.count, 1);
+      assert.equal(envelope.data?.events?.[0]?.type, 'worker_state_changed');
+      assert.equal(envelope.data?.events?.[0]?.source_type, 'worker_idle');
+      assert.equal(envelope.data?.events?.[0]?.worker, 'worker-1');
+      assert.equal(envelope.data?.events?.[0]?.task_id, '1');
+    } finally {
+      console.log = originalLog;
+      process.chdir(previousCwd);
+      await rm(wd, { recursive: true, force: true });
     }
   });
 
@@ -333,6 +403,7 @@ describe('teamCommand api', () => {
           type: 'leader_notification_deferred',
           worker: 'worker-1',
           to_worker: 'leader-fixed',
+          source_type: 'worker_idle',
           reason: 'leader_pane_missing_no_injection',
         }),
         '--json',
@@ -340,11 +411,12 @@ describe('teamCommand api', () => {
 
       const envelope = JSON.parse(logs.at(-1) ?? '{}') as {
         ok?: boolean;
-        data?: { event?: { type?: string; to_worker?: string; reason?: string } };
+        data?: { event?: { type?: string; to_worker?: string; reason?: string; source_type?: string } };
       };
       assert.equal(envelope.ok, true);
       assert.equal(envelope.data?.event?.type, 'leader_notification_deferred');
       assert.equal(envelope.data?.event?.to_worker, 'leader-fixed');
+      assert.equal(envelope.data?.event?.source_type, 'worker_idle');
       assert.equal(envelope.data?.event?.reason, 'leader_pane_missing_no_injection');
     } finally {
       console.log = originalLog;
@@ -394,6 +466,81 @@ describe('teamCommand await', () => {
     } finally {
       console.log = originalLog;
       process.chdir(previousCwd);
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('returns a dead-worker event for the prompt-launch smoke path instead of timing out', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-team-await-prompt-dead-'));
+    const binDir = join(wd, 'bin');
+    const fakeCodexPath = join(binDir, 'codex');
+    const previousCwd = process.cwd();
+    const previousPath = process.env.PATH;
+    const previousTmux = process.env.TMUX;
+    const previousLaunchMode = process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
+    const previousWorkerCli = process.env.OMX_TEAM_WORKER_CLI;
+    const logs: string[] = [];
+    const stderr: string[] = [];
+    const originalLog = console.log;
+    const originalStderrWrite = process.stderr.write.bind(process.stderr);
+    const teamTask = 'issue 662 prompt dead worker smoke';
+    const teamName = parseTeamStartArgs(['1:executor', teamTask]).parsed.teamName;
+
+    await mkdir(binDir, { recursive: true });
+    await writeFile(
+      fakeCodexPath,
+      `#!/usr/bin/env node
+setTimeout(() => process.exit(0), 150);
+process.stdin.resume();
+process.on('SIGTERM', () => process.exit(0));
+`,
+    );
+    await chmod(fakeCodexPath, 0o755);
+
+    try {
+      process.chdir(wd);
+      process.env.PATH = `${binDir}:${previousPath ?? ''}`;
+      delete process.env.TMUX;
+      process.env.OMX_TEAM_WORKER_LAUNCH_MODE = 'prompt';
+      process.env.OMX_TEAM_WORKER_CLI = 'codex';
+      console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
+      process.stderr.write = ((chunk: string | Uint8Array) => {
+        stderr.push(String(chunk));
+        return true;
+      }) as typeof process.stderr.write;
+
+      await teamCommand(['1:executor', teamTask]);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      logs.length = 0;
+      stderr.length = 0;
+      await teamCommand(['status', teamName]);
+      assert.match(logs.join('\n'), /phase=failed/);
+      assert.doesNotMatch(stderr.join('\n'), /ESRCH/);
+
+      logs.length = 0;
+      await teamCommand(['await', teamName, '--json', '--timeout-ms', '250']);
+      const payload = JSON.parse(logs.at(-1) ?? '{}') as {
+        team_name?: string;
+        status?: string;
+        event?: { type?: string; worker?: string; reason?: string | null } | null;
+      };
+      assert.equal(payload.team_name, teamName);
+      assert.equal(payload.status, 'event');
+      assert.equal(payload.event?.type, 'worker_stopped');
+      assert.equal(payload.event?.worker, 'worker-1');
+    } finally {
+      console.log = originalLog;
+      process.stderr.write = originalStderrWrite;
+      process.chdir(previousCwd);
+      if (typeof previousPath === 'string') process.env.PATH = previousPath;
+      else delete process.env.PATH;
+      if (typeof previousTmux === 'string') process.env.TMUX = previousTmux;
+      else delete process.env.TMUX;
+      if (typeof previousLaunchMode === 'string') process.env.OMX_TEAM_WORKER_LAUNCH_MODE = previousLaunchMode;
+      else delete process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
+      if (typeof previousWorkerCli === 'string') process.env.OMX_TEAM_WORKER_CLI = previousWorkerCli;
+      else delete process.env.OMX_TEAM_WORKER_CLI;
       await rm(wd, { recursive: true, force: true });
     }
   });
