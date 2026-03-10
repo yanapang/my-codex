@@ -49,10 +49,6 @@ function normalizeConfiguredModel(value: string | undefined): string | undefined
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function readModeOverride(mode: string, codexHomeOverride?: string): string | undefined {
-  return normalizeConfiguredModel(readModelsBlock(codexHomeOverride)?.[mode]);
-}
-
 function readTeamLowComplexityOverride(codexHomeOverride?: string): string | undefined {
   const models = readModelsBlock(codexHomeOverride);
   if (!models) return undefined;
@@ -75,7 +71,7 @@ export function getEnvConfiguredSparkDefaultModel(env: NodeJS.ProcessEnv = proce
  * Get the envvar-backed main/default model.
  * Resolution: OMX_MAIN_MODEL > DEFAULT_FRONTIER_MODEL
  */
-export function getMainDefaultModel(codexHomeOverride?: string): string {
+export function getMainDefaultModel(): string {
   return getEnvConfiguredMainDefaultModel()
     ?? DEFAULT_FRONTIER_MODEL;
 }
@@ -92,7 +88,7 @@ export function getModelForMode(mode: string, codexHomeOverride?: string): strin
   const defaultValue = normalizeConfiguredModel(models?.default);
   if (defaultValue) return defaultValue;
 
-  return getMainDefaultModel(codexHomeOverride);
+  return getMainDefaultModel();
 }
 
 const TEAM_LOW_COMPLEXITY_MODEL_KEYS = [
