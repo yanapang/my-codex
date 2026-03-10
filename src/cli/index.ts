@@ -3,7 +3,7 @@
  * Multi-agent orchestration for OpenAI Codex CLI
  */
 
-import { execSync, execFileSync, spawn } from 'child_process';
+import { execFileSync, spawn } from 'child_process';
 import { basename, dirname, join } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { constants as osConstants } from 'os';
@@ -155,6 +155,7 @@ const ALLOWED_SHELLS = new Set([
   '/usr/bin/sh', '/usr/bin/bash', '/usr/bin/zsh', '/usr/bin/dash', '/usr/bin/fish',
   '/usr/local/bin/bash', '/usr/local/bin/zsh', '/usr/local/bin/fish',
 ]);
+const WINDOWS_DETACHED_BOOTSTRAP_DELAY_MS = 2500;
 
 type CliCommand = 'launch' | 'setup' | 'agents-init' | 'deepinit' | 'uninstall' | 'doctor' | 'ask' | 'team' | 'session' | 'version' | 'tmux-hook' | 'hooks' | 'hud' | 'status' | 'cancel' | 'help' | 'reasoning' | string;
 
@@ -924,17 +925,8 @@ export function buildTmuxSessionName(cwd: string, sessionId: string): string {
     ? sanitizeTmuxToken(`${parentDir.slice(0, -'.omx-worktrees'.length)}-${dirName}`)
     : sanitizeTmuxToken(dirName);
   let branchToken = 'detached';
-  try {
-    const branch = execSync('git rev-parse --abbrev-ref HEAD', {
-      cwd,
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    if (branch) branchToken = sanitizeTmuxToken(branch);
-  } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
-    // Non-git directory or git unavailable.
-  }
+  const branch = tryReadGitValue(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  if (branch) branchToken = sanitizeTmuxToken(branch);
   const sessionToken = sanitizeTmuxToken(sessionId.replace(/^omx-/, ''));
   const name = `omx-${dirToken}-${branchToken}-${sessionToken}`;
   return name.length > 120 ? name.slice(0, 120) : name;
@@ -972,13 +964,14 @@ export function buildDetachedSessionBootstrapSteps(
   workerLaunchArgs: string | null,
   codexHomeOverride?: string,
   notifyTempContractRaw?: string | null,
+  nativeWindows = false,
 ): DetachedSessionTmuxStep[] {
   const newSessionArgs: string[] = [
     'new-session', '-d', '-s', sessionName, '-c', cwd,
     ...(workerLaunchArgs ? ['-e', `${TEAM_WORKER_LAUNCH_ARGS_ENV}=${workerLaunchArgs}`] : []),
     ...(codexHomeOverride ? ['-e', `CODEX_HOME=${codexHomeOverride}`] : []),
     ...(notifyTempContractRaw ? ['-e', `${OMX_NOTIFY_TEMP_CONTRACT_ENV}=${notifyTempContractRaw}`] : []),
-    codexCmd,
+    nativeWindows ? 'powershell.exe' : codexCmd,
   ];
   const splitCaptureArgs: string[] = [
     'split-window', '-v', '-l', String(HUD_TMUX_HEIGHT_LINES), '-d', '-t', sessionName,
@@ -996,9 +989,10 @@ export function buildDetachedSessionFinalizeSteps(
   hookWindowIndex: string | null,
   enableMouse: boolean,
   wsl2: boolean,
+  nativeWindows = false,
 ): DetachedSessionTmuxStep[] {
   const steps: DetachedSessionTmuxStep[] = [];
-  if (hudPaneId && hookWindowIndex) {
+  if (!nativeWindows && hudPaneId && hookWindowIndex) {
     const hookTarget = buildResizeHookTarget(sessionName, hookWindowIndex);
     const hookName = buildResizeHookName('launch', sessionName, hookWindowIndex, hudPaneId);
     const clientAttachedHookName = buildClientAttachedReconcileHookName('launch', sessionName, hookWindowIndex, hudPaneId);
@@ -1252,7 +1246,11 @@ function runCodex(
     runCodexBlocking(cwd, launchArgs, codexEnvWithNotify);
   } else {
     // Not in tmux: create a new tmux session with codex + HUD pane
+    const nativeWindows = isNativeWindows();
     const codexCmd = buildTmuxPaneCommand('codex', launchArgs);
+    const detachedWindowsCodexCmd = nativeWindows
+      ? buildWindowsPromptCommand('codex', launchArgs)
+      : null;
     const tmuxSessionId = `omx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const sessionName = buildTmuxSessionName(cwd, tmuxSessionId);
     let createdDetachedSession = false;
@@ -1268,6 +1266,7 @@ function runCodex(
         workerLaunchArgs,
         codexHomeOverride,
         notifyTempContractRaw,
+        nativeWindows,
       );
       for (const step of bootstrapSteps) {
         const output = execFileSync('tmux', step.args, { stdio: step.name === 'new-session' ? 'ignore' : 'pipe', encoding: 'utf-8' });
@@ -1292,7 +1291,11 @@ function runCodex(
             hookWindowIndex,
             process.env.OMX_MOUSE !== '0',
             isWsl2(),
+            nativeWindows,
           );
+          if (nativeWindows && detachedWindowsCodexCmd) {
+            scheduleDetachedWindowsCodexLaunch(sessionName, detachedWindowsCodexCmd);
+          }
           for (const finalizeStep of finalizeSteps) {
             const stdio = finalizeStep.name === 'attach-session' ? 'inherit' : 'ignore';
             try {
@@ -1373,6 +1376,10 @@ export function buildTmuxShellCommand(command: string, args: string[]): string {
   return [quoteShellArg(command), ...args.map(quoteShellArg)].join(' ');
 }
 
+export function buildWindowsPromptCommand(command: string, args: string[]): string {
+  return ['&', quotePowerShellArg(command), ...args.map(quotePowerShellArg)].join(' ');
+}
+
 /**
  * Wrap a command for tmux pane execution so the user's shell profile is
  * sourced.  Without this, tmux runs `default-shell -c "cmd"` which is
@@ -1394,6 +1401,39 @@ export function buildTmuxPaneCommand(command: string, args: string[], shellPath:
 
 function quoteShellArg(value: string): string {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function quotePowerShellArg(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function buildDetachedWindowsBootstrapScript(
+  sessionName: string,
+  commandText: string,
+  delayMs: number = WINDOWS_DETACHED_BOOTSTRAP_DELAY_MS,
+): string {
+  const delay = Number.isFinite(delayMs) && delayMs > 0
+    ? Math.floor(delayMs)
+    : WINDOWS_DETACHED_BOOTSTRAP_DELAY_MS;
+  const targetLiteral = JSON.stringify(`${sessionName}:0.0`);
+  const commandLiteral = JSON.stringify(commandText);
+
+  return [
+    "const { execFileSync } = require('child_process');",
+    `setTimeout(() => {`,
+    `try { execFileSync('tmux', ['send-keys', '-t', ${targetLiteral}, '-l', '--', ${commandLiteral}], { stdio: 'ignore' }); } catch {}`,
+    `try { execFileSync('tmux', ['send-keys', '-t', ${targetLiteral}, 'C-m'], { stdio: 'ignore' }); } catch {}`,
+    `}, ${delay});`,
+  ].join('');
+}
+
+function scheduleDetachedWindowsCodexLaunch(sessionName: string, commandText: string): void {
+  const child = spawn(process.execPath, ['-e', buildDetachedWindowsBootstrapScript(sessionName, commandText)], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.unref();
 }
 
 /**
