@@ -294,6 +294,13 @@ describe('resolveCliInvocation', () => {
     });
   });
 
+  it('resolves session to session command', () => {
+    assert.deepEqual(resolveCliInvocation(['session', 'search', 'startup evidence']), {
+      command: 'session',
+      launchArgs: [],
+    });
+  });
+
   it('resolves hooks to hooks command', () => {
     assert.deepEqual(resolveCliInvocation(['hooks']), {
       command: 'hooks',
