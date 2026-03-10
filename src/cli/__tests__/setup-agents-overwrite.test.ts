@@ -33,7 +33,10 @@ async function runSetupWithCapturedLogs(
     logs.push(args.map((arg) => String(arg)).join(' '));
   };
   try {
-    await setup(options);
+    await setup({
+      modelUpgradePrompt: async () => false,
+      ...options,
+    });
     return logs.join('\n');
   } finally {
     console.log = originalLog;
