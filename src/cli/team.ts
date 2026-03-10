@@ -5,6 +5,7 @@ import { sanitizeTeamName } from '../team/tmux-session.js';
 import { readTeamEvents, waitForTeamEvent } from '../team/state/events.js';
 import type { TeamEvent } from '../team/state.js';
 import { parseWorktreeMode, type WorktreeMode } from '../team/worktree.js';
+import { classifyTaskSize } from '../hooks/task-size-detector.js';
 import { routeTaskToRole } from '../team/role-router.js';
 import {
   buildFollowupStaffingPlan,
@@ -27,6 +28,7 @@ interface ParsedTeamArgs {
   workerCount: number;
   agentType: string;
   explicitAgentType: boolean;
+  explicitWorkerCount: boolean;
   task: string;
   teamName: string;
   ralph: boolean;
@@ -283,6 +285,7 @@ function parseTeamArgs(args: string[]): ParsedTeamArgs {
   let workerCount = 3;
   let agentType = 'executor';
   let explicitAgentType = false;
+  let explicitWorkerCount = false;
 
   if (tokens[0]?.toLowerCase() === 'ralph') {
     ralph = true;
@@ -297,6 +300,7 @@ function parseTeamArgs(args: string[]): ParsedTeamArgs {
       throw new Error(`Invalid worker count "${match[1]}". Expected ${MIN_WORKER_COUNT}-${DEFAULT_MAX_WORKERS}.`);
     }
     workerCount = count;
+    explicitWorkerCount = true;
     if (match[2]) {
       agentType = match[2];
       explicitAgentType = true;
@@ -310,7 +314,7 @@ function parseTeamArgs(args: string[]): ParsedTeamArgs {
   }
 
   const teamName = sanitizeTeamName(slugifyTask(task));
-  return { workerCount, agentType, explicitAgentType, task, teamName, ralph };
+  return { workerCount, agentType, explicitAgentType, explicitWorkerCount, task, teamName, ralph };
 }
 
 export function parseTeamStartArgs(args: string[]): ParsedTeamStartArgs {
@@ -332,31 +336,79 @@ export function parseTeamStartArgs(args: string[]): ParsedTeamStartArgs {
  * When the user specifies an explicit agent-type (e.g., `3:executor`), all tasks
  * get that role (backward compat). Otherwise, heuristic routing assigns roles.
  */
+type DecompositionStrategy = 'numbered' | 'conjunction' | 'atomic';
+
+interface DecompositionCandidate {
+  subject: string;
+  description: string;
+}
+
+interface DecompositionPlan {
+  strategy: DecompositionStrategy;
+  subtasks: DecompositionCandidate[];
+}
+
+function resolveImplicitTeamFallbackRole(agentType: string, explicitAgentType: boolean): string {
+  return !explicitAgentType && agentType === 'executor' ? 'team-executor' : agentType;
+}
+
+function resolveTeamFanoutLimit(
+  task: string,
+  requestedWorkerCount: number,
+  explicitAgentType: boolean,
+  explicitWorkerCount: boolean,
+  plan: DecompositionPlan,
+): number {
+  if (requestedWorkerCount <= 1 || explicitAgentType || explicitWorkerCount || plan.strategy === 'numbered') {
+    return requestedWorkerCount;
+  }
+
+  const size = classifyTaskSize(task).size;
+  if (plan.strategy === 'atomic') {
+    if (size === 'small') {
+      const proseHeavyAtomicTask = countWords(task) > 18 || CONTEXTUAL_DECOMPOSITION_CLAUSE.test(task);
+      if (!proseHeavyAtomicTask) return 1;
+    }
+  }
+
+  if (plan.strategy === 'conjunction' && size !== 'large') {
+    return Math.min(requestedWorkerCount, Math.max(2, plan.subtasks.length));
+  }
+
+  return requestedWorkerCount;
+}
+
 export function decomposeTaskString(
   task: string,
   workerCount: number,
   agentType: string,
   explicitAgentType: boolean,
+  explicitWorkerCount = false,
 ): Array<{ subject: string; description: string; owner: string; role?: string }> {
-  // Try to split the task into distinct sub-goals
-  let subtasks = splitTaskString(task);
+  const plan = splitTaskString(task);
+  const effectiveWorkerCount = resolveTeamFanoutLimit(
+    task,
+    workerCount,
+    explicitAgentType,
+    explicitWorkerCount,
+    plan,
+  );
+  const fallbackRole = resolveImplicitTeamFallbackRole(agentType, explicitAgentType);
 
-  // If no decomposition possible, create aspect-scoped sub-tasks for N>1
-  if (subtasks.length <= 1 && workerCount > 1) {
-    subtasks = createAspectSubtasks(task, workerCount);
+  let subtasks = plan.subtasks;
+  if (subtasks.length <= 1 && effectiveWorkerCount > 1) {
+    subtasks = createAspectSubtasks(task, effectiveWorkerCount);
   }
 
-  // Assign roles: skip heuristic routing if user specified explicit agent-type
   const tasksWithRoles = subtasks.map((st) => {
     if (explicitAgentType) {
       return { ...st, role: agentType };
     }
-    const result = routeTaskToRole(st.subject, st.description, 'team-exec', agentType);
+    const result = routeTaskToRole(st.subject, st.description, 'team-exec', fallbackRole);
     return { ...st, role: result.role };
   });
 
-  // Distribute tasks across workers
-  return distributeTasksToWorkers(tasksWithRoles, workerCount);
+  return distributeTasksToWorkers(tasksWithRoles, effectiveWorkerCount);
 }
 
 const ACTIONABLE_TASK_PREFIX = /^(?:add|analy(?:se|ze)|audit|benchmark|build|clean(?:\s+up)?|create|debug|design|document|draft|fix|implement|improve|investigate|migrate|optimi(?:s|z)e|profile|refactor|repair|research|review|ship|summari(?:s|z)e|test|update|validate|verify|write)\b/i;
@@ -380,7 +432,7 @@ function canSafelySplitWeakTaskList(task: string, parts: string[]): boolean {
 }
 
 /** Split a task string into sub-tasks using numbered lists or conservative delimiters. */
-function splitTaskString(task: string): Array<{ subject: string; description: string }> {
+function splitTaskString(task: string): DecompositionPlan {
   // Try numbered list: "1. foo 2. bar 3. baz" or "1) foo 2) bar"
   const numberedPattern = /(?:^|\s)(\d+)[.)]\s+/g;
   const numberedMatches = [...task.matchAll(numberedPattern)];
@@ -395,22 +447,30 @@ function splitTaskString(task: string): Array<{ subject: string; description: st
         parts.push({ subject: text.slice(0, 80), description: text });
       }
     }
-    if (parts.length >= 2) return parts;
+    if (parts.length >= 2) return { strategy: 'numbered', subtasks: parts };
   }
 
   const strongParts = task.split(/;\s+/).map(s => s.trim()).filter(s => s.length > 0);
   if (strongParts.length >= 2) {
-    return strongParts.map((part) => ({ subject: part.slice(0, 80), description: part }));
+    return {
+      strategy: 'conjunction',
+      subtasks: strongParts.map((part) => ({ subject: part.slice(0, 80), description: part })),
+    };
   }
 
   // Commas / "and" only split when the overall input already looks like a flat task list.
   const weakParts = task.split(/(?:,\s+and\s+|,\s+|\s+and\s+)/i).map(s => s.trim()).filter(s => s.length > 0);
   if (canSafelySplitWeakTaskList(task, weakParts)) {
-    return weakParts.map((part) => ({ subject: part.slice(0, 80), description: part }));
+    return {
+      strategy: 'conjunction',
+      subtasks: weakParts.map((part) => ({ subject: part.slice(0, 80), description: part })),
+    };
   }
 
-  // Single atomic task
-  return [{ subject: task.slice(0, 80), description: task }];
+  return {
+    strategy: 'atomic',
+    subtasks: [{ subject: task.slice(0, 80), description: task }],
+  };
 }
 
 /** Create aspect-scoped sub-tasks for an atomic task that can't be split. */
@@ -451,6 +511,7 @@ async function ensureTeamModeState(
   parsed: ParsedTeamArgs,
   tasks?: Array<{ role?: string }>,
 ): Promise<void> {
+  const fallbackRole = resolveImplicitTeamFallbackRole(parsed.agentType, parsed.explicitAgentType);
   const roleDistribution = tasks && tasks.length > 0
     ? [...new Set(tasks.map(t => t.role ?? parsed.agentType))].join(',')
     : parsed.agentType;
@@ -458,7 +519,7 @@ async function ensureTeamModeState(
   const availableAgentTypes = await resolveAvailableAgentTypes(process.cwd());
   const staffingPlan = buildFollowupStaffingPlan('team', parsed.task, availableAgentTypes, {
     workerCount: parsed.workerCount,
-    fallbackRole: parsed.agentType,
+    fallbackRole,
   });
 
   const existing = await readModeState('team');
@@ -706,13 +767,14 @@ export async function teamCommand(args: string[], options: TeamCliOptions = {}):
       workerCount: runtime.config.worker_count,
       agentType: runtime.config.agent_type,
       explicitAgentType: false,
+      explicitWorkerCount: false,
       teamName: runtime.teamName,
       ralph: preservedRalph,
     });
     const availableAgentTypes = await resolveAvailableAgentTypes(cwd);
     const staffingPlan = buildFollowupStaffingPlan('team', runtime.config.task, availableAgentTypes, {
       workerCount: runtime.config.worker_count,
-      fallbackRole: runtime.config.agent_type,
+      fallbackRole: resolveImplicitTeamFallbackRole(runtime.config.agent_type, false),
     });
     await renderStartSummary(runtime, staffingPlan);
     return;
@@ -745,11 +807,17 @@ export async function teamCommand(args: string[], options: TeamCliOptions = {}):
   }
 
   const parsed = parseTeamArgs(teamArgs);
-  const tasks = decomposeTaskString(parsed.task, parsed.workerCount, parsed.agentType, parsed.explicitAgentType);
+  const tasks = decomposeTaskString(
+    parsed.task,
+    parsed.workerCount,
+    parsed.agentType,
+    parsed.explicitAgentType,
+    parsed.explicitWorkerCount,
+  );
   const availableAgentTypes = await resolveAvailableAgentTypes(cwd);
   const staffingPlan = buildFollowupStaffingPlan('team', parsed.task, availableAgentTypes, {
     workerCount: parsed.workerCount,
-    fallbackRole: parsed.agentType,
+    fallbackRole: resolveImplicitTeamFallbackRole(parsed.agentType, parsed.explicitAgentType),
   });
   const runtime = await startTeam(
     parsed.teamName,
