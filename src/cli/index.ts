@@ -37,9 +37,10 @@ import { maybeCheckAndPromptUpdate } from './update.js';
 import { maybePromptGithubStar } from './star-prompt.js';
 import {
   generateOverlay,
-  writeSessionModelInstructionsFile,
   removeSessionModelInstructionsFile,
+  resolveSessionOrchestrationMode,
   sessionModelInstructionsPath,
+  writeSessionModelInstructionsFile,
 } from '../hooks/agents-overlay.js';
 import {
   readSessionState, isSessionStale, writeSessionStart, writeSessionEnd, resetSessionMetrics,
@@ -1089,7 +1090,8 @@ async function preLaunch(cwd: string, sessionId: string, notifyTempContract?: No
   }
 
   // 2. Generate runtime overlay + write session-scoped model instructions file
-  const overlay = await generateOverlay(cwd, sessionId);
+  const orchestrationMode = await resolveSessionOrchestrationMode(cwd, sessionId);
+  const overlay = await generateOverlay(cwd, sessionId, { orchestrationMode });
   await writeSessionModelInstructionsFile(cwd, sessionId, overlay);
 
   // 3. Write session state

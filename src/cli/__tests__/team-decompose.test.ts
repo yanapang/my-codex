@@ -14,7 +14,6 @@ describe('decomposeTaskString', () => {
   it('assigns different roles to split tasks via heuristic routing', () => {
     const tasks = decomposeTaskString('fix tests, build UI component, and write documentation', 3, 'executor', false);
     const roles = tasks.map(t => t.role);
-    // Should have at least 2 distinct roles (test-related, UI-related, doc-related)
     const uniqueRoles = new Set(roles);
     assert.ok(uniqueRoles.size >= 2, `Expected at least 2 distinct roles, got: ${[...uniqueRoles].join(', ')}`);
   });
@@ -27,8 +26,8 @@ describe('decomposeTaskString', () => {
     assert.match(tasks[2].description, /update docs/i);
   });
 
-  it('creates aspect sub-tasks for atomic tasks with multiple workers', () => {
-    const tasks = decomposeTaskString('implement user login', 3, 'executor', false);
+  it('creates aspect sub-tasks for atomic tasks when the worker count is explicit', () => {
+    const tasks = decomposeTaskString('implement user login', 3, 'executor', false, true);
     assert.equal(tasks.length, 3);
     assert.match(tasks[0].subject, /implement/i);
     assert.match(tasks[1].subject, /test/i);
@@ -80,5 +79,25 @@ describe('decomposeTaskString', () => {
     const tasks = decomposeTaskString('write tests and build UI', 2, 'debugger', true);
     assert.equal(tasks[0].role, 'debugger');
     assert.equal(tasks[1].role, 'debugger');
+  });
+
+  it('uses team-executor for implicit default low-confidence team work', () => {
+    const tasks = decomposeTaskString('Do the thing', 2, 'executor', false);
+    assert.equal(tasks.length, 1);
+    assert.equal(tasks[0].role, 'team-executor');
+  });
+
+  it('keeps explicit worker-count small tasks conservative only when count is implicit', () => {
+    const implicitTasks = decomposeTaskString('fix typo in README', 3, 'executor', false, false);
+    assert.equal(implicitTasks.length, 1);
+    assert.equal(implicitTasks[0].owner, 'worker-1');
+
+    const explicitTasks = decomposeTaskString('fix typo in README', 3, 'executor', false, true);
+    assert.equal(explicitTasks.length, 3);
+  });
+
+  it('keeps explicit numbered tasks fanned out even on implicit default team runs', () => {
+    const tasks = decomposeTaskString('1. add team brain overlay 2. add team-executor prompt 3. add tests', 3, 'executor', false);
+    assert.equal(tasks.length, 3);
   });
 });
