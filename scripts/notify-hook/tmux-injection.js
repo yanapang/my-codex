@@ -16,14 +16,13 @@ import {
 } from './state-io.js';
 import { runProcess } from './process-runner.js';
 import { logTmuxHookEvent } from './log.js';
+import { checkPaneReadyForTeamSendKeys } from './team-tmux-guard.js';
 import {
   normalizeTmuxHookConfig,
   pickActiveMode,
   evaluateInjectionGuards,
   buildSendKeysArgv,
   buildPaneInModeArgv,
-  buildPaneCurrentCommandArgv,
-  isPaneRunningShell,
 } from '../tmux-hook-engine.js';
 
 export async function resolveSessionToPane(sessionName) {
@@ -373,28 +372,28 @@ export async function handleTmuxInjection({
     }
   }
 
-  // Shell-detection guard: skip injection when the agent process has exited
-  // and the pane has returned to an interactive shell (zsh, bash, etc.).
-  // Sending the inject marker to a shell causes glob errors like
-  // "zsh: no matches found: [OMX_TMUX_INJECT]".  See #441.
+  // Shared pane-state guard: skip injection when the target pane has returned
+  // to a shell, is still bootstrapping, or is visibly busy with active work.
   try {
-    const cmdResult = await runProcess('tmux', buildPaneCurrentCommandArgv(paneTarget), 1000);
-    const currentCmd = safeString(cmdResult.stdout).trim();
-    if (isPaneRunningShell(currentCmd)) {
-      state.last_reason = 'agent_not_running';
+    const paneGuard = await checkPaneReadyForTeamSendKeys(paneTarget);
+    if (!paneGuard.ok) {
+      const reason = paneGuard.reason === 'pane_running_shell'
+        ? 'agent_not_running'
+        : paneGuard.reason;
+      state.last_reason = reason;
       state.last_event_at = nowIso;
       await writeFile(hookStatePath, JSON.stringify(state, null, 2)).catch(() => {});
       await logTmuxHookEvent(logsDir, {
         ...baseLog,
         event: 'injection_skipped',
-        reason: 'agent_not_running',
+        reason,
         pane_target: paneTarget,
-        pane_current_command: currentCmd,
+        pane_current_command: paneGuard.paneCurrentCommand || undefined,
       });
       return;
     }
   } catch {
-    // Non-fatal: if querying pane command fails, proceed with injection.
+    // Non-fatal: if querying pane state fails, proceed with injection.
   }
 
   if (config.dry_run) {

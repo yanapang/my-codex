@@ -4,7 +4,14 @@ import { dirname, join, resolve } from 'path';
 import { safeString } from './utils.js';
 import { runProcess } from './process-runner.js';
 import { resolvePaneTarget } from './tmux-injection.js';
-import { buildCapturePaneArgv, buildPaneInModeArgv, buildSendKeysArgv } from '../tmux-hook-engine.js';
+import {
+  buildCapturePaneArgv,
+  buildPaneInModeArgv,
+  buildSendKeysArgv,
+  normalizeTmuxCapture,
+  paneHasActiveTask,
+  paneLooksReady,
+} from '../tmux-hook-engine.js';
 
 function readJson(path, fallback) {
   return readFile(path, 'utf8')
@@ -260,18 +267,14 @@ function resolveWorkerCliForRequest(request, config) {
   return 'codex';
 }
 
-function normalizeCaptureText(value) {
-  return safeString(value).replace(/\r/g, '').replace(/\s+/g, ' ').trim();
-}
-
 function capturedPaneContainsTrigger(captured, trigger) {
   if (!captured || !trigger) return false;
-  return normalizeCaptureText(captured).includes(normalizeCaptureText(trigger));
+  return normalizeTmuxCapture(captured).includes(normalizeTmuxCapture(trigger));
 }
 
 function capturedPaneContainsTriggerNearTail(captured, trigger, nonEmptyTailLines = 24) {
   if (!captured || !trigger) return false;
-  const normalizedTrigger = normalizeCaptureText(trigger);
+  const normalizedTrigger = normalizeTmuxCapture(trigger);
   if (!normalizedTrigger) return false;
   const lines = safeString(captured)
     .split('\n')
@@ -279,57 +282,7 @@ function capturedPaneContainsTriggerNearTail(captured, trigger, nonEmptyTailLine
     .filter((line) => line.length > 0);
   if (lines.length === 0) return false;
   const tail = lines.slice(-Math.max(1, nonEmptyTailLines)).join(' ');
-  return normalizeCaptureText(tail).includes(normalizedTrigger);
-}
-
-// Ported from src/team/tmux-session.ts:949-963 — detects active CLI task indicators.
-function paneHasActiveTask(captured) {
-  const lines = safeString(captured)
-    .split('\n')
-    .map((line) => line.replace(/\r/g, '').trim())
-    .filter((line) => line.length > 0);
-  const tail = lines.slice(-40);
-  if (tail.some((line) => /\b\d+\s+background terminal running\b/i.test(line))) return true;
-  if (tail.some((line) => /esc to interrupt/i.test(line))) return true;
-  if (tail.some((line) => /\bbackground terminal running\b/i.test(line))) return true;
-  if (tail.some((line) => /^•\s.+\(.+•\s*esc to interrupt\)$/i.test(line))) return true;
-  // Claude active generation lines
-  if (tail.some((line) => /^[·✻]\s+[A-Za-z][A-Za-z0-9''-]*(?:\s+[A-Za-z][A-Za-z0-9''-]*){0,3}(?:…|\.{3})$/u.test(line))) return true;
-  return false;
-}
-
-function paneIsBootstrapping(captured) {
-  const lines = safeString(captured)
-    .split('\n')
-    .map((line) => line.replace(/\r/g, '').trim())
-    .filter((line) => line.length > 0);
-  return lines.some((line) =>
-    /\b(loading|initializing|starting up)\b/i.test(line)
-    || /\bmodel:\s*loading\b/i.test(line)
-    || /\bconnecting\s+to\b/i.test(line),
-  );
-}
-
-function paneLooksReady(captured) {
-  const content = safeString(captured).trimEnd();
-  if (content === '') return false;
-
-  const lines = content
-    .split('\n')
-    .map((line) => line.replace(/\r/g, ''))
-    .map((line) => line.trimEnd())
-    .filter((line) => line.trim() !== '');
-
-  if (paneIsBootstrapping(content)) return false;
-
-  const lastLine = lines.length > 0 ? lines[lines.length - 1] : '';
-  if (/^\s*[›>❯]\s*/u.test(lastLine)) return true;
-
-  const hasCodexPromptLine = lines.some((line) => /^\s*›\s*/u.test(line));
-  const hasClaudePromptLine = lines.some((line) => /^\s*❯\s*/u.test(line));
-  if (hasCodexPromptLine || hasClaudePromptLine) return true;
-
-  return false;
+  return normalizeTmuxCapture(tail).includes(normalizedTrigger);
 }
 
 const INJECT_VERIFY_DELAY_MS = 250;
