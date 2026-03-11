@@ -176,7 +176,7 @@ Team/Swarm workers currently share one `agentType` and one launch-arg set.
 Model precedence:
 1. Explicit model in `OMX_TEAM_WORKER_LAUNCH_ARGS`
 2. Inherited leader `--model`
-3. Injected low-complexity default model: `gpt-5.3-codex-spark`
+3. Low-complexity default model from `OMX_SPARK_MODEL` (currently `gpt-5.3-codex-spark`)
 
 Normalize model flags to one canonical `--model <value>` entry.
 </team_model_resolution>
@@ -258,17 +258,3 @@ Mode lifecycle requirements:
 ## Setup
 
 Run `omx setup` to install all components. Run `omx doctor` to verify installation.
-
----
-
-## Review guidelines
-
-- Flag breaking changes to public API or CLI interfaces as P0.
-- Verify error handling on all async operations (missing try/catch, unhandled rejections).
-- Check for hardcoded secrets, tokens, or credentials — flag as P0.
-- Ensure new dependencies are justified and not duplicating existing functionality.
-- Prompt template changes: verify placeholder consistency and backward compatibility.
-- Agent delegation logic: confirm routing rules are deterministic and well-documented.
-- State management: verify all mode transitions write and clear state correctly.
-- Test coverage: flag new logic paths that lack corresponding tests.
-- Keep diffs small and reversible — flag PRs that change too many concerns at once.
