@@ -9,7 +9,6 @@ import { existsSync, readFileSync } from 'fs';
 import { constants as osConstants } from 'os';
 import { setup, SETUP_SCOPES, type SetupScope } from './setup.js';
 import { uninstall } from './uninstall.js';
-import { doctor } from './doctor.js';
 import { version } from './version.js';
 import { tmuxHookCommand } from './tmux-hook.js';
 import { hooksCommand } from './hooks.js';
@@ -450,9 +449,11 @@ export async function main(args: string[]): Promise<void> {
           scope: resolveSetupScopeArg(args.slice(1)),
         });
         break;
-      case 'doctor':
+      case 'doctor': {
+        const { doctor } = await import('./doctor.js');
         await doctor(options);
         break;
+      }
       case 'ask':
         await askCommand(args.slice(1));
         break;
