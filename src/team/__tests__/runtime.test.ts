@@ -53,21 +53,44 @@ function expectedLowComplexityModel(codexHomeOverride?: string): string {
 function withEmptyPath<T>(fn: () => T): T {
   const prev = process.env.PATH;
   process.env.PATH = '';
+  let restoreImmediately = true;
   try {
-    return fn();
+    const result = fn();
+    if (result instanceof Promise) {
+      restoreImmediately = false;
+      return result.finally(() => {
+        if (typeof prev === 'string') process.env.PATH = prev;
+        else delete process.env.PATH;
+      }) as T;
+    }
+    return result;
   } finally {
-    if (typeof prev === 'string') process.env.PATH = prev;
-    else delete process.env.PATH;
+    if (restoreImmediately) {
+      if (typeof prev === 'string') process.env.PATH = prev;
+      else delete process.env.PATH;
+    }
   }
 }
 
 function withoutTeamWorkerEnv<T>(fn: () => T): T {
   const prev = process.env.OMX_TEAM_WORKER;
   delete process.env.OMX_TEAM_WORKER;
+  let restoreImmediately = true;
   try {
-    return fn();
+    const result = fn();
+    if (result instanceof Promise) {
+      restoreImmediately = false;
+      return result.finally(() => {
+        if (typeof prev === 'string') process.env.OMX_TEAM_WORKER = prev;
+        else delete process.env.OMX_TEAM_WORKER;
+      }) as T;
+    }
+    return result;
   } finally {
-    if (typeof prev === 'string') process.env.OMX_TEAM_WORKER = prev;
+    if (restoreImmediately) {
+      if (typeof prev === 'string') process.env.OMX_TEAM_WORKER = prev;
+      else delete process.env.OMX_TEAM_WORKER;
+    }
   }
 }
 
@@ -441,9 +464,81 @@ describe('runtime', () => {
     }
   });
 
+  it('startTeam allows nested team invocation when parent governance enables it', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-nested-allow-'));
+    const binDir = join(cwd, 'bin');
+    const fakeGeminiPath = join(binDir, 'gemini');
+    await mkdir(binDir, { recursive: true });
+    await writeFile(
+      fakeGeminiPath,
+      `#!/usr/bin/env bash
+sleep 5
+`,
+      { mode: 0o755 },
+    );
+
+    await initTeamState('parent-team', 'parent', 'executor', 1, cwd);
+    const parentManifestPath = join(cwd, '.omx', 'state', 'team', 'parent-team', 'manifest.v2.json');
+    const parentManifest = JSON.parse(await readFile(parentManifestPath, 'utf-8')) as any;
+    parentManifest.governance = { ...(parentManifest.governance || {}), nested_teams_allowed: true };
+    await writeFile(parentManifestPath, JSON.stringify(parentManifest, null, 2));
+
+    const prevPath = process.env.PATH;
+    const prevTmux = process.env.TMUX;
+    const prevWorker = process.env.OMX_TEAM_WORKER;
+    const prevStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+    const prevLeaderCwd = process.env.OMX_TEAM_LEADER_CWD;
+    const prevLaunchMode = process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
+    const prevWorkerCli = process.env.OMX_TEAM_WORKER_CLI;
+
+    process.env.PATH = `${binDir}:${prevPath ?? ''}`;
+    delete process.env.TMUX;
+    process.env.OMX_TEAM_WORKER = 'parent-team/worker-1';
+    process.env.OMX_TEAM_STATE_ROOT = join(cwd, '.omx', 'state');
+    process.env.OMX_TEAM_LEADER_CWD = cwd;
+    process.env.OMX_TEAM_WORKER_LAUNCH_MODE = 'prompt';
+    process.env.OMX_TEAM_WORKER_CLI = 'gemini';
+
+    let runtime: TeamRuntime | null = null;
+    try {
+      runtime = await startTeam(
+        'nested-allowed',
+        'nested task',
+        'explore',
+        1,
+        [{ subject: 's', description: 'd', owner: 'worker-1' }],
+        cwd,
+      );
+      assert.equal(runtime.teamName, 'nested-allowed');
+      await shutdownTeam(runtime.teamName, cwd, { force: true });
+      runtime = null;
+    } finally {
+      if (runtime) {
+        await shutdownTeam(runtime.teamName, cwd, { force: true }).catch(() => {});
+      }
+      if (typeof prevPath === 'string') process.env.PATH = prevPath;
+      else delete process.env.PATH;
+      if (typeof prevTmux === 'string') process.env.TMUX = prevTmux;
+      else delete process.env.TMUX;
+      if (typeof prevWorker === 'string') process.env.OMX_TEAM_WORKER = prevWorker;
+      else delete process.env.OMX_TEAM_WORKER;
+      if (typeof prevStateRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = prevStateRoot;
+      else delete process.env.OMX_TEAM_STATE_ROOT;
+      if (typeof prevLeaderCwd === 'string') process.env.OMX_TEAM_LEADER_CWD = prevLeaderCwd;
+      else delete process.env.OMX_TEAM_LEADER_CWD;
+      if (typeof prevLaunchMode === 'string') process.env.OMX_TEAM_WORKER_LAUNCH_MODE = prevLaunchMode;
+      else delete process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
+      if (typeof prevWorkerCli === 'string') process.env.OMX_TEAM_WORKER_CLI = prevWorkerCli;
+      else delete process.env.OMX_TEAM_WORKER_CLI;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('startTeam throws when tmux is not available', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-'));
+    const prevLaunchMode = process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
     try {
+      process.env.OMX_TEAM_WORKER_LAUNCH_MODE = 'interactive';
       await assert.rejects(
         () => withoutTeamWorkerEnv(() =>
           withEmptyPath(() =>
@@ -452,6 +547,8 @@ describe('runtime', () => {
         /requires tmux/i,
       );
     } finally {
+      if (typeof prevLaunchMode === 'string') process.env.OMX_TEAM_WORKER_LAUNCH_MODE = prevLaunchMode;
+      else delete process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
       await rm(cwd, { recursive: true, force: true });
     }
   });
@@ -1335,6 +1432,33 @@ process.on('SIGTERM', () => {
     }
   });
 
+  it('shutdownTeam honors governance cleanup override when active tasks remain', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-shutdown-gate-override-'));
+    try {
+      await initTeamState('team-shutdown-gate-override', 'shutdown gate override test', 'executor', 1, cwd);
+      await createTask(
+        'team-shutdown-gate-override',
+        { subject: 'pending', description: 'd', status: 'pending' },
+        cwd,
+      );
+
+      const manifestPath = join(cwd, '.omx', 'state', 'team', 'team-shutdown-gate-override', 'manifest.v2.json');
+      const manifest = JSON.parse(await readFile(manifestPath, 'utf-8')) as any;
+      manifest.governance = {
+        ...(manifest.governance || {}),
+        cleanup_requires_all_workers_inactive: false,
+      };
+      await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+
+      await shutdownTeam('team-shutdown-gate-override', cwd);
+
+      const teamRoot = join(cwd, '.omx', 'state', 'team', 'team-shutdown-gate-override');
+      assert.equal(existsSync(teamRoot), false);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('shutdownTeam blocks when failed tasks remain (completion gate)', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-shutdown-gate-failed-'));
     try {
@@ -1977,7 +2101,7 @@ esac
 
       const manifestPath = join(cwd, '.omx', 'state', 'team', 'team-delegation', 'manifest.v2.json');
       const manifest = JSON.parse(await readFile(manifestPath, 'utf-8')) as any;
-      manifest.policy.delegation_only = true;
+      manifest.governance = { ...(manifest.governance || {}), delegation_only: true };
       await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
 
       await assert.rejects(
@@ -2077,7 +2201,7 @@ esac
 
       const manifestPath = join(cwd, '.omx', 'state', 'team', 'team-approval', 'manifest.v2.json');
       const manifest = JSON.parse(await readFile(manifestPath, 'utf-8')) as any;
-      manifest.policy.plan_approval_required = true;
+      manifest.governance = { ...(manifest.governance || {}), plan_approval_required: true };
       await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
 
       await assert.rejects(

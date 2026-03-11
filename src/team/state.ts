@@ -157,6 +157,13 @@ export interface TeamPolicy {
   worker_launch_mode: 'interactive' | 'prompt';
   dispatch_mode: 'hook_preferred_with_fallback' | 'transport_direct';
   dispatch_ack_timeout_ms: number;
+}
+
+/**
+ * Lifecycle/workflow guardrails persisted alongside the manifest, but kept
+ * separate from transport/runtime policy so each layer has a single owner.
+ */
+export interface TeamGovernance {
   delegation_only: boolean;
   plan_approval_required: boolean;
   nested_teams_allowed: boolean;
@@ -215,6 +222,7 @@ export interface TeamManifestV2 {
   task: string;
   leader: TeamLeader;
   policy: TeamPolicy;
+  governance: TeamGovernance;
   permissions_snapshot: PermissionsSnapshot;
   tmux_session: string;
   worker_count: number;
@@ -392,6 +400,11 @@ function defaultPolicy(
     worker_launch_mode: workerLaunchMode,
     dispatch_mode: 'hook_preferred_with_fallback',
     dispatch_ack_timeout_ms: DEFAULT_DISPATCH_ACK_TIMEOUT_MS,
+  };
+}
+
+function defaultGovernance(): TeamGovernance {
+  return {
     delegation_only: false,
     plan_approval_required: false,
     nested_teams_allowed: false,
@@ -417,17 +430,24 @@ export function normalizeTeamPolicy(
     : 'hook_preferred_with_fallback';
 
   return {
-    ...base,
-    ...(policy ?? {}),
     worker_launch_mode: policy?.worker_launch_mode === 'prompt' ? 'prompt' : base.worker_launch_mode,
     display_mode: policy?.display_mode === 'split_pane' ? 'split_pane' : base.display_mode,
     dispatch_mode: dispatchMode,
     dispatch_ack_timeout_ms: clampDispatchAckTimeoutMs(policy?.dispatch_ack_timeout_ms),
-    delegation_only: policy?.delegation_only === true,
-    plan_approval_required: policy?.plan_approval_required === true,
-    nested_teams_allowed: policy?.nested_teams_allowed === true,
-    one_team_per_leader_session: policy?.one_team_per_leader_session !== false,
-    cleanup_requires_all_workers_inactive: policy?.cleanup_requires_all_workers_inactive !== false,
+  };
+}
+
+export function normalizeTeamGovernance(
+  governance: Partial<TeamGovernance> | null | undefined,
+  legacyPolicy: Partial<TeamGovernance> | null | undefined = null,
+): TeamGovernance {
+  const source = governance ?? legacyPolicy ?? {};
+  return {
+    delegation_only: source?.delegation_only === true,
+    plan_approval_required: source?.plan_approval_required === true,
+    nested_teams_allowed: source?.nested_teams_allowed === true,
+    one_team_per_leader_session: source?.one_team_per_leader_session !== false,
+    cleanup_requires_all_workers_inactive: source?.cleanup_requires_all_workers_inactive !== false,
   };
 }
 
@@ -769,6 +789,7 @@ export async function initTeamState(
         worker_id: leaderWorkerId,
       },
       policy: defaultPolicy(displayMode, workerLaunchMode),
+      governance: defaultGovernance(),
       permissions_snapshot: permissionsSnapshot,
       tmux_session: config.tmux_session,
       worker_count: workerCount,
@@ -874,6 +895,7 @@ function teamManifestFromConfig(config: TeamConfig): TeamManifestV2 {
     task: normalized.task,
     leader: defaultLeader(),
     policy,
+    governance: defaultGovernance(),
     permissions_snapshot: defaultPermissionsSnapshot(),
     tmux_session: normalized.tmux_session,
     worker_count: normalized.worker_count,
@@ -896,6 +918,10 @@ export async function writeTeamManifestV2(manifest: TeamManifestV2, cwd: string)
     display_mode: manifest.policy?.display_mode === 'split_pane' ? 'split_pane' : 'auto',
     worker_launch_mode: manifest.policy?.worker_launch_mode === 'prompt' ? 'prompt' : 'interactive',
   });
+  const normalizedGovernance = normalizeTeamGovernance(
+    manifest.governance,
+    manifest.policy as Partial<TeamGovernance>,
+  );
   const p = teamManifestV2Path(manifest.name, cwd);
   await writeAtomic(
     p,
@@ -903,6 +929,7 @@ export async function writeTeamManifestV2(manifest: TeamManifestV2, cwd: string)
       {
         ...manifest,
         policy: normalizedPolicy,
+        governance: normalizedGovernance,
       },
       null,
       2,
@@ -917,12 +944,17 @@ export async function readTeamManifestV2(teamName: string, cwd: string): Promise
     const raw = await readFile(p, 'utf8');
     const parsed = JSON.parse(raw) as unknown;
     if (!isTeamManifestV2(parsed)) return null;
+    const parsedManifest = parsed as TeamManifestV2 & {
+      policy?: Partial<TeamPolicy> & Partial<TeamGovernance>;
+      governance?: Partial<TeamGovernance>;
+    };
     return {
-      ...parsed,
-      policy: normalizeTeamPolicy(parsed.policy, {
-        display_mode: parsed.policy?.display_mode === 'split_pane' ? 'split_pane' : 'auto',
-        worker_launch_mode: parsed.policy?.worker_launch_mode === 'prompt' ? 'prompt' : 'interactive',
+      ...parsedManifest,
+      policy: normalizeTeamPolicy(parsedManifest.policy, {
+        display_mode: parsedManifest.policy?.display_mode === 'split_pane' ? 'split_pane' : 'auto',
+        worker_launch_mode: parsedManifest.policy?.worker_launch_mode === 'prompt' ? 'prompt' : 'interactive',
       }),
+      governance: normalizeTeamGovernance(parsedManifest.governance, parsedManifest.policy),
     };
   } catch {
     return null;

@@ -22,6 +22,7 @@ export type {
   TeamManifestV2,
   TeamLeader,
   TeamPolicy,
+  TeamGovernance,
   PermissionsSnapshot,
   TeamEvent,
   TeamMailboxMessage,
@@ -55,6 +56,7 @@ export { saveTeamConfig as teamSaveConfig } from './state.js';
 export { cleanupTeamState as teamCleanup } from './state.js';
 export { migrateV1ToV2 as teamMigrateV1ToV2 } from './state.js';
 export { normalizeTeamPolicy as teamNormalizePolicy } from './state.js';
+export { normalizeTeamGovernance as teamNormalizeGovernance } from './state.js';
 
 // === Worker operations ===
 export { writeWorkerIdentity as teamWriteWorkerIdentity } from './state.js';
