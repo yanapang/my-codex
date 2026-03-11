@@ -166,6 +166,42 @@ describe('notify-hook auto-nudge', () => {
     });
   });
 
+  it('still auto-nudges in team-worker context using the worker state root', async () => {
+    await withTempWorkingDir(async (cwd) => {
+      const workerStateRoot = join(cwd, 'leader-state-root');
+      const logsDir = join(cwd, '.omx', 'logs');
+      const codexHome = join(cwd, 'codex-home');
+      const fakeBinDir = join(cwd, 'fake-bin');
+      const tmuxLogPath = join(cwd, 'tmux.log');
+
+      await mkdir(logsDir, { recursive: true });
+      await mkdir(workerStateRoot, { recursive: true });
+      await mkdir(codexHome, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+
+      await writeJson(join(codexHome, '.omx-config.json'), {
+        autoNudge: { enabled: true, delaySec: 0 },
+      });
+
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+
+      const result = runNotifyHook(cwd, fakeBinDir, codexHome, {
+        'last-assistant-message': 'I can continue with the worker follow-up from here.',
+      }, {
+        OMX_TEAM_WORKER: 'auto-nudge/worker-1',
+        OMX_TEAM_STATE_ROOT: workerStateRoot,
+      });
+      assert.equal(result.status, 0, `hook failed: ${result.stderr || result.stdout}`);
+
+      const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
+      assert.match(tmuxLog, /send-keys -t %99 -l yes, proceed \[OMX_TMUX_INJECT\]/, 'team-worker context should still send auto-nudge');
+
+      const nudgeStatePath = join(workerStateRoot, 'auto-nudge-state.json');
+      assert.ok(existsSync(nudgeStatePath), 'worker state root should receive auto-nudge state');
+    });
+  });
+
   it('does not nudge when no stall pattern is present', async () => {
     await withTempWorkingDir(async (cwd) => {
       const omxDir = join(cwd, '.omx');

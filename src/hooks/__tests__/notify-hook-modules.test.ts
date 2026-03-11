@@ -209,6 +209,14 @@ describe('notify-hook/auto-nudge – detectStallPattern', () => {
     assert.equal(detectStallPattern('Ready to proceed whenever you are.', DEFAULT_STALL_PATTERNS), true);
   });
 
+  it('detects team-worker follow-up phrases like continue with and next step', async () => {
+    const { detectStallPattern, DEFAULT_STALL_PATTERNS } = await loadModule('notify-hook/auto-nudge.js');
+    assert.equal(detectStallPattern('I can continue with the worker follow-up from here.', DEFAULT_STALL_PATTERNS), true);
+    assert.equal(detectStallPattern('The next step is to finish the worker handoff.', DEFAULT_STALL_PATTERNS), true);
+    assert.equal(detectStallPattern('The NEXT STEPS would be running tests and posting the summary.', DEFAULT_STALL_PATTERNS), true);
+    assert.equal(detectStallPattern('We can pick up with the cleanup after this.', DEFAULT_STALL_PATTERNS), true);
+  });
+
   it('returns false when no stall pattern present', async () => {
     const { detectStallPattern, DEFAULT_STALL_PATTERNS } = await loadModule('notify-hook/auto-nudge.js');
     assert.equal(detectStallPattern('All tests pass. Build succeeded.', DEFAULT_STALL_PATTERNS), false);
