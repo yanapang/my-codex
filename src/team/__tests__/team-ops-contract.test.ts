@@ -16,6 +16,7 @@ const EXPECTED_STATE_RE_EXPORTS = {
   teamCleanup: 'cleanupTeamState',
   teamMigrateV1ToV2: 'migrateV1ToV2',
   teamNormalizePolicy: 'normalizeTeamPolicy',
+  teamNormalizeGovernance: 'normalizeTeamGovernance',
   teamWriteWorkerIdentity: 'writeWorkerIdentity',
   teamReadWorkerHeartbeat: 'readWorkerHeartbeat',
   teamUpdateWorkerHeartbeat: 'updateWorkerHeartbeat',

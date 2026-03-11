@@ -93,6 +93,9 @@ export interface TeamPolicy {
   worker_launch_mode: 'interactive' | 'prompt';
   dispatch_mode: 'hook_preferred_with_fallback' | 'transport_direct';
   dispatch_ack_timeout_ms: number;
+}
+
+export interface TeamGovernance {
   delegation_only: boolean;
   plan_approval_required: boolean;
   nested_teams_allowed: boolean;
@@ -151,6 +154,7 @@ export interface TeamManifestV2 {
   task: string;
   leader: TeamLeader;
   policy: TeamPolicy;
+  governance: TeamGovernance;
   permissions_snapshot: PermissionsSnapshot;
   tmux_session: string;
   worker_count: number;

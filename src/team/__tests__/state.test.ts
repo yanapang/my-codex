@@ -110,7 +110,7 @@ describe('team state', () => {
     }
   });
 
-  it('normalizes legacy manifest policy with dispatch defaults and timeout bounds', async () => {
+  it('normalizes legacy manifest policy with dispatch defaults, timeout bounds, and governance split', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-team-manifest-policy-'));
     try {
       await initTeamState('team-policy', 't', 'executor', 1, cwd);
@@ -119,18 +119,31 @@ describe('team state', () => {
       const policy = (manifest.policy ?? {}) as Record<string, unknown>;
       delete policy.dispatch_mode;
       policy.dispatch_ack_timeout_ms = 999_999;
+      policy.delegation_only = true;
       manifest.policy = policy;
+      delete manifest.governance;
       await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
 
       const loaded = await readTeamManifestV2('team-policy', cwd);
       assert.equal(loaded?.policy.dispatch_mode, 'hook_preferred_with_fallback');
       assert.equal(loaded?.policy.dispatch_ack_timeout_ms, 10_000);
+      assert.equal(loaded?.governance.delegation_only, true);
+      assert.equal('delegation_only' in (loaded?.policy ?? {}), false);
 
       const freshCwd = await mkdtemp(join(tmpdir(), 'omx-team-manifest-policy-default-'));
       try {
         await initTeamState('team-policy-default', 't', 'executor', 1, freshCwd);
         const fresh = await readTeamManifestV2('team-policy-default', freshCwd);
         assert.equal(fresh?.policy.dispatch_ack_timeout_ms, 2_000);
+        assert.equal(fresh?.governance.cleanup_requires_all_workers_inactive, true);
+
+        const freshManifestPath = join(freshCwd, '.omx', 'state', 'team', 'team-policy-default', 'manifest.v2.json');
+        const persisted = JSON.parse(await readFile(freshManifestPath, 'utf8')) as {
+          policy?: Record<string, unknown>;
+          governance?: Record<string, unknown>;
+        };
+        assert.equal('delegation_only' in (persisted.policy ?? {}), false);
+        assert.equal(persisted.governance?.delegation_only, false);
       } finally {
         await rm(freshCwd, { recursive: true, force: true });
       }
@@ -1444,6 +1457,7 @@ describe('team state', () => {
       assert.ok(config);
       assert.equal(manifest?.policy.display_mode, 'split_pane');
       assert.equal(manifest?.policy.worker_launch_mode, 'prompt');
+      assert.equal(manifest?.governance.cleanup_requires_all_workers_inactive, true);
       assert.equal(config?.worker_launch_mode, 'prompt');
       assert.equal(manifest?.permissions_snapshot.approval_mode, 'on-request');
       assert.equal(manifest?.permissions_snapshot.sandbox_mode, 'workspace-write');
