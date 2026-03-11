@@ -106,6 +106,7 @@ import { resolveCanonicalTeamStateRoot } from './state-root.js';
 import { inferPhaseTargetFromTaskCounts, reconcilePhaseStateForMonitor } from './phase-controller.js';
 import { getTeamTmuxSessions } from '../notifications/tmux.js';
 import { hasStructuredVerificationEvidence } from '../verification/verifier.js';
+import { buildRebalanceDecisions } from './rebalance-policy.js';
 import { readModeState, updateModeState } from '../modes/base.js';
 import {
   ensureWorktree,
@@ -1230,7 +1231,7 @@ export async function monitorTeam(teamName: string, cwd: string): Promise<TeamSn
     const reclaimed = await reclaimExpiredTaskClaim(sanitized, task.id, cwd);
     if (reclaimed.ok && reclaimed.reclaimed) reclaimedTaskIds.push(task.id);
   }
-  const taskView = reclaimedTaskIds.length > 0 ? await listTasks(sanitized, cwd) : allTasks;
+  let taskView = reclaimedTaskIds.length > 0 ? await listTasks(sanitized, cwd) : allTasks;
   const taskById = new Map(taskView.map((task) => [task.id, task] as const));
   const inProgressByOwner = new Map<string, TeamTask[]>();
   for (const task of taskView) {
@@ -1300,6 +1301,40 @@ export async function monitorTeam(teamName: string, cwd: string): Promise<TeamSn
     }
   }
 
+  for (const taskId of reclaimedTaskIds) {
+    recommendations.push(`Reclaimed expired claim for task-${taskId}`);
+  }
+  const rebalanceDecisions = buildRebalanceDecisions({
+    tasks: taskView,
+    workers: workers.map((worker) => ({
+      name: worker.name,
+      role: config.workers.find((entry) => entry.name === worker.name)?.role,
+      alive: worker.alive,
+      status: worker.status,
+    })),
+    reclaimedTaskIds,
+  });
+
+  let assignedDuringMonitor = false;
+  for (const decision of rebalanceDecisions) {
+    if (decision.type === 'assign' && decision.taskId && decision.workerName) {
+      try {
+        await assignTask(sanitized, decision.workerName, decision.taskId, cwd);
+        recommendations.push(`Assigned task-${decision.taskId} to ${decision.workerName}: ${decision.reason}`);
+        assignedDuringMonitor = true;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        recommendations.push(`Unable to assign task-${decision.taskId} to ${decision.workerName}: ${message}`);
+      }
+    } else {
+      recommendations.push(decision.reason);
+    }
+  }
+
+  if (assignedDuringMonitor) {
+    taskView = await listTasks(sanitized, cwd);
+  }
+
   // Count tasks
   const taskCounts = {
     total: taskView.length,
@@ -1340,9 +1375,6 @@ export async function monitorTeam(teamName: string, cwd: string): Promise<TeamSn
   await syncRootTeamModeStateOnTerminalPhase(sanitized, phase, cwd);
   await syncLinkedRalphModeStateOnTerminalPhase(sanitized, phase, cwd);
 
-  for (const taskId of reclaimedTaskIds) {
-    recommendations.push(`Reclaimed expired claim for task-${taskId}`);
-  }
   if (deadWorkerStall) {
     recommendations.push('All workers are dead while work remains; mark the team failed or restart with fresh workers.');
   }

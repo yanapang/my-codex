@@ -1212,8 +1212,63 @@ process.on('SIGTERM', () => {
     }
   });
 
+  it('monitorTeam surfaces reclaimed work pickup attempts when an idle worker is available', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-reassign-reclaimed-'));
+    const prevTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+    delete process.env.OMX_TEAM_STATE_ROOT;
+    let sleeper1: ReturnType<typeof spawn> | null = null;
+    let sleeper2: ReturnType<typeof spawn> | null = null;
+    try {
+      await initTeamState('team-runtime-reassign', 'reassign reclaimed test', 'executor', 2, cwd);
+      const task = await createTask('team-runtime-reassign', { subject: 'write docs', description: 'document feature', status: 'pending', role: 'writer' }, cwd);
+      const claim = await claimTask('team-runtime-reassign', task.id, 'worker-1', null, cwd);
+      assert.ok(claim.ok);
+      if (!claim.ok) throw new Error('claim failed');
+
+      const taskPath = join(cwd, '.omx', 'state', 'team', 'team-runtime-reassign', 'tasks', `task-${task.id}.json`);
+      const current = JSON.parse(await readFile(taskPath, 'utf-8')) as any;
+      current.claim.leased_until = new Date(Date.now() - 1000).toISOString();
+      await writeAtomic(taskPath, JSON.stringify(current, null, 2));
+
+      const manifestPath = join(cwd, '.omx', 'state', 'team', 'team-runtime-reassign', 'manifest.v2.json');
+      const manifest = JSON.parse(await readFile(manifestPath, 'utf-8')) as any;
+      sleeper1 = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', detached: false });
+      sleeper2 = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', detached: false });
+      manifest.policy = { ...(manifest.policy || {}), worker_launch_mode: 'prompt' };
+      manifest.workers[0].role = 'executor';
+      manifest.workers[1].role = 'writer';
+      manifest.workers[0].pid = sleeper1.pid;
+      manifest.workers[1].pid = sleeper2.pid;
+      await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+
+      await writeAtomic(
+        join(cwd, '.omx', 'state', 'team', 'team-runtime-reassign', 'workers', 'worker-1', 'status.json'),
+        JSON.stringify({ state: 'working', current_task_id: task.id, updated_at: new Date().toISOString() }, null, 2),
+      );
+      await writeAtomic(
+        join(cwd, '.omx', 'state', 'team', 'team-runtime-reassign', 'workers', 'worker-2', 'status.json'),
+        JSON.stringify({ state: 'idle', updated_at: new Date().toISOString() }, null, 2),
+      );
+
+      const snapshot = await monitorTeam('team-runtime-reassign', cwd);
+      assert.ok(snapshot);
+      const reread = await readTask('team-runtime-reassign', task.id, cwd);
+      assert.equal(reread?.status, 'pending');
+      assert.equal(reread?.owner, undefined);
+      assert.equal(snapshot?.recommendations.some((r) => r.includes(`Unable to assign task-${task.id} to worker-2: worker_notify_failed`)), true);
+    } finally {
+      try { if (sleeper1?.pid) process.kill(sleeper1.pid, 'SIGKILL'); } catch {}
+      try { if (sleeper2?.pid) process.kill(sleeper2.pid, 'SIGKILL'); } catch {}
+      if (typeof prevTeamStateRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = prevTeamStateRoot;
+      else delete process.env.OMX_TEAM_STATE_ROOT;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('monitorTeam reclaims expired task claims and surfaces the recovery in recommendations', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-reclaim-'));
+    const prevTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+    delete process.env.OMX_TEAM_STATE_ROOT;
     try {
       await initTeamState('team-runtime-reclaim', 'reclaim test', 'executor', 2, cwd);
       const t = await createTask('team-runtime-reclaim', { subject: 'task', description: 'd', status: 'pending' }, cwd);
@@ -1233,6 +1288,8 @@ process.on('SIGTERM', () => {
       assert.equal(reread?.claim, undefined);
       assert.equal(snapshot?.recommendations.some((r) => r.includes(`task-${t.id}`) && r.includes('Reclaimed expired claim')), true);
     } finally {
+      if (typeof prevTeamStateRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = prevTeamStateRoot;
+      else delete process.env.OMX_TEAM_STATE_ROOT;
       await rm(cwd, { recursive: true, force: true });
     }
   });

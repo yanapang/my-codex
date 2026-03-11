@@ -42,13 +42,18 @@ describe('decomposeTaskString', () => {
     }
   });
 
-  it('distributes tasks across workers round-robin', () => {
+  it('keeps explicit same-role tasks on a single specialization lane', () => {
     const tasks = decomposeTaskString('task A, task B, task C, task D', 2, 'executor', true);
     assert.equal(tasks.length, 4);
-    assert.equal(tasks[0].owner, 'worker-1');
-    assert.equal(tasks[1].owner, 'worker-2');
-    assert.equal(tasks[2].owner, 'worker-1');
-    assert.equal(tasks[3].owner, 'worker-2');
+    assert.deepEqual(tasks.map((task) => task.owner), ['worker-1', 'worker-1', 'worker-1', 'worker-1']);
+  });
+
+  it('clusters same-role work to preserve specialization when routing is mixed', () => {
+    const tasks = decomposeTaskString('write docs, build UI component, update docs, and fix tests', 3, 'executor', false);
+    assert.equal(tasks.length, 4);
+    const docOwners = tasks.filter((task) => task.role === 'writer').map((task) => task.owner);
+    assert.ok(docOwners.length >= 2);
+    assert.equal(new Set(docOwners).size, 1);
   });
 
   it('handles single worker with single task', () => {
