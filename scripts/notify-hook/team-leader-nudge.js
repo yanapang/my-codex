@@ -53,16 +53,12 @@ export function resolveLeaderProgressStallThresholdMs() {
   return 120_000;
 }
 
-function buildStatusCheckReminder(teamName, { keepPolling = false } = {}) {
-  return keepPolling
-    ? `Next: omx team status ${teamName}; check messages, assign next step; keep polling.`
-    : `Next: omx team status ${teamName}; check messages, assign next step.`;
+function buildStatusCheckReminder(teamName) {
+  return `Next: check messages; keep orchestrating; if done, gracefully shut down: omx team shutdown ${teamName}.`;
 }
 
-function buildMailboxCheckReminder(teamName, { keepPolling = false } = {}) {
-  return keepPolling
-    ? `Next: omx team status ${teamName}; read mailbox messages; reply next step; keep polling.`
-    : `Next: omx team status ${teamName}; read mailbox messages; reply next step.`;
+function buildMailboxCheckReminder(teamName) {
+  return `Next: read messages; keep orchestrating; if done, gracefully shut down: omx team shutdown ${teamName}.`;
 }
 
 function buildWorkerStartEvidenceReminder(teamName, workerName) {
@@ -88,7 +84,7 @@ function buildLeaderActionGuidance(teamName, {
   if (allWorkersIdle && tasksComplete) {
     return `Next: omx team shutdown ${teamName}.`;
   }
-  return buildStatusCheckReminder(teamName, { keepPolling: true });
+  return buildStatusCheckReminder(teamName);
 }
 
 export async function checkWorkerPanesAlive(tmuxTarget, workerPaneIds = []) {
@@ -621,7 +617,7 @@ export async function maybeNudgeTeamLeader({ cwd, stateDir, logsDir, preComputed
       nudgeReason = 'stale_leader_with_messages';
       text =
         `Team ${teamName}: leader stale, ${paneStatus.paneCount} pane(s) active, ${messages.length} msg(s) pending. `
-        + buildMailboxCheckReminder(teamName, { keepPolling: true });
+        + buildMailboxCheckReminder(teamName);
     } else if (staleFollowupDue) {
       nudgeReason = 'stale_leader_panes_alive';
       text =
