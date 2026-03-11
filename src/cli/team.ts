@@ -7,6 +7,7 @@ import type { TeamEvent } from '../team/state.js';
 import { parseWorktreeMode, type WorktreeMode } from '../team/worktree.js';
 import { classifyTaskSize } from '../hooks/task-size-detector.js';
 import { routeTaskToRole } from '../team/role-router.js';
+import { allocateTasksToWorkers } from '../team/allocation-policy.js';
 import {
   buildFollowupStaffingPlan,
   resolveAvailableAgentTypes,
@@ -532,15 +533,13 @@ function createAspectSubtasks(
   return result;
 }
 
-/** Distribute tasks across workers, assigning owners round-robin. */
+/** Distribute tasks across workers using an inspectable allocation policy. */
 function distributeTasksToWorkers(
-  tasks: Array<{ subject: string; description: string; role?: string }>,
+  tasks: Array<{ subject: string; description: string; role?: string; blocked_by?: string[] }>,
   workerCount: number,
 ): Array<{ subject: string; description: string; owner: string; role?: string }> {
-  return tasks.map((t, i) => ({
-    ...t,
-    owner: `worker-${(i % workerCount) + 1}`,
-  }));
+  const workers = Array.from({ length: workerCount }, (_, index) => ({ name: `worker-${index + 1}` }));
+  return allocateTasksToWorkers(tasks, workers).map(({ allocation_reason: _allocationReason, ...task }) => task);
 }
 
 async function ensureTeamModeState(
