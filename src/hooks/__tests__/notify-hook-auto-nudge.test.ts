@@ -148,7 +148,7 @@ describe('notify-hook auto-nudge', () => {
       });
 
       // capture-pane will return content with a stall pattern
-      await writeFile(captureFile, 'Here are the results.\nWould you like me to continue with the implementation?\n');
+      await writeFile(captureFile, 'Here are the results.\nWould you like me to continue with the implementation?\n› ');
 
       await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
       await chmod(join(fakeBinDir, 'tmux'), 0o755);
@@ -232,6 +232,50 @@ describe('notify-hook auto-nudge', () => {
         const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
         assert.doesNotMatch(tmuxLog, /send-keys -t %99 -l yes, proceed/, 'should NOT send nudge');
       }
+    });
+  });
+
+  it('does not nudge when pane capture shows an active task despite stall-like assistant text', async () => {
+    await withTempWorkingDir(async (cwd) => {
+      const omxDir = join(cwd, '.omx');
+      const stateDir = join(omxDir, 'state');
+      const logsDir = join(omxDir, 'logs');
+      const codexHome = join(cwd, 'codex-home');
+      const fakeBinDir = join(cwd, 'fake-bin');
+      const tmuxLogPath = join(cwd, 'tmux.log');
+      const captureFile = join(cwd, 'capture-output.txt');
+
+      await mkdir(logsDir, { recursive: true });
+      await mkdir(stateDir, { recursive: true });
+      await mkdir(codexHome, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+
+      await writeJson(join(codexHome, '.omx-config.json'), {
+        autoNudge: { enabled: true, delaySec: 0 },
+      });
+
+      await writeFile(
+        captureFile,
+        [
+          'Working...',
+          '• Running tests (3m 12s • esc to interrupt)',
+          '',
+        ].join('\n'),
+      );
+
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+
+      const result = runNotifyHook(cwd, fakeBinDir, codexHome, {
+        'last-assistant-message': 'Would you like me to continue with the next step?',
+      }, {
+        OMX_TEST_CAPTURE_FILE: captureFile,
+      });
+      assert.equal(result.status, 0, `hook failed: ${result.stderr || result.stdout}`);
+
+      const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
+      assert.match(tmuxLog, /capture-pane/, 'should inspect pane state before nudging');
+      assert.doesNotMatch(tmuxLog, /send-keys -t %99 -l yes, proceed/, 'should not inject while pane is busy');
     });
   });
 

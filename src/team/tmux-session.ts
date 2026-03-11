@@ -9,6 +9,12 @@ import {
   LONG_CONFIG_FLAG,
   MODEL_FLAG,
 } from '../cli/constants.js';
+import {
+  normalizeTmuxCapture as sharedNormalizeTmuxCapture,
+  paneHasActiveTask as sharedPaneHasActiveTask,
+  paneIsBootstrapping as sharedPaneIsBootstrapping,
+  paneLooksReady as sharedPaneLooksReady,
+} from '../../scripts/tmux-hook-engine.js';
 import { sleep, sleepSync } from '../utils/sleep.js';
 import { classifySpawnError, resolveCommandPathForPlatform, spawnPlatformCommandSync } from '../utils/platform-command.js';
 
@@ -985,49 +991,8 @@ function paneTarget(sessionName: string, workerIndex: number, workerPaneId?: str
   return `${sessionName}:${workerIndex}`;
 }
 
-export function paneIsBootstrapping(lines: string[]): boolean {
-  return lines.some((line) =>
-    /\b(loading|initializing|starting up)\b/i.test(line) ||
-    /\bmodel:\s*loading\b/i.test(line) ||
-    /\bconnecting\s+to\b/i.test(line),
-  );
-}
-
-export function paneLooksReady(captured: string): boolean {
-  const content = captured.trimEnd();
-  if (content === '') return false;
-
-  const lines = content
-    .split('\n')
-    .map(l => l.replace(/\r/g, ''))
-    .map(l => l.trimEnd())
-    .filter(l => l.trim() !== '');
-
-  // Negative gate: loading/startup states override all positive signals.
-  // Fixes #391: status bar markers (gpt-*, % left) can appear before the CLI
-  // is truly input-ready, causing typed triggers to sit as unsent drafts.
-  if (paneIsBootstrapping(lines)) return false;
-
-  const lastLine = lines.length > 0 ? lines[lines.length - 1] : '';
-  // Strong positive: prompt character on last line means input-ready.
-  if (/^\s*[›>❯]\s*/u.test(lastLine)) return true;
-
-  // Prompt character anywhere in the captured output (e.g. Codex TUI renders
-  // the prompt line above a status footer).
-  const hasCodexPromptLine = lines.some((line) => /^\s*›\s*/u.test(line));
-  const hasClaudePromptLine = lines.some((line) => /^\s*❯\s*/u.test(line));
-  if (hasCodexPromptLine || hasClaudePromptLine) return true;
-
-  // Custom per-issue prompts (e.g. "› IND-123 only..."). Capture output can
-  // occasionally omit the glyph, so accept both with/without leading prompt char.
-  const hasIssuePromptLine = lines.some((line) => /^\s*(?:[›>❯]\s*)?[A-Z][A-Z0-9]+-\d+\s+only(?:\s*(?:…|\.{3}))?\s*$/iu.test(line));
-  if (hasIssuePromptLine) return true;
-
-  // Status-only markers (model name in status bar, token budget) are NOT
-  // sufficient on their own — they can appear during bootstrap before the CLI
-  // accepts input.  Require an actual prompt character (checked above).
-  return false;
-}
+export const paneIsBootstrapping = sharedPaneIsBootstrapping;
+export const paneLooksReady = sharedPaneLooksReady;
 
 function paneHasTrustPrompt(captured: string): boolean {
   const lines = captured
@@ -1040,24 +1005,7 @@ function paneHasTrustPrompt(captured: string): boolean {
   return hasQuestion && hasActiveChoices;
 }
 
-export function paneHasActiveTask(captured: string): boolean {
-  const lines = captured
-    .split('\n')
-    .map((line) => line.replace(/\r/g, '').trim())
-    .filter((line) => line.length > 0);
-
-  const tail = lines.slice(-40);
-  // Codex v5 status line can appear without "esc to interrupt"; treat as busy first.
-  if (tail.some((line) => /\b\d+\s+background terminal running\b/i.test(line))) return true;
-  if (tail.some((line) => /esc to interrupt/i.test(line))) return true;
-  if (tail.some((line) => /\bbackground terminal running\b/i.test(line))) return true;
-  // Typical Codex activity line: "• Doing X (3m 12s • esc to interrupt)"
-  if (tail.some((line) => /^•\s.+\(.+•\s*esc to interrupt\)$/i.test(line))) return true;
-  // Claude active generation lines (observed): "· Caramelizing…", "· Beboppin'…", "✻ Pollinating…"
-  // Keep this fairly narrow to minimize false positives in regular bullet content.
-  if (tail.some((line) => /^[·✻]\s+[A-Za-z][A-Za-z0-9'’-]*(?:\s+[A-Za-z][A-Za-z0-9'’-]*){0,3}(?:…|\.{3})$/u.test(line))) return true;
-  return false;
-}
+export const paneHasActiveTask = sharedPaneHasActiveTask;
 
 function resolveSendStrategyFromEnv(): 'auto' | 'queue' | 'interrupt' {
   const raw = String(process.env.OMX_TEAM_SEND_STRATEGY || '')
@@ -1264,12 +1212,7 @@ export function dismissTrustPromptIfPresent(
   return true;
 }
 
-export function normalizeTmuxCapture(value: string): string {
-  return value
-    .replace(/\r/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
+export const normalizeTmuxCapture = sharedNormalizeTmuxCapture;
 
 function assertWorkerTriggerText(text: string): void {
   if (text.length >= 200) {

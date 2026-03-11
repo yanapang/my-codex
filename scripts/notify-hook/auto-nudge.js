@@ -10,7 +10,8 @@ import { asNumber, safeString } from './utils.js';
 import { readJsonIfExists, getScopedStateDirsForCurrentSession, readdir } from './state-io.js';
 import { runProcess } from './process-runner.js';
 import { logTmuxHookEvent } from './log.js';
-import { DEFAULT_MARKER } from '../tmux-hook-engine.js';
+import { checkPaneReadyForTeamSendKeys } from './team-tmux-guard.js';
+import { buildCapturePaneArgv, DEFAULT_MARKER } from '../tmux-hook-engine.js';
 
 export const SKILL_ACTIVE_STATE_FILE = 'skill-active-state.json';
 export const DEEP_INTERVIEW_BLOCKED_APPROVAL_INPUTS = ['yes', 'y', 'proceed', 'continue', 'ok', 'sure', 'go ahead', 'next i should'];
@@ -254,9 +255,7 @@ export function detectStallPattern(text, patterns) {
 
 export async function capturePane(paneId, lines = 10) {
   try {
-    const result = await runProcess('tmux', [
-      'capture-pane', '-t', paneId, '-p', '-l', String(lines),
-    ], 3000);
+    const result = await runProcess('tmux', buildCapturePaneArgv(paneId, lines), 3000);
     return result.stdout || '';
   } catch {
     return '';
@@ -340,6 +339,18 @@ export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
 
     if (skillState?.phase === 'completing' && !detected) return;
     if (!detected || !paneId) return;
+
+    const paneGuard = await checkPaneReadyForTeamSendKeys(paneId);
+    if (!paneGuard.ok) {
+      await logTmuxHookEvent(logsDir, {
+        timestamp: new Date().toISOString(),
+        type: 'auto_nudge_skipped',
+        pane_id: paneId,
+        reason: paneGuard.reason,
+        source,
+      }).catch(() => {});
+      return;
+    }
 
     const deepInterviewLockActive = isDeepInterviewAutoApprovalLocked(skillState) && !releaseReason;
     if (deepInterviewLockActive && isBlockedAutoApprovalInput(config.response, skillState.input_lock?.blocked_inputs)) {
