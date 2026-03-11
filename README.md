@@ -206,6 +206,7 @@ omx agents-init .  # Bootstrap lightweight AGENTS.md files for a repo/subtree
 omx doctor         # Installation/runtime diagnostics
 omx doctor --team  # Team/swarm diagnostics
 omx ask ...        # Ask local provider advisor (claude|gemini), writes .omx/artifacts/*
+omx resume         # Resume a previous interactive Codex session
 omx team ...       # Start/status/resume/shutdown team workers (interactive tmux by default)
 omx ralph          # Launch Codex with ralph persistence mode active
 omx status         # Show active modes
@@ -316,6 +317,10 @@ omx team api --help
 omx team status <team-name>
 omx team resume <team-name>
 omx team shutdown <team-name>
+```
+
+```bash
+omx resume --last
 ```
 
 Important rule: do not shutdown while tasks are still `in_progress` unless aborting.
