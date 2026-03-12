@@ -529,6 +529,31 @@ describe('exploreCommand', () => {
     }
   });
 
+  it('falls back to the explore harness when sparkshell backend is unavailable', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-explore-sparkshell-fallback-'));
+    try {
+      const harnessStub = join(wd, 'explore-stub.sh');
+      await writeFile(
+        harnessStub,
+        '#!/bin/sh\nprintf "%s\\n" "# Answer" "- fallback harness recovered the lookup"\n',
+      );
+      await chmod(harnessStub, 0o755);
+
+      const result = runOmx(wd, ['explore', '--prompt', 'git log --oneline'], {
+        OMX_SPARKSHELL_BIN: join(wd, 'missing-sparkshell'),
+        OMX_EXPLORE_BIN: harnessStub,
+      });
+      if (shouldSkipForSpawnPermissions(result.error)) return;
+
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.match(result.stderr, /sparkshell backend unavailable/);
+      assert.match(result.stderr, /Falling back to the explore harness/);
+      assert.match(result.stdout, /fallback harness recovered the lookup/);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it('passes prompt to harness and preserves markdown stdout', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-explore-cmd-'));
     try {

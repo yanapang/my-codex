@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 pub const DEFAULT_SUMMARY_TIMEOUT_MS: u64 = 60_000;
 pub const DEFAULT_SPARK_MODEL: &str = "gpt-5.3-codex-spark";
+pub const DEFAULT_FALLBACK_MODEL: &str = "gpt-5.4";
 
 pub fn resolve_model() -> String {
     env::var("OMX_SPARKSHELL_MODEL")
@@ -20,6 +21,18 @@ pub fn resolve_model() -> String {
                 .filter(|value| !value.trim().is_empty())
         })
         .unwrap_or_else(|| DEFAULT_SPARK_MODEL.to_string())
+}
+
+pub fn resolve_fallback_model() -> String {
+    env::var("OMX_SPARKSHELL_FALLBACK_MODEL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            env::var("OMX_MAIN_MODEL")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .unwrap_or_else(|| DEFAULT_FALLBACK_MODEL.to_string())
 }
 
 pub fn read_summary_timeout_ms() -> u64 {
@@ -36,9 +49,35 @@ pub fn summarize_output(
 ) -> Result<String, SparkshellError> {
     let prompt = build_summary_prompt(command, output);
     let model = resolve_model();
+    let fallback_model = resolve_fallback_model();
     let timeout_ms = read_summary_timeout_ms();
     let (stdout, stderr, status_ok) = run_codex_exec(&prompt, &model, timeout_ms)?;
     if !status_ok {
+        let should_retry = fallback_model != model && should_retry_with_fallback(&stderr);
+        if should_retry {
+            let (fallback_stdout, fallback_stderr, fallback_ok) =
+                run_codex_exec(&prompt, &fallback_model, timeout_ms)?;
+            if !fallback_ok {
+                let primary_message = if stderr.trim().is_empty() {
+                    "codex exec exited unsuccessfully".to_string()
+                } else {
+                    stderr.trim().to_string()
+                };
+                let fallback_message = if fallback_stderr.trim().is_empty() {
+                    "codex exec exited unsuccessfully".to_string()
+                } else {
+                    fallback_stderr.trim().to_string()
+                };
+                return Err(SparkshellError::SummaryBridge(format!(
+                    "codex exec failed for primary model `{model}` ({primary_message}) and fallback model `{fallback_model}` ({fallback_message})"
+                )));
+            }
+            return normalize_summary(&fallback_stdout).ok_or_else(|| {
+                SparkshellError::SummaryBridge(
+                    "codex exec fallback returned no valid summary sections".to_string(),
+                )
+            });
+        }
         let message = if stderr.trim().is_empty() {
             "codex exec exited unsuccessfully".to_string()
         } else {
@@ -49,6 +88,23 @@ pub fn summarize_output(
     normalize_summary(&stdout).ok_or_else(|| {
         SparkshellError::SummaryBridge("codex exec returned no valid summary sections".to_string())
     })
+}
+
+fn should_retry_with_fallback(stderr: &str) -> bool {
+    let normalized = stderr.to_ascii_lowercase();
+    [
+        "quota",
+        "rate limit",
+        "429",
+        "unavailable",
+        "not available",
+        "unknown model",
+        "model not found",
+        "no access",
+        "capacity",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
 }
 
 fn run_codex_exec(
@@ -211,7 +267,7 @@ fn render_section(name: &str, entries: &[String]) -> String {
 mod tests {
     use crate::test_support::env_lock;
     use super::{
-        normalize_summary, read_summary_timeout_ms, resolve_model, DEFAULT_SPARK_MODEL,
+        normalize_summary, read_summary_timeout_ms, resolve_fallback_model, resolve_model, DEFAULT_FALLBACK_MODEL, DEFAULT_SPARK_MODEL,
         DEFAULT_SUMMARY_TIMEOUT_MS,
     };
     use std::env;
@@ -228,6 +284,20 @@ mod tests {
             env::remove_var("OMX_SPARKSHELL_MODEL");
             env::remove_var("OMX_SPARK_MODEL");
         }
+    }
+
+    #[test]
+    fn fallback_model_resolution_prefers_override_then_main() {
+        let _guard = env_lock();
+        env::remove_var("OMX_SPARKSHELL_FALLBACK_MODEL");
+        env::remove_var("OMX_MAIN_MODEL");
+        assert_eq!(resolve_fallback_model(), DEFAULT_FALLBACK_MODEL);
+
+        env::set_var("OMX_MAIN_MODEL", "frontier-a");
+        assert_eq!(resolve_fallback_model(), "frontier-a");
+
+        env::set_var("OMX_SPARKSHELL_FALLBACK_MODEL", "frontier-b");
+        assert_eq!(resolve_fallback_model(), "frontier-b");
     }
 
     #[test]

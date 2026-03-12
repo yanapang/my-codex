@@ -3,7 +3,7 @@ import { isAbsolute, join } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { getPackageRoot } from '../utils/package.js';
 import { spawnPlatformCommandSync } from '../utils/platform-command.js';
-import { resolveSparkShellBinaryPath, runSparkShellBinary } from './sparkshell.js';
+import { resolveSparkShellBinaryPathWithHydration, runSparkShellBinary } from './sparkshell.js';
 import { DEFAULT_FRONTIER_MODEL, getSparkDefaultModel } from '../config/models.js';
 import {
   EXPLORE_BIN_ENV as EXPLORE_BIN_ENV_SHARED,
@@ -130,8 +130,8 @@ export function resolveExploreSparkShellRoute(prompt: string): ExploreSparkShell
   return undefined;
 }
 
-function runExploreViaSparkShell(route: ExploreSparkShellRoute, env: NodeJS.ProcessEnv = process.env): void {
-  const binaryPath = resolveSparkShellBinaryPath({ cwd: process.cwd(), env });
+async function runExploreViaSparkShell(route: ExploreSparkShellRoute, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  const binaryPath = await resolveSparkShellBinaryPathWithHydration({ cwd: process.cwd(), env });
   const result = runSparkShellBinary(binaryPath, route.argv, { cwd: process.cwd(), env });
 
   if (result.error) {
@@ -344,8 +344,13 @@ export async function exploreCommand(args: string[]): Promise<void> {
   const prompt = await loadExplorePrompt(parsed);
   const sparkShellRoute = resolveExploreSparkShellRoute(prompt);
   if (sparkShellRoute) {
-    runExploreViaSparkShell(sparkShellRoute, process.env);
-    return;
+    try {
+      await runExploreViaSparkShell(sparkShellRoute, process.env);
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`[omx explore] sparkshell backend unavailable (${message}). Falling back to the explore harness.\n`);
+    }
   }
 
   const packageRoot = getPackageRoot();

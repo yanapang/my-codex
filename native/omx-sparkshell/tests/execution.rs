@@ -130,6 +130,107 @@ fn summary_failure_falls_back_to_raw_output_with_notice() {
 }
 
 #[test]
+fn summary_mode_retries_with_fallback_model_when_spark_is_unavailable() {
+    let temp = unique_temp_dir("codex-fallback-model");
+    let codex = temp.join("codex");
+    let args_log = temp.join("args.log");
+    write_executable(
+        &codex,
+        &format!(
+            "#!/bin/sh
+printf '%s\n' \"$@\" >> '{}'
+model=''
+prev=''
+for arg in \"$@\"; do
+  if [ \"$prev\" = '--model' ]; then model=\"$arg\"; fi
+  prev=\"$arg\"
+done
+if [ \"$model\" = 'spark-test-model' ]; then
+  printf '%s\n' 'rate limit exceeded for spark model' >&2
+  exit 17
+fi
+printf '%s\n' '- summary: fallback model recovered summary'
+",
+            args_log.display()
+        ),
+    );
+
+    let path = format!(
+        "{}:{}",
+        temp.display(),
+        env::var("PATH").unwrap_or_default()
+    );
+    let output = Command::new(sparkshell_bin())
+        .env("PATH", path)
+        .env("OMX_SPARKSHELL_LINES", "1")
+        .env("OMX_SPARKSHELL_MODEL", "spark-test-model")
+        .env("OMX_SPARKSHELL_FALLBACK_MODEL", "frontier-test-model")
+        .arg("sh")
+        .arg("-c")
+        .arg("printf 'one\ntwo\n'")
+        .output()
+        .expect("run sparkshell");
+
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("fallback model recovered summary"));
+    assert!(String::from_utf8_lossy(&output.stderr).is_empty());
+
+    let args = fs::read_to_string(args_log).expect("args log");
+    assert!(args.contains("spark-test-model"));
+    assert!(args.contains("frontier-test-model"));
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn summary_mode_reports_both_models_when_fallback_also_fails() {
+    let temp = unique_temp_dir("codex-fallback-model-fail");
+    let codex = temp.join("codex");
+    write_executable(
+        &codex,
+        "#!/bin/sh
+model=''
+prev=''
+for arg in \"$@\"; do
+  if [ \"$prev\" = '--model' ]; then model=\"$arg\"; fi
+  prev=\"$arg\"
+done
+if [ \"$model\" = 'spark-test-model' ]; then
+  printf '%s\n' 'quota exhausted for spark model' >&2
+  exit 17
+fi
+printf '%s\n' 'fallback backend unavailable' >&2
+exit 29
+",
+    );
+
+    let path = format!(
+        "{}:{}",
+        temp.display(),
+        env::var("PATH").unwrap_or_default()
+    );
+    let output = Command::new(sparkshell_bin())
+        .env("PATH", path)
+        .env("OMX_SPARKSHELL_LINES", "1")
+        .env("OMX_SPARKSHELL_MODEL", "spark-test-model")
+        .env("OMX_SPARKSHELL_FALLBACK_MODEL", "frontier-test-model")
+        .arg("sh")
+        .arg("-c")
+        .arg("printf 'one\ntwo\n'; printf 'child-err\n' >&2")
+        .output()
+        .expect("run sparkshell");
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "one\ntwo\n");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("child-err"));
+    assert!(stderr.contains("primary model `spark-test-model`"));
+    assert!(stderr.contains("fallback model `frontier-test-model`"));
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn summary_mode_preserves_child_exit_code() {
     let temp = unique_temp_dir("codex-exit");
     let codex = temp.join("codex");

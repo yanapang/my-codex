@@ -9,6 +9,8 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
+  nestedRepoLocalSparkShellBinaryPath,
+  parseSparkShellFallbackInvocation,
   repoLocalSparkShellBinaryPath,
   resolveSparkShellBinaryPath,
   resolveSparkShellBinaryPathWithHydration,
@@ -71,6 +73,19 @@ describe('resolveSparkShellBinaryPath', () => {
       repoLocal,
     );
     assert.notEqual(packaged, repoLocal);
+  });
+
+  it('falls back to nested repo-local native build artifact when present', () => {
+    const packageRoot = '/repo';
+    const nestedRepoLocal = nestedRepoLocalSparkShellBinaryPath(packageRoot);
+
+    assert.equal(
+      resolveSparkShellBinaryPath({
+        packageRoot,
+        exists: (path) => path === nestedRepoLocal,
+      }),
+      nestedRepoLocal,
+    );
   });
 
   it('throws with checked paths when neither packaged nor repo-local binary exists', () => {
@@ -190,6 +205,22 @@ describe('runSparkShellBinary', () => {
       args: ['git', 'diff --stat', 'a|b'],
       stdio: 'inherit',
     });
+  });
+});
+
+describe('parseSparkShellFallbackInvocation', () => {
+  it('passes direct commands through unchanged', () => {
+    assert.deepEqual(
+      parseSparkShellFallbackInvocation(['git', 'log', '--oneline']),
+      { kind: 'command', argv: ['git', 'log', '--oneline'] },
+    );
+  });
+
+  it('converts tmux pane mode into capture-pane argv', () => {
+    assert.deepEqual(
+      parseSparkShellFallbackInvocation(['--tmux-pane', '%12', '--tail-lines', '400']),
+      { kind: 'tmux-pane', argv: ['tmux', 'capture-pane', '-t', '%12', '-p', '-S', '-400'] },
+    );
   });
 });
 
