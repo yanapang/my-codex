@@ -290,7 +290,7 @@ describe('resolveTeamWorkerLaunchArgsEnv (spark)', () => {
 
 describe('commandOwnsLocalHelp', () => {
   it('returns true for nested commands that render their own help output', () => {
-    for (const command of ['agents-init', 'deepinit', 'hooks', 'ralph', 'resume', 'session', 'sparkshell', 'team', 'tmux-hook']) {
+    for (const command of ['agents-init', 'ask', 'deepinit', 'hooks', 'hud', 'ralph', 'resume', 'session', 'sparkshell', 'team', 'tmux-hook']) {
       assert.equal(commandOwnsLocalHelp(command), true, `expected ${command} to own local help`);
     }
   });

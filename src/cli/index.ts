@@ -167,9 +167,11 @@ const WINDOWS_DETACHED_BOOTSTRAP_DELAY_MS = 2500;
 type CliCommand = 'launch' | 'setup' | 'agents-init' | 'deepinit' | 'uninstall' | 'doctor' | 'ask' | 'explore' | 'sparkshell' | 'team' | 'session' | 'resume' | 'version' | 'tmux-hook' | 'hooks' | 'hud' | 'status' | 'cancel' | 'help' | 'reasoning' | string;
 
 const NESTED_HELP_COMMANDS = new Set<CliCommand>([
+  'ask',
   'agents-init',
   'deepinit',
   'hooks',
+  'hud',
   'ralph',
   'resume',
   'session',

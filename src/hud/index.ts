@@ -16,6 +16,15 @@ import type { HudFlags, HudPreset, HudRenderContext } from './types.js';
 import { HUD_TMUX_HEIGHT_LINES } from './constants.js';
 import { sleep } from '../utils/sleep.js';
 
+export const HUD_USAGE = [
+  'Usage:',
+  '  omx hud              Show current HUD state',
+  '  omx hud --watch      Poll every 1s with terminal clear',
+  '  omx hud --json       Output raw state as JSON',
+  '  omx hud --preset=X   Use preset: minimal, focused, full',
+  '  omx hud --tmux       Open HUD in a tmux split pane (auto-detects orientation)',
+].join('\n');
+
 type SleepFn = (ms: number, signal?: AbortSignal) => Promise<void>;
 
 export async function watchRenderLoop(
@@ -200,6 +209,11 @@ async function renderOnce(cwd: string, flags: HudFlags): Promise<void> {
 }
 
 export async function hudCommand(args: string[]): Promise<void> {
+  if (args[0] === '--help' || args[0] === '-h') {
+    console.log(HUD_USAGE);
+    return;
+  }
+
   const flags = parseFlags(args);
   const cwd = process.cwd();
 
