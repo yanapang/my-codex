@@ -1,5 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { PassThrough } from 'node:stream';
 import { mkdtemp, readFile, rm, writeFile, chmod } from 'fs/promises';
 import { join } from 'path';
@@ -57,6 +59,18 @@ function withEmptyPath<T>(fn: () => T): T {
   } finally {
     if (typeof prev === 'string') process.env.PATH = prev;
     else delete process.env.PATH;
+  }
+}
+
+function withMockedExistsSync<T>(mock: typeof fs.existsSync, fn: () => T): T {
+  const original = fs.existsSync;
+  fs.existsSync = mock;
+  syncBuiltinESMExports();
+  try {
+    return fn();
+  } finally {
+    fs.existsSync = original;
+    syncBuiltinESMExports();
   }
 }
 
@@ -551,7 +565,9 @@ describe('buildWorkerStartupCommand', () => {
     const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
     process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
     try {
-      const cmd = buildWorkerStartupCommand('alpha', 2);
+      const cmd = withMockedExistsSync((candidate) => candidate === '/bin/zsh', () =>
+        buildWorkerStartupCommand('alpha', 2),
+      );
       assert.match(cmd, /OMX_TEAM_WORKER=alpha\/worker-2/);
       assert.match(cmd, /'\/bin\/zsh' -lc/);
       assert.match(cmd, /source ~\/\.zshrc/);
@@ -868,6 +884,103 @@ describe('buildWorkerStartupCommand', () => {
       else delete process.env.OMX_MODEL_INSTRUCTIONS_FILE;
       if (typeof prevMsystem === 'string') process.env.MSYSTEM = prevMsystem;
       else delete process.env.MSYSTEM;
+    }
+  });
+
+  it('ignores unsupported SHELL values and resolves a supported worker shell', () => {
+    const prevShell = process.env.SHELL;
+    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+    process.env.SHELL = '/usr/bin/fish';
+    process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
+    try {
+      const cmd = buildWorkerStartupCommand('alpha', 1, [], process.cwd());
+      assert.doesNotMatch(cmd, /fish/, 'worker shell must not inherit unsupported fish SHELL');
+      assert.match(cmd, /\/(?:bin|usr\/bin|usr\/local\/bin|opt\/homebrew\/bin)\/(?:zsh|bash)\b|\/bin\/sh\b/);
+    } finally {
+      if (typeof prevShell === 'string') process.env.SHELL = prevShell;
+      else delete process.env.SHELL;
+      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
+      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+    }
+  });
+
+  it('never emits fish-style PATH manipulation for unsupported SHELL values', () => {
+    const prevShell = process.env.SHELL;
+    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+    process.env.SHELL = '/usr/bin/fish';
+    process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
+    try {
+      const cmd = buildWorkerStartupCommand('alpha', 1, [], process.cwd());
+      assert.doesNotMatch(cmd, /set -x PATH/, 'must not emit fish PATH syntax');
+    } finally {
+      if (typeof prevShell === 'string') process.env.SHELL = prevShell;
+      else delete process.env.SHELL;
+      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
+      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+    }
+  });
+
+  it('uses /bin/sh on MSYS2/Windows regardless of zsh availability', () => {
+    const prevShell = process.env.SHELL;
+    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+    const prevMsystem = process.env.MSYSTEM;
+    const origPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+    process.env.SHELL = '/bin/zsh';
+    process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
+    process.env.MSYSTEM = 'MINGW64';
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    try {
+      const cmd = buildWorkerStartupCommand('alpha', 1, [], 'C:\\repo');
+      assert.match(cmd, /\/bin\/sh/, 'must use /bin/sh on MSYS2/Windows');
+      assert.doesNotMatch(cmd, /\/zsh/, 'must not attempt zsh on Windows');
+      assert.doesNotMatch(cmd, /\.zshrc/, 'must not source zshrc on Windows');
+    } finally {
+      if (origPlatform) Object.defineProperty(process, 'platform', origPlatform);
+      if (typeof prevShell === 'string') process.env.SHELL = prevShell;
+      else delete process.env.SHELL;
+      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
+      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+      if (typeof prevMsystem === 'string') process.env.MSYSTEM = prevMsystem;
+      else delete process.env.MSYSTEM;
+    }
+  });
+
+  it('falls back to bash when SHELL is unsupported and zsh candidates are unavailable', () => {
+    const prevShell = process.env.SHELL;
+    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+    process.env.SHELL = '/opt/custom/fish';
+    process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
+    try {
+      const cmd = withMockedExistsSync((candidate) => candidate === '/opt/custom/fish' || candidate === '/bin/bash', () =>
+        buildWorkerStartupCommand('alpha', 1, [], process.cwd()),
+      );
+      assert.match(cmd, /\/bin\/bash\b/, 'must fall back to bash when zsh is unavailable');
+      assert.match(cmd, /\.bashrc/, 'must source bash rc file for bash fallback');
+      assert.doesNotMatch(cmd, /fish/, 'must not launch unsupported fish shell');
+    } finally {
+      if (typeof prevShell === 'string') process.env.SHELL = prevShell;
+      else delete process.env.SHELL;
+      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
+      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+    }
+  });
+
+  it('falls back to /bin/sh when no supported shell candidates exist', () => {
+    const prevShell = process.env.SHELL;
+    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+    process.env.SHELL = '/opt/custom/fish';
+    process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
+    try {
+      const cmd = withMockedExistsSync((candidate) => candidate === '/opt/custom/fish', () =>
+        buildWorkerStartupCommand('alpha', 1, [], process.cwd()),
+      );
+      assert.match(cmd, /'\/bin\/sh' -lc\b/, 'must launch workers through /bin/sh when no supported shells exist');
+      assert.doesNotMatch(cmd, /\.zshrc|\.bashrc/, 'must not source zsh/bash rc files for /bin/sh fallback');
+    } finally {
+      if (typeof prevShell === 'string') process.env.SHELL = prevShell;
+      else delete process.env.SHELL;
+      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
+      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
     }
   });
 });
