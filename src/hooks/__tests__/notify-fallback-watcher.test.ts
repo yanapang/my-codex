@@ -919,6 +919,7 @@ describe('notify-fallback watcher', () => {
   });
 
   it('replaces a stale watcher from the per-cwd pid file', async () => {
+    const replacementTimeoutMs = 8000; // coverage/CI can delay watcher handoff beyond the default 4s.
     const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-stale-pid-'));
     const tempHome = await mkdtemp(join(tmpdir(), 'omx-fallback-stale-home-'));
     const watcherScript = new URL('../../../scripts/notify-fallback-watcher.js', import.meta.url).pathname;
@@ -958,7 +959,7 @@ describe('notify-fallback watcher', () => {
         } catch {
           return false;
         }
-      }, 4000, 50);
+      }, replacementTimeoutMs, 50);
 
       second = spawn(
         process.execPath,
@@ -983,7 +984,7 @@ describe('notify-fallback watcher', () => {
       );
       assert.ok(second.pid, 'expected second watcher pid');
 
-      await waitForExit(first, 4000);
+      await waitForExit(first, replacementTimeoutMs);
       assert.equal(first.exitCode, 0);
 
       await waitFor(async () => {
@@ -993,17 +994,17 @@ describe('notify-fallback watcher', () => {
         } catch {
           return false;
         }
-      }, 4000, 50);
+      }, replacementTimeoutMs, 50);
 
       assert.ok(isPidAlive(second.pid), 'expected replacement watcher to remain alive');
     } finally {
       if (second && isPidAlive(second.pid)) {
         second.kill('SIGTERM');
-        await waitForExit(second, 4000).catch(() => {});
+        await waitForExit(second, replacementTimeoutMs).catch(() => {});
       }
       if (first && isPidAlive(first.pid)) {
         first.kill('SIGTERM');
-        await waitForExit(first, 4000).catch(() => {});
+        await waitForExit(first, replacementTimeoutMs).catch(() => {});
       }
       await rm(wd, { recursive: true, force: true });
       await rm(tempHome, { recursive: true, force: true });
