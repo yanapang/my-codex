@@ -198,7 +198,7 @@ jobs:
             dist/verification/__tests__/ralph-persistence-gate.test.js
 
   build:
-    name: Build
+    name: Build (Full Source Build)
     runs-on: ubuntu-latest
     needs: [lint, typecheck, test, coverage-team-critical, coverage-ts-full, coverage-rust, ralph-persistence-gate]
     steps:
@@ -208,7 +208,7 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: npm run build
+      - run: npm run build:full
 
   ci-status:
     name: CI Status
