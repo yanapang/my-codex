@@ -40,7 +40,7 @@ It adds the native Rust-backed `omx sparkshell <command> [args...]` flow, plus a
 ## Local verification
 - `npm run lint`
 - `npm run check:no-unused`
-- `npm run build`
+- `npm run build:full`
 - `cargo test --manifest-path native/omx-sparkshell/Cargo.toml`
 - `node scripts/build-sparkshell.mjs`
 - `node scripts/test-sparkshell.mjs`

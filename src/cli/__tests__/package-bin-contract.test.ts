@@ -27,10 +27,11 @@ describe('package bin contract', () => {
     assert.deepEqual(pkg.bin, { omx: 'bin/omx.js' });
     assert.equal(pkg.scripts?.['build:explore'], 'cargo build -p omx-explore-harness');
     assert.equal(pkg.scripts?.['build:explore:release'], 'node scripts/build-explore-harness.js');
+    assert.equal(pkg.scripts?.['build:full'], 'npm run build && npm run build:explore:release && npm run build:sparkshell');
     assert.equal(pkg.scripts?.['clean:native-package-assets'], 'node scripts/cleanup-explore-harness.js');
     assert.equal(pkg.scripts?.prepack, 'npm run build && npm run clean:native-package-assets');
     assert.equal(pkg.scripts?.postpack, 'npm run clean:native-package-assets');
-    assert.equal(pkg.scripts?.['test:explore'], 'cargo test -p omx-explore-harness && node --test dist/cli/__tests__/explore.test.js dist/hooks/__tests__/explore-routing.test.js');
+    assert.equal(pkg.scripts?.['test:explore'], 'cargo test -p omx-explore-harness && node --test dist/cli/__tests__/explore.test.js dist/hooks/__tests__/explore-routing.test.js dist/hooks/__tests__/explore-sparkshell-guidance-contract.test.js');
     assert.ok(pkg.files?.includes('Cargo.toml'));
     assert.ok(pkg.files?.includes('Cargo.lock'));
     assert.ok(pkg.files?.includes('crates/'));
@@ -51,7 +52,9 @@ describe('package bin contract', () => {
 
     assert.equal(packed.status, 0, packed.stderr || packed.stdout);
 
-    const results = JSON.parse(packed.stdout) as NpmPackDryRunResult[];
+    const jsonStart = packed.stdout.indexOf('[');
+    assert.notEqual(jsonStart, -1, `expected npm pack --json output in stdout\n${packed.stdout}`);
+    const results = JSON.parse(packed.stdout.slice(jsonStart)) as NpmPackDryRunResult[];
     assert.equal(Array.isArray(results), true, 'expected npm pack --json array output');
 
     const binEntry = results[0]?.files?.find((file) => file.path === 'bin/omx.js');
