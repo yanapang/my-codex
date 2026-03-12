@@ -112,6 +112,7 @@ const TEAM_API_OPERATION_OPTIONAL_FIELDS: Partial<Record<TeamApiOperation, strin
   'create-task': ['owner', 'blocked_by', 'requires_code_change'],
   'update-task': ['subject', 'description', 'blocked_by', 'requires_code_change'],
   'claim-task': ['expected_version'],
+  'transition-task-status': ['result', 'error'],
   'read-shutdown-ack': ['min_updated_at'],
   'write-worker-identity': [
     'assigned_tasks', 'pid', 'pane_id', 'working_dir',
@@ -147,6 +148,8 @@ function sampleValueForTeamApiField(field: string): unknown {
     case 'from': return 'in_progress';
     case 'to': return 'completed';
     case 'claim_token': return 'claim-token';
+    case 'result': return 'Verification:\nPASS - example';
+    case 'error': return 'Verification failed';
     case 'expected_version': return 1;
     case 'pid': return 12345;
     case 'turn_count': return 12;

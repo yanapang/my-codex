@@ -1273,9 +1273,10 @@ export async function transitionTaskStatus(
   from: TeamTask['status'],
   to: TeamTask['status'],
   claimToken: string,
-  cwd: string
+  cwd: string,
+  terminalData?: { result?: string; error?: string },
 ): Promise<TransitionTaskResult> {
-  return await transitionTaskStatusImpl(taskId, from, to, claimToken, {
+  return await transitionTaskStatusImpl(taskId, from, to, claimToken, terminalData, {
     teamName,
     cwd,
     readTask,

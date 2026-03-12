@@ -610,6 +610,57 @@ describe('team state', () => {
     }
   });
 
+  it('transitionTaskStatus persists terminal result and error payloads', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-team-transition-payload-'));
+    try {
+      await initTeamState('team-transition-payload', 't', 'executor', 1, cwd);
+
+      const completedTask = await createTask('team-transition-payload', { subject: 'done', description: 'd', status: 'pending' }, cwd);
+      const completedClaim = await claimTask('team-transition-payload', completedTask.id, 'worker-1', completedTask.version ?? 1, cwd);
+      assert.equal(completedClaim.ok, true);
+      if (!completedClaim.ok) return;
+
+      const completedResult = 'Verification:\nPASS - bootstrap state exists';
+      const completedTransition = await transitionTaskStatus(
+        'team-transition-payload',
+        completedTask.id,
+        'in_progress',
+        'completed',
+        completedClaim.claimToken,
+        cwd,
+        { result: completedResult },
+      );
+      assert.equal(completedTransition.ok, true);
+
+      const completedReread = await readTask('team-transition-payload', completedTask.id, cwd);
+      assert.equal(completedReread?.result, completedResult);
+      assert.equal(completedReread?.error, undefined);
+
+      const failedTask = await createTask('team-transition-payload', { subject: 'fail', description: 'd', status: 'pending' }, cwd);
+      const failedClaim = await claimTask('team-transition-payload', failedTask.id, 'worker-1', failedTask.version ?? 1, cwd);
+      assert.equal(failedClaim.ok, true);
+      if (!failedClaim.ok) return;
+
+      const failedError = 'Verification failed: missing bootstrap evidence';
+      const failedTransition = await transitionTaskStatus(
+        'team-transition-payload',
+        failedTask.id,
+        'in_progress',
+        'failed',
+        failedClaim.claimToken,
+        cwd,
+        { error: failedError },
+      );
+      assert.equal(failedTransition.ok, true);
+
+      const failedReread = await readTask('team-transition-payload', failedTask.id, cwd);
+      assert.equal(failedReread?.error, failedError);
+      assert.equal(failedReread?.result, undefined);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('transitionTaskStatus appends task_failed event (not worker_stopped) when task fails', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-team-failed-'));
     try {

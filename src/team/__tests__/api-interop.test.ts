@@ -14,6 +14,7 @@ import {
 import {
   initTeamState,
   createTask,
+  readTask,
   sendDirectMessage,
   enqueueDispatchRequest,
   readDispatchRequest,
@@ -667,6 +668,73 @@ describe('executeTeamApiOperation: transition-task-status', () => {
     }, '/tmp');
     assert.equal(result.ok, false);
     if (!result.ok) assert.match(result.error.message, /valid task statuses/);
+  });
+
+  it('persists optional result and error payloads', async () => {
+    const { cwd, cleanup } = await setupTeam('transition-payload');
+    try {
+      const completedTask = await createTask('transition-payload', { subject: 'done', description: 'd', status: 'pending' }, cwd);
+      const claimCompleted = await executeTeamApiOperation('claim-task', {
+        team_name: 'transition-payload', task_id: completedTask.id, worker: 'worker-1',
+      }, cwd);
+      assert.equal(claimCompleted.ok, true);
+      if (!claimCompleted.ok) return;
+
+      const completedClaimToken = String(claimCompleted.data.claimToken);
+      const completedResult = 'Verification:\nPASS - transition evidence stored';
+      const completedTransition = await executeTeamApiOperation('transition-task-status', {
+        team_name: 'transition-payload',
+        task_id: completedTask.id,
+        from: 'in_progress',
+        to: 'completed',
+        claim_token: completedClaimToken,
+        result: completedResult,
+      }, cwd);
+      assert.equal(completedTransition.ok, true);
+
+      const completedReread = await readTask('transition-payload', completedTask.id, cwd);
+      assert.equal(completedReread?.result, completedResult);
+      assert.equal(completedReread?.error, undefined);
+
+      const failedTask = await createTask('transition-payload', { subject: 'fail', description: 'd', status: 'pending' }, cwd);
+      const claimFailed = await executeTeamApiOperation('claim-task', {
+        team_name: 'transition-payload', task_id: failedTask.id, worker: 'worker-1',
+      }, cwd);
+      assert.equal(claimFailed.ok, true);
+      if (!claimFailed.ok) return;
+
+      const failedClaimToken = String(claimFailed.data.claimToken);
+      const failedError = 'Verification failed';
+      const failedTransition = await executeTeamApiOperation('transition-task-status', {
+        team_name: 'transition-payload',
+        task_id: failedTask.id,
+        from: 'in_progress',
+        to: 'failed',
+        claim_token: failedClaimToken,
+        error: failedError,
+      }, cwd);
+      assert.equal(failedTransition.ok, true);
+
+      const failedReread = await readTask('transition-payload', failedTask.id, cwd);
+      assert.equal(failedReread?.error, failedError);
+      assert.equal(failedReread?.result, undefined);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('rejects non-string result and error payloads', async () => {
+    const badResult = await executeTeamApiOperation('transition-task-status', {
+      team_name: 'x', task_id: '1', from: 'in_progress', to: 'completed', claim_token: 'tok', result: true,
+    }, '/tmp');
+    assert.equal(badResult.ok, false);
+    if (!badResult.ok) assert.match(badResult.error.message, /result must be a string/);
+
+    const badError = await executeTeamApiOperation('transition-task-status', {
+      team_name: 'x', task_id: '1', from: 'in_progress', to: 'failed', claim_token: 'tok', error: 42,
+    }, '/tmp');
+    assert.equal(badError.ok, false);
+    if (!badError.ok) assert.match(badError.error.message, /error must be a string/);
   });
 });
 
