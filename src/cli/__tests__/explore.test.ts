@@ -451,6 +451,44 @@ describe('resolveExploreHarnessCommand', () => {
       await rm(wd, { recursive: true, force: true });
     }
   });
+
+  it('reports a clean fallback error when the native manifest is unavailable for packaged installs', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-explore-missing-manifest-'));
+    try {
+      await writeFile(join(wd, 'package.json'), JSON.stringify({
+        version: '0.8.15',
+        repository: { url: 'git+https://github.com/Yeachan-Heo/oh-my-codex.git' },
+      }));
+      const server = await new Promise<{ baseUrl: string; close: () => Promise<void> }>((resolve) => {
+        const srv = createServer((_req, res) => {
+          res.writeHead(404);
+          res.end('missing');
+        });
+        srv.listen(0, '127.0.0.1', () => {
+          const address = srv.address();
+          if (!address || typeof address === 'string') throw new Error('bad address');
+          resolve({
+            baseUrl: `http://127.0.0.1:${address.port}`,
+            close: () => new Promise<void>((done, reject) => srv.close((err: Error | undefined) => err ? reject(err) : done())),
+          });
+        });
+      });
+
+      try {
+        await assert.rejects(
+          () => resolveExploreHarnessCommandWithHydration(wd, {
+            OMX_NATIVE_MANIFEST_URL: `${server.baseUrl}/native-release-manifest.json`,
+            OMX_NATIVE_CACHE_DIR: join(wd, 'cache'),
+          } as NodeJS.ProcessEnv),
+          /no compatible native harness is available/,
+        );
+      } finally {
+        await server.close();
+      }
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('buildExploreHarnessArgs', () => {

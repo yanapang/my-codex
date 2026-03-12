@@ -120,4 +120,34 @@ describe('native asset helpers', () => {
       await rm(wd, { recursive: true, force: true });
     }
   });
+
+  it('returns undefined when the native release manifest is unavailable', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-native-hydrate-missing-manifest-'));
+    try {
+      await writeFile(join(wd, 'package.json'), JSON.stringify({
+        version: '0.8.15',
+        repository: { url: 'git+https://github.com/Yeachan-Heo/oh-my-codex.git' },
+      }));
+
+      const missingRoot = join(wd, 'missing-assets');
+      await mkdir(missingRoot, { recursive: true });
+      const server = await startStaticServer(missingRoot);
+      try {
+        const hydrated = await hydrateNativeBinary('omx-sparkshell', {
+          packageRoot: wd,
+          env: {
+            OMX_NATIVE_MANIFEST_URL: `${server.baseUrl}/native-release-manifest.json`,
+            OMX_NATIVE_CACHE_DIR: join(wd, 'cache'),
+          },
+          platform: 'linux',
+          arch: 'x64',
+        });
+        assert.equal(hydrated, undefined);
+      } finally {
+        await server.close();
+      }
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
 });

@@ -131,6 +131,12 @@ export async function loadNativeReleaseManifest(
   return await response.json() as NativeReleaseManifest;
 }
 
+function isUnavailableManifestError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return /\[native-assets\] failed to fetch native release manifest/i.test(error.message)
+    || /fetch failed/i.test(error.message);
+}
+
 function findManifestAsset(
   manifest: NativeReleaseManifest,
   product: NativeProduct,
@@ -201,7 +207,13 @@ export async function hydrateNativeBinary(
   const cachedBinaryPath = resolveCachedNativeBinaryPath(product, version, platform, arch, env);
   if (existsSync(cachedBinaryPath)) return cachedBinaryPath;
 
-  const manifest = await loadNativeReleaseManifest(packageRoot, version, env);
+  let manifest: NativeReleaseManifest;
+  try {
+    manifest = await loadNativeReleaseManifest(packageRoot, version, env);
+  } catch (error) {
+    if (isUnavailableManifestError(error)) return undefined;
+    throw error;
+  }
   const asset = findManifestAsset(manifest, product, version, platform, arch);
   if (!asset) return undefined;
 

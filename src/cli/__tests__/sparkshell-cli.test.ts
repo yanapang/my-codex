@@ -179,6 +179,53 @@ describe('resolveSparkShellBinaryPath', () => {
       await rm(wd, { recursive: true, force: true });
     }
   });
+
+  it('falls back cleanly when hydration manifest is unavailable', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-sparkshell-hydration-missing-'));
+    try {
+      const missingRoot = join(wd, 'missing-assets');
+      await mkdir(missingRoot, { recursive: true });
+      await writeFile(join(wd, 'package.json'), JSON.stringify({
+        version: '0.8.15',
+        repository: { url: 'git+https://github.com/Yeachan-Heo/oh-my-codex.git' },
+      }));
+
+      const server = await new Promise<{ baseUrl: string; close: () => Promise<void> }>((resolve) => {
+        const srv = createServer((_req, res) => {
+          res.writeHead(404);
+          res.end('missing');
+        });
+        srv.listen(0, '127.0.0.1', () => {
+          const address = srv.address();
+          if (!address || typeof address === 'string') throw new Error('bad address');
+          resolve({
+            baseUrl: `http://127.0.0.1:${address.port}`,
+            close: () => new Promise<void>((done, reject) => srv.close((err: Error | undefined) => err ? reject(err) : done())),
+          });
+        });
+      });
+
+      try {
+        await assert.rejects(
+          () => resolveSparkShellBinaryPathWithHydration({
+            packageRoot: wd,
+            platform: process.platform === 'win32' ? 'win32' : 'linux',
+            arch: 'x64',
+            env: {
+              OMX_NATIVE_MANIFEST_URL: `${server.baseUrl}/native-release-manifest.json`,
+              OMX_NATIVE_CACHE_DIR: join(wd, 'cache'),
+            },
+            exists: () => false,
+          }),
+          /native binary not found/,
+        );
+      } finally {
+        await server.close();
+      }
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('runSparkShellBinary', () => {
