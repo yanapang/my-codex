@@ -8,8 +8,14 @@ import { arch as osArch, constants as osConstants } from 'os';
 import { isAbsolute, join, resolve } from 'path';
 import { getPackageRoot } from '../utils/package.js';
 import { classifySpawnError } from '../utils/platform-command.js';
+import {
+  SPARKSHELL_BIN_ENV as SPARKSHELL_BIN_ENV_SHARED,
+  getPackageVersion,
+  hydrateNativeBinary,
+  resolveCachedNativeBinaryPath,
+} from './native-assets.js';
 
-const OMX_SPARKSHELL_BIN_ENV = 'OMX_SPARKSHELL_BIN';
+const OMX_SPARKSHELL_BIN_ENV = SPARKSHELL_BIN_ENV_SHARED;
 
 export const SPARKSHELL_USAGE = [
   'Usage: omx sparkshell <command> [args...]',
@@ -59,7 +65,7 @@ export function repoLocalSparkShellBinaryPath(
   packageRoot = getPackageRoot(),
   platform: NodeJS.Platform = process.platform,
 ): string {
-  return join(packageRoot, 'native', 'omx-sparkshell', 'target', 'release', sparkshellBinaryName(platform));
+  return join(packageRoot, 'target', 'release', sparkshellBinaryName(platform));
 }
 
 export function resolveSparkShellBinaryPath(options: ResolveSparkShellBinaryPathOptions = {}): string {
@@ -86,6 +92,42 @@ export function resolveSparkShellBinaryPath(options: ResolveSparkShellBinaryPath
   throw new Error(
     `[sparkshell] native binary not found. Checked ${packaged} and ${repoLocal}. `
       + `Set ${OMX_SPARKSHELL_BIN_ENV} to override the path.`
+  );
+}
+
+export async function resolveSparkShellBinaryPathWithHydration(
+  options: ResolveSparkShellBinaryPathOptions = {},
+): Promise<string> {
+  const {
+    cwd = process.cwd(),
+    env = process.env,
+    packageRoot = getPackageRoot(),
+    platform = process.platform,
+    arch = osArch(),
+    exists = existsSync,
+  } = options;
+
+  const override = env[OMX_SPARKSHELL_BIN_ENV]?.trim();
+  if (override) {
+    return isAbsolute(override) ? override : resolve(cwd, override);
+  }
+
+  const version = await getPackageVersion(packageRoot);
+  const cached = resolveCachedNativeBinaryPath('omx-sparkshell', version, platform, arch, env);
+  if (exists(cached)) return cached;
+
+  const packaged = packagedSparkShellBinaryPath(packageRoot, platform, arch);
+  if (exists(packaged)) return packaged;
+
+  const repoLocal = repoLocalSparkShellBinaryPath(packageRoot, platform);
+  if (exists(repoLocal)) return repoLocal;
+
+  const hydrated = await hydrateNativeBinary('omx-sparkshell', { packageRoot, env, platform, arch });
+  if (hydrated) return hydrated;
+
+  throw new Error(
+    `[sparkshell] native binary not found. Checked ${cached}, ${packaged}, and ${repoLocal}. `
+      + `Reconnect to the network so OMX can fetch the release asset, or set ${OMX_SPARKSHELL_BIN_ENV} to override the path.`
   );
 }
 
@@ -120,7 +162,7 @@ export async function sparkshellCommand(args: string[]): Promise<void> {
     throw new Error(`Missing command to run.\n${SPARKSHELL_USAGE}`);
   }
 
-  const binaryPath = resolveSparkShellBinaryPath();
+  const binaryPath = await resolveSparkShellBinaryPathWithHydration();
   const result = runSparkShellBinary(binaryPath, args);
 
   if (result.error) {

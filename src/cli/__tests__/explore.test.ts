@@ -1,7 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, writeFileSync } from 'node:fs';
 import { chmod, mkdtemp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -15,6 +17,7 @@ import {
   parseExploreArgs,
   repoBuiltExploreHarnessCommand,
   resolveExploreHarnessCommand,
+  resolveExploreHarnessCommandWithHydration,
   resolvePackagedExploreHarnessCommand,
 } from '../explore.js';
 import { withPackagedExploreHarnessHidden, withPackagedExploreHarnessLock } from './packaged-explore-harness-lock.js';
@@ -367,6 +370,83 @@ describe('resolveExploreHarnessCommand', () => {
       assert.equal(resolved.command, 'cargo');
       assert.ok(resolved.args.includes('--manifest-path'));
       assert.ok(resolved.args.includes(join(wd, 'crates', 'omx-explore', 'Cargo.toml')));
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('hydrates a native harness for packaged installs before attempting cargo fallback', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-explore-hydrated-'));
+    try {
+      const assetRoot = join(wd, 'assets');
+      const cacheDir = join(wd, 'cache');
+      const stagingDir = join(wd, 'staging');
+      await mkdir(assetRoot, { recursive: true });
+      await mkdir(stagingDir, { recursive: true });
+      await writeFile(join(wd, 'package.json'), JSON.stringify({
+        version: '0.8.15',
+        repository: { url: 'git+https://github.com/Yeachan-Heo/oh-my-codex.git' },
+      }));
+      await mkdir(join(wd, 'crates', 'omx-explore'), { recursive: true });
+      await writeFile(join(wd, 'crates', 'omx-explore', 'Cargo.toml'), '[package]\nname=\"omx-explore-harness\"\nversion=\"0.8.15\"\n');
+      const binaryPath = join(stagingDir, packagedExploreHarnessBinaryName());
+      await writeFile(binaryPath, '#!/bin/sh\necho hydrated-explore\n');
+      await chmod(binaryPath, 0o755);
+
+      const archivePath = join(assetRoot, 'omx-explore-harness-x86_64-unknown-linux-gnu.tar.gz');
+      const archive = spawnSync('tar', ['-czf', archivePath, '-C', stagingDir, packagedExploreHarnessBinaryName()], { encoding: 'utf-8' });
+      assert.equal(archive.status, 0, archive.stderr || archive.stdout);
+      const archiveBuffer = await readFile(archivePath);
+      const checksum = createHash('sha256').update(archiveBuffer).digest('hex');
+
+      const server = await new Promise<{ baseUrl: string; close: () => Promise<void> }>((resolve) => {
+        const srv = createServer(async (req, res) => {
+          const url = new URL(req.url || '/', 'http://127.0.0.1');
+          const filePath = join(assetRoot, url.pathname.replace(/^\//, ''));
+          try {
+            res.writeHead(200);
+            res.end(await readFile(filePath));
+          } catch {
+            res.writeHead(404);
+            res.end('missing');
+          }
+        });
+        srv.listen(0, '127.0.0.1', () => {
+          const address = srv.address();
+          if (!address || typeof address === 'string') throw new Error('bad address');
+          resolve({
+            baseUrl: `http://127.0.0.1:${address.port}`,
+            close: () => new Promise<void>((done, reject) => srv.close((err: Error | undefined) => err ? reject(err) : done())),
+          });
+        });
+      });
+
+      try {
+        await writeFile(join(assetRoot, 'native-release-manifest.json'), JSON.stringify({
+          version: '0.8.15',
+          assets: [{
+            product: 'omx-explore-harness',
+            version: '0.8.15',
+            platform: 'linux',
+            arch: 'x64',
+            archive: 'omx-explore-harness-x86_64-unknown-linux-gnu.tar.gz',
+            binary: 'omx-explore-harness',
+            binary_path: 'omx-explore-harness',
+            sha256: checksum,
+            size: archiveBuffer.length,
+            download_url: `${server.baseUrl}/omx-explore-harness-x86_64-unknown-linux-gnu.tar.gz`,
+          }],
+        }, null, 2));
+
+        const resolved = await resolveExploreHarnessCommandWithHydration(wd, {
+          OMX_NATIVE_MANIFEST_URL: `${server.baseUrl}/native-release-manifest.json`,
+          OMX_NATIVE_CACHE_DIR: cacheDir,
+        } as NodeJS.ProcessEnv);
+        assert.notEqual(resolved.command, 'cargo');
+        assert.match(resolved.command, /cache/);
+      } finally {
+        await server.close();
+      }
     } finally {
       await rm(wd, { recursive: true, force: true });
     }

@@ -8,7 +8,7 @@ const projectRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const nativeRoot = join(projectRoot, 'native', 'omx-sparkshell');
 const manifestPath = process.env.OMX_SPARKSHELL_MANIFEST ?? join(nativeRoot, 'Cargo.toml');
 const binaryName = platform() === 'win32' ? 'omx-sparkshell.exe' : 'omx-sparkshell';
-const releaseBinaryPath = join(nativeRoot, 'target', 'release', binaryName);
+const releaseBinaryPath = join(projectRoot, 'target', 'release', binaryName);
 const packagedBinaryDir = join(projectRoot, 'bin', 'native', `${platform()}-${arch()}`);
 const packagedBinaryPath = join(packagedBinaryDir, binaryName);
 const extraArgs = process.argv.slice(2);

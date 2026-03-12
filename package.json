@@ -12,9 +12,10 @@
     "build:explore": "cargo build -p omx-explore-harness",
     "build:explore:release": "node scripts/build-explore-harness.js",
     "check:no-unused": "tsc -p tsconfig.no-unused.json",
+    "clean:native-package-assets": "node scripts/cleanup-explore-harness.js",
     "dev": "tsc --watch",
     "lint": "biome lint .",
-    "prepack": "npm run build && npm run build:explore:release",
+    "prepack": "npm run build && npm run clean:native-package-assets",
     "setup": "node bin/omx.js setup",
     "doctor": "node bin/omx.js doctor",
     "ask:claude": "./scripts/ask-claude.sh",
@@ -28,7 +29,7 @@
     "test:compat:rust": "cargo build && OMX_COMPAT_TARGET=./target/debug/omx npm run test:compat:node",
     "build:sparkshell": "node scripts/build-sparkshell.mjs",
     "test:sparkshell": "node scripts/test-sparkshell.mjs",
-    "postpack": "node scripts/cleanup-explore-harness.js"
+    "postpack": "npm run clean:native-package-assets"
   },
   "engines": {
     "node": ">=20"
@@ -44,7 +45,6 @@
     "prompts/",
     "templates/",
     "scripts/",
-    "bin/native/",
     "scripts/build-sparkshell.mjs",
     "scripts/test-sparkshell.mjs"
   ],

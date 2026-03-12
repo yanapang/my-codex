@@ -254,16 +254,19 @@ USE_OMX_EXPLORE_CMD=1 omx   # advisory preference for simple read-only explorati
 Packaging / install notes:
 
 - Published npm packages now include the Rust workspace files for the explore harness (`Cargo.toml`, `Cargo.lock`, `crates/`).
-- `npm pack` / publish now builds and ships a native `bin/omx-explore-harness` binary for the publisher platform, and runtime prefers that packaged binary before falling back to `cargo run`.
-- If no packaged native binary matches the current install, runtime falls back to `cargo run --manifest-path crates/omx-explore/Cargo.toml -- ...`, so source-based installs still need a Rust toolchain unless you point `OMX_EXPLORE_BIN` at a prebuilt harness binary.
-- GitHub Actions now includes a dedicated multi-platform artifact workflow (`.github/workflows/explore-harness-artifacts.yml`) that builds release harness binaries for Linux, macOS, and Windows.
-- Tag builds now upload per-platform release bundles containing the native binary, `omx-explore-harness.meta.json`, and a small `release-manifest.json`, then attach zipped per-platform bundles plus an aggregate `explore-harness-release-manifest.json` to the matching GitHub Release.
+- npm publishes no longer rely on publisher-platform native binaries.
+- Tagged releases build multi-platform native archives for both `omx-explore-harness` and `omx-sparkshell` via cargo-dist and attach them to the GitHub Release from `.github/workflows/release.yml`.
+- Runtime now prefers `OMX_*_BIN` overrides, then a hydrated per-user native cache, then repo-local development artifacts.
+- `omx explore` keeps a source-install `cargo run --manifest-path crates/omx-explore/Cargo.toml -- ...` fallback in repository checkouts; packaged installs rely on release-asset hydration unless `OMX_EXPLORE_BIN` is set.
+- `omx sparkshell` hydrates from release assets when no override or repo-local build output is available.
+- Release assets now include `native-release-manifest.json` with per-target download metadata and SHA-256 checksums.
 - Helpful local commands:
 
 ```bash
 npm run build:explore
 npm run build:explore:release
 npm run test:explore
+node scripts/check-version-sync.mjs --tag v$(node -p "require('./package.json').version")
 ```
 
 Non-tmux team launch (advanced):
@@ -291,7 +294,7 @@ Current preview contract:
 - Short output stays raw; long output is summarized into markdown sections limited to `summary:`, `failures:`, and `warnings:`.
 - Summary mode uses the local Codex CLI via `codex exec` and prefers `OMX_SPARKSHELL_MODEL`, then `OMX_SPARK_MODEL`, then the spark default model.
 - `--spark` / `--madmax-spark` remain team-worker launch flags; sparkshell model routing is controlled by env vars instead.
-- Native binary lookup order is `OMX_SPARKSHELL_BIN`, then packaged `bin/native/<platform>-<arch>/omx-sparkshell[.exe]`, then repo-local `native/omx-sparkshell/target/release/omx-sparkshell[.exe]`.
+- Native binary lookup order is `OMX_SPARKSHELL_BIN`, then the hydrated native cache, then packaged dev artifacts (when present), then repo-local workspace output `target/release/omx-sparkshell[.exe]`.
 - Team/leader pane summarization is explicit opt-in via tmux pane mode, for example:
 
 ```bash

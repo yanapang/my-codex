@@ -4,6 +4,13 @@ import { existsSync, readFileSync } from 'fs';
 import { getPackageRoot } from '../utils/package.js';
 import { spawnPlatformCommandSync } from '../utils/platform-command.js';
 import { DEFAULT_FRONTIER_MODEL, getSparkDefaultModel } from '../config/models.js';
+import {
+  EXPLORE_BIN_ENV as EXPLORE_BIN_ENV_SHARED,
+  hydrateNativeBinary,
+  isRepositoryCheckout,
+  resolveCachedNativeBinaryPath,
+  getPackageVersion,
+} from './native-assets.js';
 
 export const EXPLORE_USAGE = [
   'Usage: omx explore --prompt "<prompt>"',
@@ -12,7 +19,7 @@ export const EXPLORE_USAGE = [
 
 const PROMPT_FLAG = '--prompt';
 const PROMPT_FILE_FLAG = '--prompt-file';
-export const EXPLORE_BIN_ENV = 'OMX_EXPLORE_BIN';
+export const EXPLORE_BIN_ENV = EXPLORE_BIN_ENV_SHARED;
 const EXPLORE_SPARK_MODEL_ENV = 'OMX_EXPLORE_SPARK_MODEL';
 
 export interface ParsedExploreArgs {
@@ -172,6 +179,36 @@ export function resolveExploreHarnessCommand(
   };
 }
 
+export async function resolveExploreHarnessCommandWithHydration(
+  packageRoot = getPackageRoot(),
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<ExploreHarnessCommand> {
+  const override = env[EXPLORE_BIN_ENV]?.trim();
+  if (override) {
+    return { command: isAbsolute(override) ? override : join(packageRoot, override), args: [] };
+  }
+
+  const version = await getPackageVersion(packageRoot);
+  const cached = resolveCachedNativeBinaryPath('omx-explore-harness', version, process.platform, process.arch, env);
+  if (existsSync(cached)) {
+    return { command: cached, args: [] };
+  }
+
+  const packaged = resolvePackagedExploreHarnessCommand(packageRoot);
+  if (packaged) return packaged;
+
+  const repoBuilt = repoBuiltExploreHarnessCommand(packageRoot);
+  if (repoBuilt) return repoBuilt;
+
+  if (!isRepositoryCheckout(packageRoot)) {
+    const hydrated = await hydrateNativeBinary('omx-explore-harness', { packageRoot, env });
+    if (hydrated) return { command: hydrated, args: [] };
+    throw new Error('[explore] no compatible native harness is available for this install. Reconnect to the network so OMX can fetch the release asset, or set OMX_EXPLORE_BIN to a prebuilt harness binary.');
+  }
+
+  return resolveExploreHarnessCommand(packageRoot, env);
+}
+
 export function buildExploreHarnessArgs(
   prompt: string,
   cwd: string,
@@ -201,7 +238,7 @@ export async function exploreCommand(args: string[]): Promise<void> {
   const parsed = parseExploreArgs(args);
   const prompt = await loadExplorePrompt(parsed);
   const packageRoot = getPackageRoot();
-  const harness = resolveExploreHarnessCommand(packageRoot, process.env);
+  const harness = await resolveExploreHarnessCommandWithHydration(packageRoot, process.env);
   const harnessArgs = [...harness.args, ...buildExploreHarnessArgs(prompt, process.cwd(), process.env, packageRoot)];
 
   const { result } = spawnPlatformCommandSync(harness.command, harnessArgs, {
