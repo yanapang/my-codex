@@ -12,10 +12,10 @@ This document covers the heavy/manual scenarios intentionally excluded from defa
 From the repository root:
 
 ```bash
-npm run build
-npm run build:explore
-npm run build:sparkshell
+npm run build:full
 ```
+
+`npm run build:full` covers the TypeScript build plus the packaged explore harness and sparkshell native binary. Use `npm run build:explore` separately only if you specifically want the debug cargo build path during local investigation.
 
 Use a clean throwaway workspace when possible. If you need tmux-pane coverage, run inside tmux and confirm the target pane id first.
 

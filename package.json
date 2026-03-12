@@ -10,6 +10,7 @@
   "scripts": {
     "build": "tsc",
     "build:explore": "cargo build -p omx-explore-harness",
+    "build:full": "npm run build && npm run build:explore:release && npm run build:sparkshell",
     "build:explore:release": "node scripts/build-explore-harness.js",
     "check:no-unused": "tsc -p tsconfig.no-unused.json",
     "dev": "tsc --watch",

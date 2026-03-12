@@ -172,11 +172,13 @@ This is designed to make OMX's initial routing behavior more Sisyphus-like witho
 
 ### How to test this experiment
 
-1. Build the project:
+1. Build the project (TypeScript + native Rust helpers):
 
 ```bash
-npm run build
+npm run build:full
 ```
+
+If you only need the TypeScript output, `npm run build` still runs just `tsc`.
 
 2. Reinstall native agent configs:
 
@@ -261,10 +263,13 @@ Packaging / install notes:
 - Helpful local commands:
 
 ```bash
+npm run build:full
 npm run build:explore
 npm run build:explore:release
 npm run test:explore
 ```
+
+`npm run build:full` is the one-shot source build for TypeScript plus the packaged explore harness and sparkshell native binary.
 
 Non-tmux team launch (advanced):
 
@@ -309,6 +314,8 @@ Preview build helpers:
 npm run build:sparkshell
 npm run test:sparkshell
 ```
+
+For a full local source build in one command, use `npm run build:full`.
 
 ## Launch Flags
 
@@ -604,7 +611,7 @@ git clone https://github.com/Yeachan-Heo/oh-my-codex.git
 cd oh-my-codex
 npm install
 npm run lint
-npm run build
+npm run build:full
 npm test
 ```
 
