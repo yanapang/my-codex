@@ -116,7 +116,7 @@ User
 
 ```bash
 omx                # Запустить Codex (+ HUD в tmux при наличии)
-omx setup          # Установить промпты/навыки/конфиг по области + проект AGENTS.md/.omx
+omx setup          # Установить промпты/навыки/конфиг по области + .omx проекта + AGENTS.md для выбранной области
 omx doctor         # Диагностика установки/среды выполнения
 omx doctor --team  # Диагностика Team/swarm
 omx team ...       # Запуск/статус/возобновление/завершение рабочих tmux
@@ -175,7 +175,7 @@ export OMX_MCP_WORKDIR_ROOTS="/path/to/project:/path/to/another-root"
 -c model_instructions_file="<cwd>/AGENTS.md"
 ```
 
-Это добавляет проектные инструкции `AGENTS.md` в команды запуска Codex.
+Это объединяет `AGENTS.md` из `CODEX_HOME` с проектным `AGENTS.md` (если он есть), а затем добавляет runtime-overlay.
 Расширяет поведение Codex, но не заменяет/обходит основные системные политики Codex.
 
 Управление:
@@ -240,10 +240,11 @@ OMX_TEAM_AUTO_INTERRUPT_RETRY=0  # опционально: отключить а
 
 - `.omx/setup-scope.json` (сохранённая область установки)
 - Установки в зависимости от области:
-  - `user`: `~/.codex/prompts/`, `~/.agents/skills/`, `~/.codex/config.toml`, `~/.omx/agents/`
-  - `project`: `./.codex/prompts/`, `./.agents/skills/`, `./.codex/config.toml`, `./.omx/agents/`
+  - `user`: `~/.codex/prompts/`, `~/.agents/skills/`, `~/.codex/config.toml`, `~/.omx/agents/`, `~/.codex/AGENTS.md`
+  - `project`: `./.codex/prompts/`, `./.agents/skills/`, `./.codex/config.toml`, `./.omx/agents/`, `./AGENTS.md`
 - Поведение при запуске: если сохранённая область — `project`, `omx` автоматически использует `CODEX_HOME=./.codex` (если `CODEX_HOME` ещё не задан).
-- Существующий `AGENTS.md` сохраняется по умолчанию. В интерактивных TTY-запусках setup запрашивает подтверждение перед перезаписью; `--force` перезаписывает без запроса (проверки безопасности активных сессий остаются в силе).
+- Инструкции запуска объединяют `~/.codex/AGENTS.md` (или `CODEX_HOME/AGENTS.md`, если путь переопределён) с проектным `./AGENTS.md`, а затем добавляют runtime-overlay.
+- Существующие файлы `AGENTS.md` никогда не перезаписываются молча: в интерактивном TTY setup спрашивает перед заменой, а в неинтерактивном режиме пропускает замену без `--force` (проверки безопасности активных сессий остаются в силе).
 - Обновления `config.toml` (для обеих областей):
   - `notify = ["node", "..."]`
   - `model_reasoning_effort = "high"`
@@ -251,7 +252,7 @@ OMX_TEAM_AUTO_INTERRUPT_RETRY=0  # опционально: отключить а
   - `[features] multi_agent = true, child_agents_md = true`
   - Записи MCP-серверов (`omx_state`, `omx_memory`, `omx_code_intel`, `omx_trace`)
   - `[tui] status_line`
-- Проектный `AGENTS.md`
+- `AGENTS.md` для выбранной области
 - Директории `.omx/` и конфигурация HUD
 
 ## Агенты и навыки

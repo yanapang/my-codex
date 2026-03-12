@@ -51,9 +51,11 @@ function runCompatTarget(cwd: string, argv: string[], envOverrides: Record<strin
 }
 
 function normalizeInstallDoctorOutput(text: string, home: string, cwd: string): string {
+  const repoStateDir = join(cwd, '.omx', 'state').replace(/\\/g, '/');
   return text
     .replaceAll(join(home, '.codex').replace(/\\/g, '/'), '<CODEX_HOME>')
-    .replaceAll(join(cwd, '.omx', 'state').replace(/\\/g, '/'), '<REPO_STATE_DIR>')
+    .replaceAll(`/private${repoStateDir}`, '<REPO_STATE_DIR>')
+    .replaceAll(repoStateDir, '<REPO_STATE_DIR>')
     .replace(/\\/g, '/')
     .split('\n')
     .map((line) => {

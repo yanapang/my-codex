@@ -473,6 +473,28 @@ describe('omx uninstall', () => {
     }
   });
 
+  it('removes managed user-scope AGENTS.md from CODEX_HOME', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-uninstall-'));
+    try {
+      const home = join(wd, 'home');
+      const codexHome = join(home, '.codex');
+      await mkdir(codexHome, { recursive: true });
+      await mkdir(join(wd, '.omx'), { recursive: true });
+      await writeFile(join(wd, '.omx', 'setup-scope.json'), JSON.stringify({ scope: 'user' }));
+      await writeFile(
+        join(codexHome, 'AGENTS.md'),
+        '# oh-my-codex - Intelligent Multi-Agent Orchestration\n<!-- omx:generated:agents-md -->\n',
+      );
+
+      const res = runOmx(wd, ['uninstall', '--keep-config'], { HOME: home });
+      if (shouldSkipForSpawnPermissions(res.error)) return;
+      assert.equal(res.status, 0, res.stderr || res.stdout);
+      assert.equal(existsSync(join(codexHome, 'AGENTS.md')), false);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it('removes setup-scope.json and hud-config.json without --purge', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-uninstall-'));
     try {

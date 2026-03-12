@@ -17,7 +17,12 @@
 import { readFile, writeFile, mkdir, rm, readdir } from 'fs/promises';
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
-import { omxNotepadPath, omxProjectMemoryPath, packageRoot } from '../utils/paths.js';
+import {
+  codexHome,
+  omxNotepadPath,
+  omxProjectMemoryPath,
+  packageRoot,
+} from '../utils/paths.js';
 import { getReadScopedStateDirs, getStateDir, listModeStateFilesWithScopePreference } from '../mcp/state-paths.js';
 import { generateCodebaseMap } from './codebase-map.js';
 import { SKILL_ACTIVE_STATE_FILE } from './keyword-detector.js';
@@ -496,8 +501,9 @@ export function sessionModelInstructionsPath(cwd: string, sessionId: string): st
 }
 
 /**
- * Build a session-scoped AGENTS.md that combines project instructions (if any)
- * and the runtime overlay, without mutating <cwd>/AGENTS.md.
+ * Build a session-scoped AGENTS.md that combines user-level CODEX_HOME
+ * instructions, project instructions (if any), and the runtime overlay,
+ * without mutating the source AGENTS.md files.
  */
 export async function writeSessionModelInstructionsFile(
   cwd: string,
@@ -507,15 +513,26 @@ export async function writeSessionModelInstructionsFile(
   const sessionPath = sessionModelInstructionsPath(cwd, sessionId);
   await mkdir(dirname(sessionPath), { recursive: true });
 
-  const projectAgentsPath = join(cwd, 'AGENTS.md');
-  let base = '';
-  if (existsSync(projectAgentsPath)) {
-    base = await readFile(projectAgentsPath, 'utf-8');
-    base = stripOverlayContent(base);
+  const baseParts: string[] = [];
+  const sourcePaths = [
+    join(codexHome(), 'AGENTS.md'),
+    join(cwd, 'AGENTS.md'),
+  ];
+  const seenPaths = new Set<string>();
+
+  for (const sourcePath of sourcePaths) {
+    if (seenPaths.has(sourcePath) || !existsSync(sourcePath)) continue;
+    seenPaths.add(sourcePath);
+
+    let content = await readFile(sourcePath, 'utf-8');
+    content = stripOverlayContent(content).trim();
+    if (!content) continue;
+    baseParts.push(content);
   }
 
+  const base = baseParts.join('\n\n');
   const composed = base.trim().length > 0
-    ? `${base.trimEnd()}\n\n${overlay}\n`
+    ? `${base}\n\n${overlay}\n`
     : `${overlay}\n`;
 
   await writeFile(sessionPath, composed);

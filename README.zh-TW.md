@@ -134,7 +134,7 @@ OMX 安裝並串接以下各層：
 
 ```bash
 omx                  # 啟動 Codex（可用時在 tmux 中附帶 HUD）
-omx setup            # 依範圍安裝提示詞/技能/設定 + 專案 AGENTS.md/.omx
+omx setup            # 依範圍安裝提示詞/技能/設定 + 專案 .omx + 範圍專屬 AGENTS.md
 omx doctor           # 安裝/執行期診斷
 omx doctor --team    # 團隊/群集診斷
 omx ask ...          # 詢問本地供應商顧問（claude|gemini），結果寫入 .omx/artifacts/*
@@ -212,7 +212,7 @@ export OMX_MCP_WORKDIR_ROOTS="/path/to/project:/path/to/another-root"
 -c model_instructions_file="<cwd>/AGENTS.md"
 ```
 
-這會將專案的 `AGENTS.md` 指引加入 Codex 啟動指令中。
+這會將 `CODEX_HOME` 中的 `AGENTS.md` 與專案的 `AGENTS.md`（若存在）合併，然後再附加執行期 overlay。
 此舉擴充了 Codex 的行為，但不會取代或繞過 Codex 核心系統策略。
 
 控制方式：
@@ -277,10 +277,11 @@ OMX_TEAM_AUTO_INTERRUPT_RETRY=0  # 選用：停用自適應 queue->resend 回退
 
 - `.omx/setup-scope.json`（持久化的設定範圍）
 - 依範圍的安裝內容：
-  - `user`：`~/.codex/prompts/`、`~/.agents/skills/`、`~/.codex/config.toml`、`~/.omx/agents/`
-  - `project`：`./.codex/prompts/`、`./.agents/skills/`、`./.codex/config.toml`、`./.omx/agents/`
+  - `user`：`~/.codex/prompts/`、`~/.agents/skills/`、`~/.codex/config.toml`、`~/.omx/agents/`、`~/.codex/AGENTS.md`
+  - `project`：`./.codex/prompts/`、`./.agents/skills/`、`./.codex/config.toml`、`./.omx/agents/`、`./AGENTS.md`
 - 啟動行為：若持久化範圍為 `project`，`omx` 啟動時自動使用 `CODEX_HOME=./.codex`（除非已設定 `CODEX_HOME`）。
-- 現有的 `AGENTS.md` 預設會保留。在互動式 TTY 執行時，setup 會在覆寫前詢問確認；`--force` 則不詢問直接覆寫（仍適用活動會話安全檢查）。
+- 啟動指令會合併 `~/.codex/AGENTS.md`（或覆寫後的 `CODEX_HOME/AGENTS.md`）與專案 `./AGENTS.md`，然後再附加執行期 overlay。
+- 現有的 `AGENTS.md` 檔案絕不會被靜默覆寫：互動式 TTY 執行時 setup 會先詢問；非互動執行時若沒有 `--force` 就會跳過替換（仍適用活動會話安全檢查）。
 - `config.toml` 更新（兩種範圍均適用）：
   - `notify = ["node", "..."]`
   - `model_reasoning_effort = "high"`
@@ -288,7 +289,7 @@ OMX_TEAM_AUTO_INTERRUPT_RETRY=0  # 選用：停用自適應 queue->resend 回退
   - `[features] multi_agent = true, child_agents_md = true`
   - MCP 伺服器項目（`omx_state`、`omx_memory`、`omx_code_intel`、`omx_trace`）
   - `[tui] status_line`
-- 專案 `AGENTS.md`
+- 範圍專屬 `AGENTS.md`
 - `.omx/` 執行期目錄與 HUD 設定
 
 ## 代理與技能

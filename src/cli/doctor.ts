@@ -134,7 +134,7 @@ export async function doctor(options: DoctorOptions = {}): Promise<void> {
   checks.push(await checkSkills(paths.skillsDir));
 
   // Check 7: AGENTS.md in project
-  checks.push(checkAgentsMd(scopeResolution.scope));
+  checks.push(checkAgentsMd(scopeResolution.scope, paths.codexHomeDir));
 
   // Check 8: State directory
   checks.push(checkDirectory('State dir', paths.stateDir));
@@ -599,15 +599,28 @@ async function checkSkills(dir: string): Promise<Check> {
   }
 }
 
-function checkAgentsMd(scope: DoctorSetupScope): Check {
-  const agentsMd = join(process.cwd(), 'AGENTS.md');
-  if (existsSync(agentsMd)) {
+function checkAgentsMd(scope: DoctorSetupScope, codexHomeDir: string): Check {
+  if (scope === 'user') {
+    const userAgentsMd = join(codexHomeDir, 'AGENTS.md');
+    if (existsSync(userAgentsMd)) {
+      return { name: 'AGENTS.md', status: 'pass', message: `found in ${userAgentsMd}` };
+    }
+    return {
+      name: 'AGENTS.md',
+      status: 'warn',
+      message: `not found in ${userAgentsMd} (run omx setup --scope user)`,
+    };
+  }
+
+  const projectAgentsMd = join(process.cwd(), 'AGENTS.md');
+  if (existsSync(projectAgentsMd)) {
     return { name: 'AGENTS.md', status: 'pass', message: 'found in project root' };
   }
-  if (scope === 'user') {
-    return { name: 'AGENTS.md', status: 'pass', message: 'user scope leaves project AGENTS.md unchanged' };
-  }
-  return { name: 'AGENTS.md', status: 'warn', message: 'not found in project root (run omx agents-init . or omx setup --scope project)' };
+  return {
+    name: 'AGENTS.md',
+    status: 'warn',
+    message: 'not found in project root (run omx agents-init . or omx setup --scope project)',
+  };
 }
 
 async function checkMcpServers(configPath: string): Promise<Check> {

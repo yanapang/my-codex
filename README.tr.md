@@ -116,7 +116,7 @@ User
 
 ```bash
 omx                # Codex'i başlat (tmux'ta HUD ile birlikte)
-omx setup          # Prompt/skill/config'i kapsama göre kur + proje AGENTS.md/.omx
+omx setup          # Prompt/skill/config'i kapsama göre kur + proje .omx + kapsama özel AGENTS.md
 omx doctor         # Kurulum/çalışma zamanı tanılamaları
 omx doctor --team  # Team/swarm tanılamaları
 omx team ...       # tmux takım çalışanlarını başlat/durum/devam et/kapat
@@ -175,7 +175,7 @@ Varsayılan olarak, OMX şunu enjekte eder:
 -c model_instructions_file="<cwd>/AGENTS.md"
 ```
 
-Bu, proje `AGENTS.md` yönlendirmesini Codex başlatma talimatlarına katmanlar.
+Bu, `CODEX_HOME` içindeki `AGENTS.md` ile proje `AGENTS.md` dosyasını (varsa) birleştirir ve ardından çalışma zamanı kaplamasını ekler.
 Codex davranışını genişletir, ancak Codex çekirdek sistem politikalarını değiştirmez/atlamaz.
 
 Kontroller:
@@ -240,10 +240,11 @@ Notlar:
 
 - `.omx/setup-scope.json` (kalıcı kurulum kapsamı)
 - Kapsama bağlı kurulumlar:
-  - `user`: `~/.codex/prompts/`, `~/.agents/skills/`, `~/.codex/config.toml`, `~/.omx/agents/`
-  - `project`: `./.codex/prompts/`, `./.agents/skills/`, `./.codex/config.toml`, `./.omx/agents/`
+  - `user`: `~/.codex/prompts/`, `~/.agents/skills/`, `~/.codex/config.toml`, `~/.omx/agents/`, `~/.codex/AGENTS.md`
+  - `project`: `./.codex/prompts/`, `./.agents/skills/`, `./.codex/config.toml`, `./.omx/agents/`, `./AGENTS.md`
 - Başlatma davranışı: kalıcı kapsam `project` ise, `omx` başlatma otomatik olarak `CODEX_HOME=./.codex` kullanır (`CODEX_HOME` zaten ayarlanmadıysa).
-- Mevcut `AGENTS.md` varsayılan olarak korunur. Etkileşimli TTY çalıştırmalarında, üzerine yazmadan önce setup sorar; `--force` sormadan üzerine yazar (aktif oturum güvenlik kontrolleri hâlâ geçerlidir).
+- Başlatma talimatları `~/.codex/AGENTS.md` (veya geçersiz kılındıysa `CODEX_HOME/AGENTS.md`) ile proje `./AGENTS.md` dosyasını birleştirir ve ardından çalışma zamanı kaplamasını ekler.
+- Mevcut `AGENTS.md` dosyaları sessizce üzerine yazılmaz: etkileşimli TTY'de setup değiştirmeden önce sorar; etkileşimsiz çalıştırmada ise `--force` yoksa değiştirme atlanır (aktif oturum güvenlik kontrolleri hâlâ geçerlidir).
 - `config.toml` güncellemeleri (her iki kapsam için):
   - `notify = ["node", "..."]`
   - `model_reasoning_effort = "high"`
@@ -251,7 +252,7 @@ Notlar:
   - `[features] multi_agent = true, child_agents_md = true`
   - MCP sunucu girişleri (`omx_state`, `omx_memory`, `omx_code_intel`, `omx_trace`)
   - `[tui] status_line`
-- Proje `AGENTS.md`
+- Kapsama özel `AGENTS.md`
 - `.omx/` çalışma zamanı dizinleri ve HUD yapılandırması
 
 ## Ajanlar ve Skill'ler

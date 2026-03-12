@@ -116,7 +116,7 @@ User
 
 ```bash
 omx                # Codex 실행 (tmux에서 HUD와 함께)
-omx setup          # 범위별 프롬프트/스킬/설정 설치 + 프로젝트 AGENTS.md/.omx
+omx setup          # 범위별 프롬프트/스킬/설정 설치 + 프로젝트 .omx + 범위별 AGENTS.md
 omx doctor         # 설치/런타임 진단
 omx doctor --team  # Team/swarm 진단
 omx team ...       # tmux 팀 워커 시작/상태/재개/종료
@@ -175,7 +175,7 @@ export OMX_MCP_WORKDIR_ROOTS="/path/to/project:/path/to/another-root"
 -c model_instructions_file="<cwd>/AGENTS.md"
 ```
 
-이것은 프로젝트 `AGENTS.md` 지침을 Codex 시작 명령에 추가합니다.
+이것은 `CODEX_HOME`의 `AGENTS.md`와 프로젝트 `AGENTS.md`(있는 경우)를 병합한 뒤 런타임 오버레이를 추가합니다.
 Codex 동작을 확장하지만, Codex 핵심 시스템 정책을 대체/우회하지 않습니다.
 
 제어:
@@ -240,10 +240,11 @@ OMX_TEAM_AUTO_INTERRUPT_RETRY=0  # 선택: 적응형 queue->resend 폴백 비활
 
 - `.omx/setup-scope.json` (저장된 설정 범위)
 - 범위에 따른 설치:
-  - `user`: `~/.codex/prompts/`, `~/.agents/skills/`, `~/.codex/config.toml`, `~/.omx/agents/`
-  - `project`: `./.codex/prompts/`, `./.agents/skills/`, `./.codex/config.toml`, `./.omx/agents/`
+  - `user`: `~/.codex/prompts/`, `~/.agents/skills/`, `~/.codex/config.toml`, `~/.omx/agents/`, `~/.codex/AGENTS.md`
+  - `project`: `./.codex/prompts/`, `./.agents/skills/`, `./.codex/config.toml`, `./.omx/agents/`, `./AGENTS.md`
 - 시작 동작: 저장된 범위가 `project`이면, `omx` 시작 시 자동으로 `CODEX_HOME=./.codex`를 사용합니다 (`CODEX_HOME`이 이미 설정되지 않은 경우).
-- 기존 `AGENTS.md`는 기본적으로 보존됩니다. 대화형 TTY 실행에서 setup은 덮어쓰기 전에 확인합니다; `--force`는 확인 없이 덮어씁니다 (활성 세션 안전 검사는 여전히 적용됩니다).
+- 시작 지침은 `~/.codex/AGENTS.md`(또는 `CODEX_HOME/AGENTS.md`)와 프로젝트 `./AGENTS.md`를 병합한 뒤 런타임 오버레이를 추가해 사용합니다.
+- 기존 `AGENTS.md`는 자동으로 덮어쓰지 않습니다. 대화형 TTY 실행에서는 덮어쓸지 확인하고, 비대화형 실행에서는 `--force`가 없으면 건너뜁니다 (활성 세션 안전 검사는 여전히 적용됩니다).
 - `config.toml` 업데이트 (두 범위 모두):
   - `notify = ["node", "..."]`
   - `model_reasoning_effort = "high"`
@@ -251,7 +252,7 @@ OMX_TEAM_AUTO_INTERRUPT_RETRY=0  # 선택: 적응형 queue->resend 폴백 비활
   - `[features] multi_agent = true, child_agents_md = true`
   - MCP 서버 항목 (`omx_state`, `omx_memory`, `omx_code_intel`, `omx_trace`)
   - `[tui] status_line`
-- 프로젝트 `AGENTS.md`
+- 범위별 `AGENTS.md`
 - `.omx/` 런타임 디렉토리 및 HUD 설정
 
 ## 에이전트와 스킬

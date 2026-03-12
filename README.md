@@ -237,7 +237,7 @@ This experiment currently changes native prompt generation and metadata, not the
 ```bash
 omx                # Launch Codex inside the OMX runtime (+ HUD in tmux when available)
 omx team ...       # Start/status/resume/shutdown coordinated team workers (default orchestration surface)
-omx setup          # Install prompts/skills/config by scope + project .omx (AGENTS.md only for project scope)
+omx setup          # Install prompts/skills/config by scope + project .omx + scope-specific AGENTS.md
 omx agents-init .  # Bootstrap lightweight AGENTS.md files for a repo/subtree
 omx doctor         # Installation/runtime diagnostics
 omx doctor --team  # Team Mode diagnostics
@@ -389,7 +389,7 @@ By default, OMX injects:
 -c model_instructions_file="<cwd>/AGENTS.md"
 ```
 
-This layers project `AGENTS.md` guidance into Codex launch instructions.
+This merges `CODEX_HOME/AGENTS.md` with project `./AGENTS.md` guidance (when present), then appends the runtime overlay.
 It extends Codex behavior, but does not replace/bypass Codex core system policies.
 
 Controls:
@@ -519,11 +519,12 @@ Notes:
 
 - `.omx/setup-scope.json` (persisted setup scope)
 - Scope-dependent installs:
-  - `user`: `~/.codex/prompts/`, `~/.agents/skills/`, `~/.codex/config.toml`, `~/.omx/agents/`
-  - `project`: `./.codex/prompts/`, `./.agents/skills/`, `./.codex/config.toml`, `./.omx/agents/`
+  - `user`: `~/.codex/prompts/`, `~/.agents/skills/`, `~/.codex/config.toml`, `~/.omx/agents/`, `~/.codex/AGENTS.md`
+  - `project`: `./.codex/prompts/`, `./.agents/skills/`, `./.codex/config.toml`, `./.omx/agents/`, `./AGENTS.md`
 - Launch behavior: if persisted scope is `project`, `omx` launch auto-uses `CODEX_HOME=./.codex` (unless `CODEX_HOME` is already set).
+- Launch instructions merge `~/.codex/AGENTS.md` (or `CODEX_HOME/AGENTS.md` when overridden) with project `./AGENTS.md`, then append the runtime overlay
 - Managed OMX artifacts refresh by default in both interactive and non-interactive runs: prompts, skills, native agent configs, and the managed OMX portion of `config.toml`
-- Project `AGENTS.md` is only generated/refreshed for `project` scope; `user` scope leaves any existing project `AGENTS.md` unchanged
+- Existing `AGENTS.md` files are never overwritten silently: interactive setup asks before replacing them, non-interactive setup skips replacement unless you pass `--force`
 - If a managed file differs and will be overwritten, setup creates a backup first under `.omx/backups/setup/<timestamp>/...` (project scope) or `~/.omx/backups/setup/<timestamp>/...` (user scope)
 - Active-session safety still blocks `AGENTS.md` overwrite while an OMX session is running
 - `config.toml` updates (for both scopes):
@@ -538,7 +539,7 @@ Notes:
   - If a shared MCP registry exists at `~/.omx/mcp-registry.json` (fallback: `~/.omc/mcp-registry.json`), setup syncs those entries into a dedicated managed block in `config.toml` (skipping names already defined elsewhere to avoid duplicate TOML tables)
   - User-scoped setup also syncs missing shared MCP entries into `~/.claude/settings.json` without overwriting existing Claude Code MCP server definitions
   - `[tui] status_line`
-- Project `AGENTS.md` (project scope only)
+- Scope-specific `AGENTS.md`
 - `.omx/` runtime directories and HUD config
 - Default setup output includes a compact per-category refresh summary; `--verbose` adds changed-file detail
 - `--force` is reserved for stronger maintenance behavior such as stale/deprecated skill cleanup; it is no longer required for ordinary refresh

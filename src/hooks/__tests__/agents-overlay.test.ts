@@ -33,6 +33,15 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+function setMockCodexHome(codexHomePath: string): () => void {
+  const previous = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = codexHomePath;
+  return () => {
+    if (typeof previous === 'string') process.env.CODEX_HOME = previous;
+    else delete process.env.CODEX_HOME;
+  };
+}
+
 describe('generateOverlay', () => {
   let tempDir: string;
   before(async () => { tempDir = await makeTempDir(); });
@@ -457,12 +466,22 @@ ${WORKER_END}
 
 describe('session-scoped model instructions file', () => {
   let tempDir: string;
+  let restoreCodexHome: (() => void) | undefined;
 
-  before(async () => { tempDir = await makeTempDir(); });
-  after(async () => { await rm(tempDir, { recursive: true, force: true }); });
+  before(async () => {
+    tempDir = await makeTempDir();
+    restoreCodexHome = setMockCodexHome(join(tempDir, 'home', '.codex'));
+  });
+  after(async () => {
+    restoreCodexHome?.();
+    await rm(tempDir, { recursive: true, force: true });
+  });
 
-  it('writes project AGENTS.md + runtime overlay into session-scoped file', async () => {
+  it('writes user + project AGENTS.md + runtime overlay into session-scoped file', async () => {
+    const userAgentsMd = join(tempDir, 'home', '.codex', 'AGENTS.md');
     const projectAgentsMd = join(tempDir, 'AGENTS.md');
+    await mkdir(join(tempDir, 'home', '.codex'), { recursive: true });
+    await writeFile(userAgentsMd, '# User instructions\n\nStart globally.\n');
     const projectContent = '# Project instructions\n\nStay in scope.\n';
     await writeFile(projectAgentsMd, projectContent);
 
@@ -472,12 +491,18 @@ describe('session-scoped model instructions file', () => {
     const projectAfter = await readFile(projectAgentsMd, 'utf-8');
 
     assert.equal(writtenPath, sessionModelInstructionsPath(tempDir, 'session-a'));
+    assert.match(sessionContent, /# User instructions/);
     assert.match(sessionContent, /# Project instructions/);
+    assert.ok(
+      sessionContent.indexOf('# User instructions') <
+      sessionContent.indexOf('# Project instructions'),
+    );
     assert.match(sessionContent, /<!-- OMX:RUNTIME:START -->/);
     assert.equal(projectAfter, projectContent);
   });
 
-  it('writes overlay-only session file when project AGENTS.md is missing', async () => {
+  it('writes overlay-only session file when no base AGENTS.md files exist', async () => {
+    await rm(join(tempDir, 'home'), { recursive: true, force: true });
     await rm(join(tempDir, 'AGENTS.md'), { force: true });
     const overlay = await generateOverlay(tempDir, 'session-b');
     const writtenPath = await writeSessionModelInstructionsFile(tempDir, 'session-b', overlay);

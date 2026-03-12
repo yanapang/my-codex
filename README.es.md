@@ -116,7 +116,7 @@ User
 
 ```bash
 omx                # Lanzar Codex (+ HUD en tmux cuando está disponible)
-omx setup          # Instalar prompts/skills/config por alcance + proyecto AGENTS.md/.omx
+omx setup          # Instalar prompts/skills/config por alcance + .omx del proyecto + AGENTS.md específico del alcance
 omx doctor         # Diagnósticos de instalación/ejecución
 omx doctor --team  # Diagnósticos de Team/swarm
 omx team ...       # Iniciar/estado/reanudar/apagar workers tmux del equipo
@@ -175,7 +175,7 @@ Por defecto, OMX inyecta:
 -c model_instructions_file="<cwd>/AGENTS.md"
 ```
 
-Esto añade las instrucciones del proyecto `AGENTS.md` a los comandos de inicio de Codex.
+Esto combina el `AGENTS.md` de `CODEX_HOME` con el `AGENTS.md` del proyecto (si existe) y luego añade la superposición de runtime.
 Extiende el comportamiento de Codex, pero no reemplaza ni elude las políticas centrales del sistema Codex.
 
 Controles:
@@ -240,10 +240,11 @@ Notas:
 
 - `.omx/setup-scope.json` (alcance de instalación persistido)
 - Instalaciones dependientes del alcance:
-  - `user`: `~/.codex/prompts/`, `~/.agents/skills/`, `~/.codex/config.toml`, `~/.omx/agents/`
-  - `project`: `./.codex/prompts/`, `./.agents/skills/`, `./.codex/config.toml`, `./.omx/agents/`
+  - `user`: `~/.codex/prompts/`, `~/.agents/skills/`, `~/.codex/config.toml`, `~/.omx/agents/`, `~/.codex/AGENTS.md`
+  - `project`: `./.codex/prompts/`, `./.agents/skills/`, `./.codex/config.toml`, `./.omx/agents/`, `./AGENTS.md`
 - Comportamiento de inicio: si el alcance persistido es `project`, el lanzamiento de `omx` usa automáticamente `CODEX_HOME=./.codex` (a menos que `CODEX_HOME` ya esté establecido).
-- El `AGENTS.md` existente se preserva por defecto. En ejecuciones TTY interactivas, setup pregunta antes de sobrescribir; `--force` sobrescribe sin preguntar (las verificaciones de seguridad de sesiones activas siguen aplicándose).
+- Las instrucciones de inicio combinan `~/.codex/AGENTS.md` (o `CODEX_HOME/AGENTS.md` si se sobrescribe) con `./AGENTS.md` del proyecto y luego añaden la superposición de runtime.
+- Los archivos `AGENTS.md` existentes nunca se sobrescriben silenciosamente: en TTY interactivo se pregunta antes de reemplazar; en modo no interactivo se omite salvo que pases `--force` (las verificaciones de seguridad de sesiones activas siguen aplicándose).
 - Actualizaciones de `config.toml` (para ambos alcances):
   - `notify = ["node", "..."]`
   - `model_reasoning_effort = "high"`
@@ -251,7 +252,7 @@ Notas:
   - `[features] multi_agent = true, child_agents_md = true`
   - Entradas de servidores MCP (`omx_state`, `omx_memory`, `omx_code_intel`, `omx_trace`)
   - `[tui] status_line`
-- `AGENTS.md` del proyecto
+- `AGENTS.md` específico del alcance
 - Directorios `.omx/` de ejecución y configuración de HUD
 
 ## Agentes y skills
