@@ -1,6 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -8,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import {
   repoLocalSparkShellBinaryPath,
   resolveSparkShellBinaryPath,
+  resolveSparkShellBinaryPathWithHydration,
   runSparkShellBinary,
 } from '../sparkshell.js';
 
@@ -74,6 +78,91 @@ describe('resolveSparkShellBinaryPath', () => {
       () => resolveSparkShellBinaryPath({ packageRoot: '/repo', exists: () => false }),
       /native binary not found/,
     );
+  });
+
+  it('hydrates a native binary when packaged and repo-local binaries are absent', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-sparkshell-hydrated-'));
+    try {
+      const assetRoot = join(wd, 'assets');
+      const cacheDir = join(wd, 'cache');
+      const stagingDir = join(wd, 'staging');
+      await mkdir(assetRoot, { recursive: true });
+      await mkdir(stagingDir, { recursive: true });
+      await writeFile(join(wd, 'package.json'), JSON.stringify({
+        version: '0.8.15',
+        repository: { url: 'git+https://github.com/Yeachan-Heo/oh-my-codex.git' },
+      }));
+      const stagedBinary = join(stagingDir, process.platform === 'win32' ? 'omx-sparkshell.exe' : 'omx-sparkshell');
+      await writeFile(stagedBinary, process.platform === 'win32' ? '@echo off\r\necho hydrated\r\n' : '#!/bin/sh\necho hydrated\n');
+      if (process.platform !== 'win32') await chmod(stagedBinary, 0o755);
+
+      const archiveName = process.platform === 'win32'
+        ? 'omx-sparkshell-x86_64-pc-windows-msvc.zip'
+        : 'omx-sparkshell-x86_64-unknown-linux-gnu.tar.gz';
+      const archivePath = join(assetRoot, archiveName);
+      const buildArchive = process.platform === 'win32'
+        ? spawnSync('powershell', ['-NoLogo', '-NoProfile', '-Command', `Compress-Archive -Path '${stagedBinary.replace(/'/g, "''")}' -DestinationPath '${archivePath.replace(/'/g, "''")}' -Force`], { encoding: 'utf-8' })
+        : spawnSync('tar', ['-czf', archivePath, '-C', stagingDir, 'omx-sparkshell'], { encoding: 'utf-8' });
+      assert.equal(buildArchive.status, 0, buildArchive.stderr || buildArchive.stdout);
+      const archiveBuffer = await readFile(archivePath);
+      const checksum = createHash('sha256').update(archiveBuffer).digest('hex');
+
+      const server = await new Promise<{ baseUrl: string; close: () => Promise<void> }>((resolve) => {
+        const srv = createServer(async (req, res) => {
+          const url = new URL(req.url || '/', 'http://127.0.0.1');
+          const filePath = join(assetRoot, url.pathname.replace(/^\//, ''));
+          try {
+            res.writeHead(200);
+            res.end(await readFile(filePath));
+          } catch {
+            res.writeHead(404);
+            res.end('missing');
+          }
+        });
+        srv.listen(0, '127.0.0.1', () => {
+          const address = srv.address();
+          if (!address || typeof address === 'string') throw new Error('bad address');
+          resolve({
+            baseUrl: `http://127.0.0.1:${address.port}`,
+            close: () => new Promise<void>((done, reject) => srv.close((err: Error | undefined) => err ? reject(err) : done())),
+          });
+        });
+      });
+
+      try {
+        await writeFile(join(assetRoot, 'native-release-manifest.json'), JSON.stringify({
+          version: '0.8.15',
+          assets: [{
+            product: 'omx-sparkshell',
+            version: '0.8.15',
+            platform: process.platform === 'win32' ? 'win32' : 'linux',
+            arch: 'x64',
+            archive: archiveName,
+            binary: process.platform === 'win32' ? 'omx-sparkshell.exe' : 'omx-sparkshell',
+            binary_path: process.platform === 'win32' ? 'omx-sparkshell.exe' : 'omx-sparkshell',
+            sha256: checksum,
+            size: archiveBuffer.length,
+            download_url: `${server.baseUrl}/${archiveName}`,
+          }],
+        }, null, 2));
+
+        const resolved = await resolveSparkShellBinaryPathWithHydration({
+          packageRoot: wd,
+          platform: process.platform === 'win32' ? 'win32' : 'linux',
+          arch: 'x64',
+          env: {
+            OMX_NATIVE_MANIFEST_URL: `${server.baseUrl}/native-release-manifest.json`,
+            OMX_NATIVE_CACHE_DIR: cacheDir,
+          },
+          exists: () => false,
+        });
+        assert.match(resolved, /cache/);
+      } finally {
+        await server.close();
+      }
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
   });
 });
 

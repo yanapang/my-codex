@@ -6,11 +6,12 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const root = join(__dirname, '..');
-const binaryName = process.platform === 'win32' ? 'omx-explore-harness.exe' : 'omx-explore-harness';
 
 for (const path of [
-  join(root, 'bin', binaryName),
+  join(root, 'bin', 'omx-explore-harness'),
+  join(root, 'bin', 'omx-explore-harness.exe'),
   join(root, 'bin', 'omx-explore-harness.meta.json'),
+  join(root, 'bin', 'native'),
 ]) {
-  await rm(path, { force: true });
+  await rm(path, { recursive: true, force: true });
 }

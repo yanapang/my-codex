@@ -20,7 +20,7 @@ type NpmPackDryRunResult = {
 };
 
 describe('sparkshell packaging scaffold', () => {
-  it('registers native helper scripts and packages staged native artifacts for npm releases', () => {
+  it('registers native helper scripts but keeps staged native artifacts out of npm releases', () => {
     const packageJsonPath = join(process.cwd(), 'package.json');
     const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as PackageJson;
     const binaryName = platform() === 'win32' ? 'omx-sparkshell.exe' : 'omx-sparkshell';
@@ -30,7 +30,7 @@ describe('sparkshell packaging scaffold', () => {
     assert.deepEqual(pkg.bin, { omx: 'bin/omx.js' });
     assert.equal(pkg.scripts?.['build:sparkshell'], 'node scripts/build-sparkshell.mjs');
     assert.equal(pkg.scripts?.['test:sparkshell'], 'node scripts/test-sparkshell.mjs');
-    assert.equal(pkg.files?.includes('bin/native/'), true, 'expected package files to include bin/native/');
+    assert.equal(pkg.files?.includes('bin/native/'), false, 'did not expect package files to include bin/native/');
     assert.equal(pkg.files?.includes('scripts/build-sparkshell.mjs'), true);
     assert.equal(pkg.files?.includes('scripts/test-sparkshell.mjs'), true);
 
@@ -60,7 +60,7 @@ describe('sparkshell packaging scaffold', () => {
 
       assert.equal(packedFiles.has('scripts/build-sparkshell.mjs'), true);
       assert.equal(packedFiles.has('scripts/test-sparkshell.mjs'), true);
-      assert.equal(packedFiles.has(packagedBinaryRelativePath.replaceAll('\\', '/')), true);
+      assert.equal(packedFiles.has(packagedBinaryRelativePath.replaceAll('\\', '/')), false);
     } finally {
       rmSync(packagedBinaryPath, { force: true });
     }
