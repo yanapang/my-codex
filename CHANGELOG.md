@@ -4,6 +4,26 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-03-12
+
+55 non-merge commits from `v0.8.15..dev`. Contributors: [@Yeachan-Heo](https://github.com/Yeachan-Heo/oh-my-codex), Bellman, 2233admin, [@seunghwaneom](https://github.com/seunghwaneom), [@hoky1227](https://github.com/hoky1227).
+
+### Added
+- **`omx explore` native harness and packaging flow** — OMX now ships a dedicated read-only exploration entrypoint backed by a Rust harness, packaged/source fallback logic, and release-aware native asset resolution. (commit `fb07c3c`)
+- **`omx sparkshell` operator-facing native sidecar** — added a direct shell-native specialist surface plus explicit tmux-pane summarization support for operator inspection workflows. (commit `71858c3`)
+- **Cross-platform native release publishing** — release automation now publishes native archives for both `omx-explore-harness` and `omx-sparkshell`, with generated release-manifest metadata and a packed-install smoke gate. (commit `23d1cf5`, `559089f`)
+- **`build:full` one-shot build path** — added a release-oriented build command that compiles TypeScript plus the packaged explore harness and sparkshell binaries, and validated it in CI. (commit `d12e5f4`, `99ce264`)
+
+### Changed
+- **Qualifying `omx explore` shell-native prompts can route through sparkshell** — simple read-only shell tasks now use sparkshell as a backend when that is the cheaper fit, while preserving explicit fallback to the direct explore harness. (PR [#782](https://github.com/Yeachan-Heo/oh-my-codex/pull/782))
+- **Default model resolution is now centralized** — runtime/docs/tests now align around one OMX default-model resolution path instead of scattered model-default handling. (PR [#787](https://github.com/Yeachan-Heo/oh-my-codex/pull/787))
+- **Release/runtime guidance now documents the native exploration stack more explicitly** — README and guidance surfaces better describe explore/sparkshell routing, native hydration, and raw-vs-summary expectations. (commit `25bdd23`, `c83223d`)
+
+### Fixed
+- **Explore/sparkshell fallback hardening** — hardened sparkshell fallback behavior, missing-native-manifest handling, and release-asset/native-cache lookup so packaged installs fail more cleanly and recover more predictably. (commit `dc83dfd`, `7aee91d`)
+- **Sparkshell summary behavior is more stable under noisy output** — summary reasoning was constrained and stress coverage added so long-output summaries stay more predictable and preserve salient facts. (PR [#781](https://github.com/Yeachan-Heo/oh-my-codex/pull/781), commit `a653376`)
+- **CLI/help/runtime polish around the new stack** — local `ask`/`hud` help routing, HUD branch/config handling, Windows Codex command probing, and team runtime lifecycle/cleanup paths were tightened during the same release window. (PRs [#785](https://github.com/Yeachan-Heo/oh-my-codex/pull/785), [#786](https://github.com/Yeachan-Heo/oh-my-codex/pull/786), [#788](https://github.com/Yeachan-Heo/oh-my-codex/pull/788), [#793](https://github.com/Yeachan-Heo/oh-my-codex/pull/793))
+
 ## [0.8.13] - 2026-03-11
 
 19 non-merge commits from `main..dev`. Contributors: [@Yeachan-Heo](https://github.com/Yeachan-Heo), [@HaD0Yun](https://github.com/HaD0Yun), [@gobylor](https://github.com/gobylor).

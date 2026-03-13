@@ -1,4 +1,5 @@
 # oh-my-codex - Intelligent Multi-Agent Orchestration
+<!-- omx:generated:agents-md -->
 
 You are running with oh-my-codex (OMX), a coordination layer for Codex CLI.
 This AGENTS.md is the top-level operating contract for the workspace.
