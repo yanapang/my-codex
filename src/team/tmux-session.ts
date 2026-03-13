@@ -862,8 +862,9 @@ export function createTeamSession(
       }
     }
 
-    // Re-create a single HUD pane under the leader column for team visibility.
-    // Keep this after layout sizing so HUD does not get mixed into worker stack.
+    // Re-create a single team HUD as a full-width bottom strip spanning both
+    // leader + worker columns. Keep this after layout sizing so the main
+    // leader/worker topology stays readable and the HUD remains compact.
     // Capture the HUD pane ID so it can be tracked and excluded from worker cleanup.
     let hudPaneId: string | null = null;
     let resizeHookName: string | null = null;
@@ -873,7 +874,7 @@ export function createTeamSession(
       const hudCmd = `node ${shellQuoteSingle(translatePathForMsys(omxEntry))} hud --watch`;
       const hudCwd = translatePathForMsys(cwd);
       const hudResult = runTmux([
-        'split-window', '-v', '-l', String(HUD_TMUX_TEAM_HEIGHT_LINES), '-t', leaderPaneId, '-d', '-P', '-F', '#{pane_id}', '-c', hudCwd, hudCmd,
+        'split-window', '-v', '-f', '-l', String(HUD_TMUX_TEAM_HEIGHT_LINES), '-t', teamTarget, '-d', '-P', '-F', '#{pane_id}', '-c', hudCwd, hudCmd,
       ]);
       if (hudResult.ok) {
         const id = hudResult.stdout.split('\n')[0]?.trim() ?? '';
