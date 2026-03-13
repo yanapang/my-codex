@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { arch, platform } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
@@ -23,6 +24,14 @@ describe('package bin contract', () => {
   it('declares omx with an explicit relative bin path and avoids packaging platform-specific native binaries', () => {
     const packageJsonPath = join(process.cwd(), 'package.json');
     const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as PackageJson;
+    const binaryName = platform() === 'win32' ? 'omx-sparkshell.exe' : 'omx-sparkshell';
+    const packagedSparkShellPath = join(
+      process.cwd(),
+      'bin',
+      'native',
+      `${platform()}-${arch()}`,
+      binaryName,
+    );
 
     assert.deepEqual(pkg.bin, { omx: 'bin/omx.js' });
     assert.equal(pkg.scripts?.['build:explore'], 'cargo build -p omx-explore-harness');
@@ -44,6 +53,8 @@ describe('package bin contract', () => {
 
     const stat = statSync(binPath);
     assert.notEqual(stat.mode & 0o111, 0, 'expected bin/omx.js to be executable');
+
+    rmSync(packagedSparkShellPath, { force: true });
 
     const packed = spawnSync('npm', ['pack', '--dry-run', '--json'], {
       cwd: process.cwd(),
