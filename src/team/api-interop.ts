@@ -1,5 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve as resolvePath } from 'node:path';
+import { readModeState } from '../modes/base.js';
+import { shutdownTeam } from './runtime.js';
 import {
   TEAM_NAME_SAFE_PATTERN,
   WORKER_NAME_SAFE_PATTERN,
@@ -28,6 +30,7 @@ import {
   teamClaimTask,
   teamTransitionTaskStatus,
   teamReleaseTaskClaim,
+  teamCleanup,
   teamReadConfig,
   teamReadManifest,
   teamReadWorkerStatus,
@@ -37,7 +40,6 @@ import {
   teamWriteWorkerIdentity,
   teamAppendEvent,
   teamGetSummary,
-  teamCleanup,
   teamWriteShutdownRequest,
   teamReadShutdownAck,
   teamReadMonitorSnapshot,
@@ -75,6 +77,7 @@ export const LEGACY_TEAM_MCP_TOOLS = [
   'team_append_event',
   'team_get_summary',
   'team_cleanup',
+  'team_orphan_cleanup',
   'team_write_shutdown_request',
   'team_read_shutdown_ack',
   'team_read_monitor_snapshot',
@@ -110,6 +113,7 @@ export const TEAM_API_OPERATIONS = [
   'read-stall-state',
   'get-summary',
   'cleanup',
+  'orphan-cleanup',
   'write-shutdown-request',
   'read-shutdown-ack',
   'read-monitor-snapshot',
@@ -641,6 +645,8 @@ export async function executeTeamApiOperation(
         const from = String(args.from || '').trim();
         const to = String(args.to || '').trim();
         const claimToken = String(args.claim_token || '').trim();
+        const transitionResult = args.result;
+        const transitionError = args.error;
         if (!teamName || !taskId || !from || !to || !claimToken) {
           return { ok: false, operation, error: { code: 'invalid_input', message: 'team_name, task_id, from, to, claim_token are required' } };
         }
@@ -648,7 +654,24 @@ export async function executeTeamApiOperation(
         if (!allowed.has(from) || !allowed.has(to)) {
           return { ok: false, operation, error: { code: 'invalid_input', message: 'from and to must be valid task statuses' } };
         }
-        const result = await teamTransitionTaskStatus(teamName, taskId, from as TeamTaskStatus, to as TeamTaskStatus, claimToken, cwd);
+        if (transitionResult !== undefined && typeof transitionResult !== 'string') {
+          return { ok: false, operation, error: { code: 'invalid_input', message: 'result must be a string when provided' } };
+        }
+        if (transitionError !== undefined && typeof transitionError !== 'string') {
+          return { ok: false, operation, error: { code: 'invalid_input', message: 'error must be a string when provided' } };
+        }
+        const result = await teamTransitionTaskStatus(
+          teamName,
+          taskId,
+          from as TeamTaskStatus,
+          to as TeamTaskStatus,
+          claimToken,
+          cwd,
+          {
+            result: typeof transitionResult === 'string' ? transitionResult : undefined,
+            error: typeof transitionError === 'string' ? transitionError : undefined,
+          },
+        );
         return { ok: true, operation, data: result as unknown as Record<string, unknown> };
       }
       case 'release-task-claim': {
@@ -868,8 +891,20 @@ export async function executeTeamApiOperation(
       case 'cleanup': {
         const teamName = String(args.team_name || '').trim();
         if (!teamName) return { ok: false, operation, error: { code: 'invalid_input', message: 'team_name is required' } };
+        const force = args.force === true;
+        const ralphFromState = await readModeState('team', cwd).then(
+          (state) => state?.active === true && state?.linked_ralph === true && state?.team_name === teamName,
+          () => false,
+        );
+        const ralph = args.ralph === true || ralphFromState;
+        await shutdownTeam(teamName, cwd, { force, ralph });
+        return { ok: true, operation, data: { team_name: teamName, cleanup_mode: 'shutdown' } };
+      }
+      case 'orphan-cleanup': {
+        const teamName = String(args.team_name || '').trim();
+        if (!teamName) return { ok: false, operation, error: { code: 'invalid_input', message: 'team_name is required' } };
         await teamCleanup(teamName, cwd);
-        return { ok: true, operation, data: { team_name: teamName } };
+        return { ok: true, operation, data: { team_name: teamName, cleanup_mode: 'orphan_cleanup' } };
       }
       case 'write-shutdown-request': {
         const teamName = String(args.team_name || '').trim();

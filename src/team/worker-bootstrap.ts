@@ -2,6 +2,7 @@ import type { TeamTask } from './state.js';
 import { mkdir, readFile, rm, stat, writeFile } from 'fs/promises';
 import { dirname, join } from 'path';
 import { getFixLoopInstructions, getVerificationInstructions } from '../verification/verifier.js';
+import { codexHome } from '../utils/paths.js';
 import { sleep } from '../utils/sleep.js';
 
 const TEAM_OVERLAY_START = '<!-- OMX:TEAM:WORKER:START -->';
@@ -144,9 +145,9 @@ function stripOverlayFromContent(content: string): string {
 }
 
 /**
- * Write a team-scoped model instructions file that composes the project's
- * AGENTS.md (if any) with the worker overlay. This avoids mutating the
- * project's AGENTS.md directly.
+ * Write a team-scoped model instructions file that composes user-level
+ * CODEX_HOME AGENTS.md, the project's AGENTS.md (if any), and the worker
+ * overlay. This avoids mutating the source AGENTS.md files directly.
  *
  * Returns the absolute path to the composed file.
  */
@@ -155,18 +156,32 @@ export async function writeTeamWorkerInstructionsFile(
   cwd: string,
   overlay: string,
 ): Promise<string> {
-  const projectAgentsPath = join(cwd, 'AGENTS.md');
-  let base = '';
-  try {
-    base = await readFile(projectAgentsPath, 'utf-8');
-    // Strip any stale overlays from the base content
-    base = stripOverlayFromContent(base);
-  } catch {
-    // No project AGENTS.md -- compose with overlay only
+  const baseParts: string[] = [];
+  const sourcePaths = [
+    join(codexHome(), 'AGENTS.md'),
+    join(cwd, 'AGENTS.md'),
+  ];
+  const seenPaths = new Set<string>();
+
+  for (const sourcePath of sourcePaths) {
+    if (seenPaths.has(sourcePath)) continue;
+    seenPaths.add(sourcePath);
+
+    let content = '';
+    try {
+      content = await readFile(sourcePath, 'utf-8');
+    } catch {
+      continue;
+    }
+
+    content = stripOverlayFromContent(content).trim();
+    if (!content) continue;
+    baseParts.push(content);
   }
 
+  const base = baseParts.join('\n\n');
   const composed = base.trim().length > 0
-    ? `${base.trimEnd()}\n\n${overlay}\n`
+    ? `${base}\n\n${overlay}\n`
     : `${overlay}\n`;
 
   const outPath = join(cwd, '.omx', 'state', 'team', teamName, 'worker-agents.md');

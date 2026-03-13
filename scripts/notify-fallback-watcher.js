@@ -40,6 +40,19 @@ function isPidAlive(pid) {
   }
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForPidExit(pid, timeoutMs = 3000, stepMs = 50) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isPidAlive(pid)) return true;
+    await sleep(stepMs);
+  }
+  return !isPidAlive(pid);
+}
+
 const cwd = resolve(argValue('--cwd', process.cwd()));
 const notifyScript = resolve(argValue('--notify-script', join(cwd, 'scripts', 'notify-hook.js')));
 const runOnce = process.argv.includes('--once');
@@ -100,6 +113,7 @@ let lastRalphContinueSteer = {
   last_state_check_at: null,
   last_sent_at: '',
   last_reason: 'init',
+  last_error: null,
   state_path: '',
   pane_id: '',
   pane_current_command: '',
@@ -125,6 +139,7 @@ function normalizeRalphContinueSteerState(raw) {
     last_state_check_at: safeString(raw.last_state_check_at) || null,
     last_sent_at: safeString(raw.last_sent_at),
     last_reason: safeString(raw.last_reason) || 'init',
+    last_error: safeString(raw.last_error) || null,
     state_path: safeString(raw.state_path),
     pane_id: safeString(raw.pane_id),
     pane_current_command: safeString(raw.pane_current_command),
@@ -221,6 +236,7 @@ async function runRalphContinueSteerTick() {
     current_phase: safeString(activeRalph.state?.current_phase),
     last_state_check_at: nowIso,
     last_reason: activeRalph.reason,
+    last_error: null,
     state_path: activeRalph.path,
     pane_current_command: '',
   };
@@ -262,6 +278,27 @@ async function runRalphContinueSteerTick() {
   });
 }
 
+async function runRalphWatcherBehaviorTick() {
+  try {
+    await runRalphContinueSteerTick();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : safeString(error);
+    lastRalphContinueSteer = {
+      ...lastRalphContinueSteer,
+      last_reason: 'send_failed',
+      last_error: message || 'unknown_error',
+    };
+    await eventLog({
+      type: 'ralph_continue_steer',
+      reason: 'send_failed',
+      pane_id: lastRalphContinueSteer.pane_id || null,
+      state_path: lastRalphContinueSteer.state_path || null,
+      current_phase: lastRalphContinueSteer.current_phase || null,
+      error: lastRalphContinueSteer.last_error,
+    });
+  }
+}
+
 async function readPidFilePid(path) {
   const raw = await readFile(path, 'utf-8');
   const trimmed = raw.trim();
@@ -283,10 +320,18 @@ async function registerPidFile() {
   if (existingPid && existingPid !== process.pid && isPidAlive(existingPid)) {
     try {
       process.kill(existingPid, 'SIGTERM');
+      const exitedGracefully = await waitForPidExit(existingPid);
+      let forced = false;
+      if (!exitedGracefully && isPidAlive(existingPid)) {
+        forced = true;
+        process.kill(existingPid, 'SIGKILL');
+        await waitForPidExit(existingPid, 1000, 25);
+      }
       await eventLog({
         type: 'watcher_stale_pid_reaped',
         stale_pid: existingPid,
         pid_file: pidFilePath,
+        forced,
       });
     } catch (error) {
       await eventLog({
@@ -666,15 +711,23 @@ async function runDispatchDrainTick() {
   }
 }
 
+async function pumpTeamControlPlaneTick() {
+  await runDispatchDrainTick();
+  await runLeaderNudgeTick();
+}
+
+async function runWatcherCycle() {
+  await ensureTrackedFiles();
+  await pollFiles();
+  await pumpTeamControlPlaneTick();
+  await runRalphWatcherBehaviorTick();
+  await writeState();
+}
+
 async function tick() {
   if (stopping) return;
   if (await enforceLifecycleGuards()) return;
-  await ensureTrackedFiles();
-  await pollFiles();
-  await runDispatchDrainTick();
-  await runLeaderNudgeTick();
-  await runRalphContinueSteerTick();
-  await writeState();
+  await runWatcherCycle();
   if (await enforceLifecycleGuards()) return;
   setTimeout(() => {
     void tick();
@@ -712,12 +765,7 @@ async function main() {
   if (await enforceLifecycleGuards()) return;
 
   if (runOnce) {
-    await ensureTrackedFiles();
-    await pollFiles();
-    await runDispatchDrainTick();
-    await runLeaderNudgeTick();
-    await runRalphContinueSteerTick();
-    await writeState();
+    await runWatcherCycle();
     await eventLog({ type: 'watcher_once_complete', seen_turns: seenTurnKeys.size });
     process.exit(0);
   }

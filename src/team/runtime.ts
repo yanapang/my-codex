@@ -67,6 +67,7 @@ import {
   type WorkerHeartbeat,
   type WorkerStatus,
   type TeamTask,
+  type TeamManifestV2,
   type TeamMonitorSnapshotState,
   type TeamPhaseState,
   type TeamGovernance,
@@ -246,6 +247,15 @@ interface ShutdownOptions {
   ralph?: boolean;
 }
 
+function resolveLifecycleProfile(
+  config: Pick<TeamConfig, 'lifecycle_profile'> | null | undefined,
+  manifest: Pick<TeamManifestV2, 'lifecycle_profile'> | null | undefined,
+): 'default' | 'linked_ralph' {
+  if (manifest?.lifecycle_profile === 'linked_ralph') return 'linked_ralph';
+  if (config?.lifecycle_profile === 'linked_ralph') return 'linked_ralph';
+  return 'default';
+}
+
 function collectProvisionedShutdownWorktrees(config: TeamConfig): EnsureWorktreeResult[] {
   const seenWorktreePaths = new Set<string>();
   const worktrees: EnsureWorktreeResult[] = [];
@@ -344,7 +354,7 @@ function resolveManifestLookupCwds(cwd: string): string[] {
 
 function resolveGovernancePolicy(
   governance: TeamGovernance | null | undefined,
-  legacyPolicy?: Partial<TeamGovernance> | null,
+  legacyPolicy?: Partial<TeamGovernance> | null | undefined,
 ): TeamGovernance {
   return normalizeTeamGovernance(governance, legacyPolicy);
 }
@@ -355,7 +365,7 @@ async function assertNestedTeamAllowed(cwd: string): Promise<void> {
 
   for (const candidateCwd of resolveManifestLookupCwds(cwd)) {
     const manifest = await readTeamManifestV2(workerContext.teamName, candidateCwd);
-    const governance = resolveGovernancePolicy(manifest?.governance, manifest?.policy as Partial<TeamGovernance> | undefined);
+    const governance = resolveGovernancePolicy(manifest?.governance);
     if (governance.nested_teams_allowed) return;
     if (manifest) break;
   }
@@ -821,6 +831,7 @@ export async function startTeam(
         team_state_root: teamStateRoot,
         workspace_mode: workspaceMode,
       },
+      options.ralph === true ? 'linked_ralph' : 'default',
     );
     if (!config) {
       throw new Error('failed to initialize team config');
@@ -1467,10 +1478,7 @@ export async function assignTask(
   const task = await readTask(sanitized, taskId, cwd);
   if (!task) throw new Error(`Task ${taskId} not found`);
   const manifest = await readTeamManifestV2(sanitized, cwd);
-  const governance = resolveGovernancePolicy(
-    manifest?.governance,
-    manifest?.policy as Partial<TeamGovernance> | undefined,
-  );
+  const governance = resolveGovernancePolicy(manifest?.governance);
 
   if (governance.delegation_only && workerName === 'leader-fixed') {
     throw new Error('delegation_only_violation');
@@ -1578,7 +1586,6 @@ export async function reassignTask(
  */
 export async function shutdownTeam(teamName: string, cwd: string, options: ShutdownOptions = {}): Promise<void> {
   const force = options.force === true;
-  const ralph = options.ralph === true;
   const sanitized = sanitizeTeamName(teamName);
   const config = await readTeamConfig(sanitized, cwd);
   if (!config) {
@@ -1593,6 +1600,8 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
     return;
   }
   const manifest = await readTeamManifestV2(sanitized, cwd);
+  const lifecycleProfile = resolveLifecycleProfile(config, manifest);
+  const ralph = options.ralph === true || lifecycleProfile === 'linked_ralph';
   const governance = resolveGovernancePolicy(
     manifest?.governance,
     manifest?.policy as Partial<TeamGovernance> | undefined,
@@ -1852,6 +1861,8 @@ export async function resumeTeam(teamName: string, cwd: string): Promise<TeamRun
   const sanitized = sanitizeTeamName(teamName);
   const config = await readTeamConfig(sanitized, cwd);
   if (!config) return null;
+  const manifest = await readTeamManifestV2(sanitized, cwd);
+  config.lifecycle_profile = resolveLifecycleProfile(config, manifest);
 
   if (config.worker_launch_mode === 'prompt') {
     const hasLivePromptWorker = config.workers.some((worker) => isPromptWorkerAlive(config, worker));
@@ -1903,10 +1914,7 @@ async function findActiveTeams(cwd: string, leaderSessionId: string): Promise<st
     const teamName = e.name;
     const cfg = await readTeamConfig(teamName, cwd);
     const manifest = await readTeamManifestV2(teamName, cwd);
-    const governance = resolveGovernancePolicy(
-      manifest?.governance,
-      manifest?.policy as Partial<TeamGovernance> | undefined,
-    );
+    const governance = resolveGovernancePolicy(manifest?.governance);
     if (governance.one_team_per_leader_session === false) continue;
     const workerLaunchMode = cfg?.worker_launch_mode
       ?? manifest?.policy?.worker_launch_mode

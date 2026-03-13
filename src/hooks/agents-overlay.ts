@@ -17,10 +17,16 @@
 import { readFile, writeFile, mkdir, rm, readdir } from 'fs/promises';
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
-import { omxNotepadPath, omxProjectMemoryPath, packageRoot } from '../utils/paths.js';
+import {
+  codexHome,
+  omxNotepadPath,
+  omxProjectMemoryPath,
+  packageRoot,
+} from '../utils/paths.js';
 import { getReadScopedStateDirs, getStateDir, listModeStateFilesWithScopePreference } from '../mcp/state-paths.js';
 import { generateCodebaseMap } from './codebase-map.js';
 import { SKILL_ACTIVE_STATE_FILE } from './keyword-detector.js';
+import { buildExploreRoutingGuidance } from './explore-routing.js';
 
 const START_MARKER = '<!-- OMX:RUNTIME:START -->';
 const END_MARKER = '<!-- OMX:RUNTIME:END -->';
@@ -261,10 +267,10 @@ export async function resolveSessionOrchestrationMode(
 
     try {
       const state = JSON.parse(await readFile(statePath, 'utf-8')) as { active?: boolean; skill?: string };
-      if (state.active !== true) continue;
+      if (state.active !== true) return 'default';
       return state.skill === 'team' ? 'team' : 'default';
     } catch {
-      continue;
+      return 'default';
     }
   }
 
@@ -281,7 +287,7 @@ export async function generateOverlay(
   options: GenerateOverlayOptions = {},
 ): Promise<string> {
   const orchestrationMode = options.orchestrationMode ?? 'default';
-  const [activeModes, notepadPriority, projectMemory, codebaseMap, ralphActive, planningArtifacts, teamOverlay] = await Promise.all([
+  const [activeModes, notepadPriority, projectMemory, codebaseMap, ralphActive, planningArtifacts, teamOverlay, exploreRoutingGuidance] = await Promise.all([
     readActiveModes(cwd, sessionId),
     readNotepadPriority(cwd),
     readProjectMemorySummary(cwd),
@@ -289,6 +295,7 @@ export async function generateOverlay(
     isRalphActive(cwd, sessionId),
     readRalphPlanningArtifacts(cwd),
     orchestrationMode === 'team' ? readTeamOrchestratorOverlay() : Promise.resolve(''),
+    Promise.resolve(buildExploreRoutingGuidance()),
   ]);
 
   // Build sections with deterministic overflow behavior.
@@ -338,6 +345,14 @@ export async function generateOverlay(
     sections.push({
       key: 'team_orchestrator',
       text: `**Orchestration Mode:** team\n${truncate(teamOverlay, 900)}`,
+      optional: true,
+    });
+  }
+
+  if (exploreRoutingGuidance) {
+    sections.push({
+      key: 'explore_routing',
+      text: truncate(exploreRoutingGuidance, 600),
       optional: true,
     });
   }
@@ -486,8 +501,9 @@ export function sessionModelInstructionsPath(cwd: string, sessionId: string): st
 }
 
 /**
- * Build a session-scoped AGENTS.md that combines project instructions (if any)
- * and the runtime overlay, without mutating <cwd>/AGENTS.md.
+ * Build a session-scoped AGENTS.md that combines user-level CODEX_HOME
+ * instructions, project instructions (if any), and the runtime overlay,
+ * without mutating the source AGENTS.md files.
  */
 export async function writeSessionModelInstructionsFile(
   cwd: string,
@@ -497,15 +513,26 @@ export async function writeSessionModelInstructionsFile(
   const sessionPath = sessionModelInstructionsPath(cwd, sessionId);
   await mkdir(dirname(sessionPath), { recursive: true });
 
-  const projectAgentsPath = join(cwd, 'AGENTS.md');
-  let base = '';
-  if (existsSync(projectAgentsPath)) {
-    base = await readFile(projectAgentsPath, 'utf-8');
-    base = stripOverlayContent(base);
+  const baseParts: string[] = [];
+  const sourcePaths = [
+    join(codexHome(), 'AGENTS.md'),
+    join(cwd, 'AGENTS.md'),
+  ];
+  const seenPaths = new Set<string>();
+
+  for (const sourcePath of sourcePaths) {
+    if (seenPaths.has(sourcePath) || !existsSync(sourcePath)) continue;
+    seenPaths.add(sourcePath);
+
+    let content = await readFile(sourcePath, 'utf-8');
+    content = stripOverlayContent(content).trim();
+    if (!content) continue;
+    baseParts.push(content);
   }
 
+  const base = baseParts.join('\n\n');
   const composed = base.trim().length > 0
-    ? `${base.trimEnd()}\n\n${overlay}\n`
+    ? `${base}\n\n${overlay}\n`
     : `${overlay}\n`;
 
   await writeFile(sessionPath, composed);

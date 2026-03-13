@@ -94,8 +94,11 @@ describe('omx setup scope behavior', () => {
       if (shouldSkipForSpawnPermissions(res.error)) return;
       assert.equal(res.status, 0, res.stderr || res.stdout);
       assert.match(res.stdout, /Resolved setup scope: project \(from \.omx\/setup-scope\.json\)/);
-      assert.match(res.stdout, new RegExp(`Codex home: ${wd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/\\.codex`));
-      assert.doesNotMatch(res.stdout, new RegExp(`${home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/\\.codex`));
+      assert.match(
+        res.stdout,
+        new RegExp(`Codex home: (?:/private)?${wd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/\\.codex`),
+      );
+      assert.doesNotMatch(res.stdout, /Codex home: .*\/home\/\.codex/);
     } finally {
       await rm(wd, { recursive: true, force: true });
     }
@@ -170,6 +173,7 @@ describe('omx setup scope behavior', () => {
       assert.equal(existsSync(join(home, '.codex', 'prompts')), true);
       assert.equal(existsSync(join(home, '.agents', 'skills')), true);
       assert.equal(existsSync(join(home, '.omx', 'agents')), true);
+      assert.equal(existsSync(join(home, '.codex', 'AGENTS.md')), true);
       assert.equal(existsSync(join(wd, '.omx', 'setup-scope.json')), true);
       const persistedScope = JSON.parse(await readFile(join(wd, '.omx', 'setup-scope.json'), 'utf-8')) as { scope: string };
       assert.equal(persistedScope.scope, 'user');
@@ -188,6 +192,7 @@ describe('omx setup scope behavior', () => {
       await mkdir(join(home, '.omx', 'agents'), { recursive: true });
       await mkdir(join(wd, '.omx', 'state'), { recursive: true });
       await writeFile(join(wd, '.omx', 'setup-scope.json'), JSON.stringify({ scope: 'user' }));
+      await writeFile(join(home, '.codex', 'AGENTS.md'), '# user agents\n');
       await writeFile(join(home, '.codex', 'prompts', 'executor.md'), '# executor\n');
       await writeFile(join(home, '.agents', 'skills', 'sample-skill', 'SKILL.md'), '# skill\n');
       await writeFile(join(home, '.codex', 'config.toml'), 'omx_enabled = true\n[mcp_servers.omx_state]\ncommand = "node"\n');
@@ -196,8 +201,7 @@ describe('omx setup scope behavior', () => {
       if (shouldSkipForSpawnPermissions(res.error)) return;
       assert.equal(res.status, 0, res.stderr || res.stdout);
       assert.match(res.stdout, /Resolved setup scope: user \(from \.omx\/setup-scope\.json\)/);
-      assert.match(res.stdout, /\[OK\] AGENTS\.md: user scope leaves project AGENTS\.md unchanged/);
-      assert.doesNotMatch(res.stdout, /AGENTS\.md: not found in project root/);
+      assert.match(res.stdout, /\[OK\] AGENTS\.md: found in .*home\/\.codex\/AGENTS\.md/);
     } finally {
       await rm(wd, { recursive: true, force: true });
     }
@@ -225,7 +229,7 @@ describe('omx setup scope behavior', () => {
     }
   });
 
-  it('refreshes existing AGENTS.md in non-interactive runs by default', async () => {
+  it('skips overwriting existing AGENTS.md in non-interactive runs without --force', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-setup-scope-'));
     try {
       const home = join(wd, 'home');
@@ -237,9 +241,8 @@ describe('omx setup scope behavior', () => {
       if (shouldSkipForSpawnPermissions(res.error)) return;
       assert.equal(res.status, 0, res.stderr || res.stdout);
       const refreshed = await readFile(join(wd, 'AGENTS.md'), 'utf-8');
-      assert.match(res.stdout, /Generated AGENTS\.md in project root\./);
-      assert.match(refreshed, /# oh-my-codex - Intelligent Multi-Agent Orchestration/);
-      assert.doesNotMatch(refreshed, /keep this file/);
+      assert.match(res.stdout, /Skipped AGENTS\.md overwrite/);
+      assert.equal(refreshed, existingAgents);
     } finally {
       await rm(wd, { recursive: true, force: true });
     }

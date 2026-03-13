@@ -6,6 +6,7 @@ export interface TeamConfig {
   task: string;
   agent_type: string;
   worker_launch_mode: 'interactive' | 'prompt';
+  lifecycle_profile: 'default' | 'linked_ralph';
   worker_count: number;
   max_workers: number;
   workers: WorkerInfo[];
@@ -95,6 +96,10 @@ export interface TeamPolicy {
   dispatch_ack_timeout_ms: number;
 }
 
+/**
+ * Lifecycle/workflow guardrails persisted alongside the manifest, but kept
+ * separate from transport/runtime policy so each layer has a single owner.
+ */
 export interface TeamGovernance {
   delegation_only: boolean;
   plan_approval_required: boolean;
@@ -155,6 +160,7 @@ export interface TeamManifestV2 {
   leader: TeamLeader;
   policy: TeamPolicy;
   governance: TeamGovernance;
+  lifecycle_profile: 'default' | 'linked_ralph';
   permissions_snapshot: PermissionsSnapshot;
   tmux_session: string;
   worker_count: number;

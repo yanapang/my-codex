@@ -19,6 +19,15 @@ import {
 } from '../worker-bootstrap.js';
 import type { TeamTask } from '../state.js';
 
+function setMockCodexHome(codexHomePath: string): () => void {
+  const previous = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = codexHomePath;
+  return () => {
+    if (typeof previous === 'string') process.env.CODEX_HOME = previous;
+    else delete process.env.CODEX_HOME;
+  };
+}
+
 describe('worker bootstrap', () => {
   it('worker skill lifecycle instructions are claim-safe (issue #448)', async () => {
     const workerSkill = await readFile(join(process.cwd(), 'skills', 'worker', 'SKILL.md'), 'utf8');
@@ -367,16 +376,24 @@ describe('worker bootstrap', () => {
     assert.ok(message.length < 200);
   });
 
-  it('writeTeamWorkerInstructionsFile composes base AGENTS.md with overlay', async () => {
+  it('writeTeamWorkerInstructionsFile composes user + project AGENTS.md with overlay', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-worker-bootstrap-'));
+    const restoreCodexHome = setMockCodexHome(join(cwd, 'home', '.codex'));
     try {
+      await mkdir(join(cwd, 'home', '.codex'), { recursive: true });
+      await writeFile(join(cwd, 'home', '.codex', 'AGENTS.md'), '# User Instructions\n\nStart globally.\n', 'utf8');
       await writeFile(join(cwd, 'AGENTS.md'), '# Project Instructions\n\nDo good work.\n', 'utf8');
 
       const overlay = generateWorkerOverlay('compose-team');
       const outPath = await writeTeamWorkerInstructionsFile('compose-team', cwd, overlay);
 
       const content = await readFile(outPath, 'utf8');
+      assert.match(content, /# User Instructions/);
       assert.match(content, /# Project Instructions/);
+      assert.ok(
+        content.indexOf('# User Instructions') <
+        content.indexOf('# Project Instructions'),
+      );
       assert.match(content, /Do good work/);
       assert.match(content, /<!-- OMX:TEAM:WORKER:START -->/);
       assert.match(content, /<!-- OMX:TEAM:WORKER:END -->/);
@@ -385,6 +402,7 @@ describe('worker bootstrap', () => {
       const projectContent = await readFile(join(cwd, 'AGENTS.md'), 'utf8');
       assert.doesNotMatch(projectContent, /<!-- OMX:TEAM:WORKER:START -->/);
     } finally {
+      restoreCodexHome();
       await rm(cwd, { recursive: true, force: true });
     }
   });

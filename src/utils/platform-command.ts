@@ -1,6 +1,6 @@
 import { existsSync } from 'fs';
 import { spawnSync, type SpawnSyncOptionsWithStringEncoding, type SpawnSyncReturns } from 'child_process';
-import { delimiter, extname, join } from 'path';
+import { delimiter, extname, join, resolve } from 'path';
 
 type ExistsSyncLike = (path: string) => boolean;
 type SpawnSyncLike = typeof spawnSync;
@@ -22,6 +22,7 @@ const WINDOWS_DEFAULT_PATHEXT = ['.com', '.exe', '.bat', '.cmd', '.ps1'];
 const WINDOWS_DIRECT_EXTENSIONS = new Set(['.com', '.exe']);
 const WINDOWS_CMD_EXTENSIONS = new Set(['.bat', '.cmd']);
 const WINDOWS_EXTENSION_PRIORITY = ['.exe', '.com', '.ps1', '.cmd', '.bat'];
+const NODE_HOSTED_SCRIPT_EXTENSIONS = new Set(['.js', '.mjs', '.cjs']);
 
 function isWindowsPathLike(command: string): boolean {
   return /^[A-Za-z]:/.test(command) || /[\\/]/.test(command);
@@ -85,6 +86,32 @@ function resolveWindowsCommandPath(
   return null;
 }
 
+function resolvePosixCommandPath(
+  command: string,
+  env: NodeJS.ProcessEnv,
+  existsImpl: ExistsSyncLike,
+): string | null {
+  const trimmed = command.trim();
+  if (trimmed === '') return null;
+
+  if (trimmed.includes('/')) {
+    const candidate = resolve(trimmed);
+    return existsImpl(candidate) ? candidate : null;
+  }
+
+  const pathEntries = String(env.PATH ?? env.Path ?? '')
+    .split(delimiter)
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  for (const entry of pathEntries) {
+    const candidate = resolve(entry, trimmed);
+    if (existsImpl(candidate)) return candidate;
+  }
+
+  return null;
+}
+
 function quoteForCmd(value: string): string {
   return `"${value.replace(/"/g, '""')}"`;
 }
@@ -93,13 +120,21 @@ function buildCmdLaunch(commandPath: string, args: string[], env: NodeJS.Process
   const commandLine = [commandPath, ...args].map(quoteForCmd).join(' ');
   return {
     command: env.ComSpec || 'cmd.exe',
-    args: ['/d', '/s', '/c', commandLine],
+    args: ['/d', '/s', '/c', `"${commandLine}"`],
     resolvedPath: commandPath,
   };
 }
 
 function resolvePowerShellExecutable(env: NodeJS.ProcessEnv, existsImpl: ExistsSyncLike): string {
   return resolveWindowsCommandPath('powershell', env, existsImpl) || 'powershell.exe';
+}
+
+function shouldUseWindowsVerbatimArguments(platform: NodeJS.Platform, spec: PlatformCommandSpec): boolean {
+  return (
+    platform === 'win32' &&
+    typeof spec.resolvedPath === 'string' &&
+    classifyWindowsCommandPath(spec.resolvedPath) === 'cmd'
+  );
 }
 
 export function classifySpawnError(error: NodeJS.ErrnoException | undefined | null): SpawnErrorKind | null {
@@ -118,7 +153,7 @@ export function resolveCommandPathForPlatform(
   if (platform === 'win32') {
     return resolveWindowsCommandPath(command, env, existsImpl);
   }
-  return command;
+  return resolvePosixCommandPath(command, env, existsImpl);
 }
 
 export function buildPlatformCommandSpec(
@@ -155,6 +190,12 @@ export function buildPlatformCommandSpec(
   };
 }
 
+function shouldRetryWithNodeHost(spec: PlatformCommandSpec, error: NodeJS.ErrnoException | undefined | null, platform: NodeJS.Platform): boolean {
+  if (platform === 'win32') return false;
+  if (classifySpawnError(error) !== 'blocked') return false;
+  return NODE_HOSTED_SCRIPT_EXTENSIONS.has(extname(spec.command).toLowerCase());
+}
+
 export function spawnPlatformCommandSync(
   command: string,
   args: string[],
@@ -165,6 +206,19 @@ export function spawnPlatformCommandSync(
   spawnImpl: SpawnSyncLike = spawnSync,
 ): ProbedPlatformCommand {
   const spec = buildPlatformCommandSpec(command, args, platform, env, existsImpl);
-  const result = spawnImpl(spec.command, spec.args, options);
-  return { spec, result };
+  const spawnOptions = shouldUseWindowsVerbatimArguments(platform, spec)
+    ? { ...options, windowsVerbatimArguments: true }
+    : options;
+  const result = spawnImpl(spec.command, spec.args, spawnOptions);
+  if (!shouldRetryWithNodeHost(spec, result.error as NodeJS.ErrnoException | undefined, platform)) {
+    return { spec, result };
+  }
+
+  const retrySpec: PlatformCommandSpec = {
+    command: process.execPath,
+    args: [spec.command, ...spec.args],
+    resolvedPath: spec.command,
+  };
+  const retryResult = spawnImpl(retrySpec.command, retrySpec.args, spawnOptions);
+  return { spec: retrySpec, result: retryResult };
 }

@@ -10,7 +10,7 @@ import { asNumber, safeString } from './utils.js';
 import { readJsonIfExists, getScopedStateDirsForCurrentSession, readdir } from './state-io.js';
 import { runProcess } from './process-runner.js';
 import { logTmuxHookEvent } from './log.js';
-import { checkPaneReadyForTeamSendKeys } from './team-tmux-guard.js';
+import { evaluatePaneInjectionReadiness, mapPaneInjectionReadinessReason, sendPaneInput } from './team-tmux-guard.js';
 import { buildCapturePaneArgv, DEFAULT_MARKER } from '../tmux-hook-engine.js';
 
 export const SKILL_ACTIVE_STATE_FILE = 'skill-active-state.json';
@@ -193,6 +193,8 @@ export const DEFAULT_STALL_PATTERNS = [
   'next step',
   'next steps',
   'ready to proceed',
+  'i\'m ready to',
+  'keep going',
   'should i',
   'whenever you',
   'say go',
@@ -207,6 +209,26 @@ export const DEFAULT_STALL_PATTERNS = [
   'proceed from here',
   'i\'ll continue from',
 ];
+
+function normalizeStallDetectionText(text) {
+  return safeString(text)
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .filter((line) => !line.includes(DEFAULT_MARKER))
+    .join('\n')
+    .toLowerCase()
+    .replace(/[’‘`]/g, '\'');
+}
+
+function summarizePaneCaptureForLog(captured, maxLines = 6) {
+  const lines = safeString(captured)
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim() !== '');
+  if (lines.length === 0) return '';
+  return lines.slice(-maxLines).join('\n').slice(0, 600);
+}
 
 export function normalizeAutoNudgeConfig(raw) {
   if (!raw || typeof raw !== 'object') {
@@ -245,12 +267,14 @@ export async function loadAutoNudgeConfig() {
 
 export function detectStallPattern(text, patterns) {
   if (!text || typeof text !== 'string') return false;
-  const tail = text.slice(-800).toLowerCase();
-  const lowerPatterns = patterns.map(p => p.toLowerCase());
-  const lines = tail.split('\n').filter(l => l.trim());
+  const normalized = normalizeStallDetectionText(text);
+  if (!normalized) return false;
+  const tail = normalized.slice(-800);
+  const normalizedPatterns = patterns.map((pattern) => normalizeStallDetectionText(pattern)).filter(Boolean);
+  const lines = tail.split('\n').filter((line) => line.trim());
   const hotZone = lines.slice(-3).join('\n');
-  if (lowerPatterns.some(p => hotZone.includes(p))) return true;
-  return lowerPatterns.some(p => tail.includes(p));
+  if (normalizedPatterns.some((pattern) => hotZone.includes(pattern))) return true;
+  return normalizedPatterns.some((pattern) => tail.includes(pattern));
 }
 
 export async function capturePane(paneId, lines = 10) {
@@ -288,15 +312,6 @@ export async function resolveNudgePaneTarget(stateDir) {
   }
 
   return '';
-}
-
-async function emitInjectionMessage(paneId, message) {
-  const markedResponse = `${message} ${DEFAULT_MARKER}`;
-  await runProcess('tmux', ['send-keys', '-t', paneId, '-l', markedResponse], 3000);
-  await new Promise(r => setTimeout(r, 100));
-  await runProcess('tmux', ['send-keys', '-t', paneId, 'C-m'], 3000);
-  await new Promise(r => setTimeout(r, 100));
-  await runProcess('tmux', ['send-keys', '-t', paneId, 'C-m'], 3000);
 }
 
 export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
@@ -340,14 +355,16 @@ export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
     if (skillState?.phase === 'completing' && !detected) return;
     if (!detected || !paneId) return;
 
-    const paneGuard = await checkPaneReadyForTeamSendKeys(paneId);
+    const paneGuard = await evaluatePaneInjectionReadiness(paneId, { skipIfScrolling: true });
     if (!paneGuard.ok) {
       await logTmuxHookEvent(logsDir, {
         timestamp: new Date().toISOString(),
         type: 'auto_nudge_skipped',
         pane_id: paneId,
-        reason: paneGuard.reason,
+        reason: mapPaneInjectionReadinessReason(paneGuard.reason),
         source,
+        pane_current_command: paneGuard.paneCurrentCommand || undefined,
+        pane_excerpt: summarizePaneCaptureForLog(paneGuard.paneCapture),
       }).catch(() => {});
       return;
     }
@@ -355,7 +372,15 @@ export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
     const deepInterviewLockActive = isDeepInterviewAutoApprovalLocked(skillState) && !releaseReason;
     if (deepInterviewLockActive && isBlockedAutoApprovalInput(config.response, skillState.input_lock?.blocked_inputs)) {
       const blockedMessage = skillState.input_lock?.message || DEEP_INTERVIEW_INPUT_LOCK_MESSAGE;
-      await emitInjectionMessage(paneId, blockedMessage);
+      const blockedSend = await sendPaneInput({
+        paneTarget: paneId,
+        prompt: `${blockedMessage} ${DEFAULT_MARKER}`,
+        submitKeyPresses: 2,
+        submitDelayMs: 100,
+      });
+      if (!blockedSend.ok) {
+        throw new Error(blockedSend.error || blockedSend.reason);
+      }
       await logTmuxHookEvent(logsDir, {
         timestamp: new Date().toISOString(),
         type: 'auto_nudge_blocked',
@@ -374,7 +399,15 @@ export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
 
     const nowIso = new Date().toISOString();
     try {
-      await emitInjectionMessage(paneId, config.response);
+      const sendResult = await sendPaneInput({
+        paneTarget: paneId,
+        prompt: `${config.response} ${DEFAULT_MARKER}`,
+        submitKeyPresses: 2,
+        submitDelayMs: 100,
+      });
+      if (!sendResult.ok) {
+        throw new Error(sendResult.error || sendResult.reason);
+      }
 
       nudgeState.nudgeCount = nudgeCount + 1;
       nudgeState.lastNudgeAt = nowIso;

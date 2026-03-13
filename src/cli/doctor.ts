@@ -12,6 +12,8 @@ import {
 import { classifySpawnError, spawnPlatformCommandSync } from '../utils/platform-command.js';
 import { getCatalogExpectations } from './catalog-contract.js';
 import { parse as parseToml } from '@iarna/toml';
+import { resolvePackagedExploreHarnessCommand, EXPLORE_BIN_ENV } from './explore.js';
+import { getPackageRoot } from '../utils/package.js';
 
 interface DoctorOptions {
   verbose?: boolean;
@@ -116,6 +118,9 @@ export async function doctor(options: DoctorOptions = {}): Promise<void> {
   // Check 2: Node.js version
   checks.push(checkNodeVersion());
 
+  // Check 2.5: Explore harness readiness
+  checks.push(checkExploreHarness());
+
   // Check 3: Codex home directory
   checks.push(checkDirectory('Codex home', paths.codexHomeDir));
 
@@ -129,7 +134,7 @@ export async function doctor(options: DoctorOptions = {}): Promise<void> {
   checks.push(await checkSkills(paths.skillsDir));
 
   // Check 7: AGENTS.md in project
-  checks.push(checkAgentsMd(scopeResolution.scope));
+  checks.push(checkAgentsMd(scopeResolution.scope, paths.codexHomeDir));
 
   // Check 8: State directory
   checks.push(checkDirectory('State dir', paths.stateDir));
@@ -429,6 +434,79 @@ function checkNodeVersion(): Check {
   return { name: 'Node.js', status: 'fail', message: `v${process.versions.node} (need >= 20)` };
 }
 
+function checkExploreHarness(): Check {
+  const packageRoot = getPackageRoot();
+  const manifestPath = join(packageRoot, 'crates', 'omx-explore', 'Cargo.toml');
+  if (!existsSync(manifestPath)) {
+    return {
+      name: 'Explore Harness',
+      status: 'warn',
+      message: 'Rust harness sources not found in this install (omx explore unavailable until packaged or OMX_EXPLORE_BIN is set)',
+    };
+  }
+
+  const override = process.env[EXPLORE_BIN_ENV]?.trim();
+  if (override) {
+    const resolved = join(packageRoot, override);
+    if (existsSync(override) || existsSync(resolved)) {
+      return {
+        name: 'Explore Harness',
+        status: 'pass',
+        message: `${EXPLORE_BIN_ENV} configured (${override})`,
+      };
+    }
+    return {
+      name: 'Explore Harness',
+      status: 'warn',
+      message: `OMX_EXPLORE_BIN is set but path was not found (${override})`,
+    };
+  }
+
+  const packaged = resolvePackagedExploreHarnessCommand(packageRoot);
+  if (packaged) {
+    return {
+      name: 'Explore Harness',
+      status: 'pass',
+      message: `ready (packaged native binary: ${packaged.command})`,
+    };
+  }
+
+  const { result } = spawnPlatformCommandSync('cargo', ['--version'], {
+    encoding: 'utf-8',
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  if (result.error) {
+    const kind = classifySpawnError(result.error as NodeJS.ErrnoException);
+    if (kind === 'missing') {
+      return {
+        name: 'Explore Harness',
+        status: 'warn',
+        message: `Rust harness sources are packaged, but no compatible packaged prebuilt or cargo was found (install Rust or set ${EXPLORE_BIN_ENV} for omx explore)`,
+      };
+    }
+    return {
+      name: 'Explore Harness',
+      status: 'warn',
+      message: `Rust harness sources are packaged, but cargo probe failed (${result.error.message})`,
+    };
+  }
+
+  if (result.status === 0) {
+    const version = (result.stdout || '').trim();
+    return {
+      name: 'Explore Harness',
+      status: 'pass',
+      message: `ready (${version || 'cargo available'})`,
+    };
+  }
+
+  return {
+    name: 'Explore Harness',
+    status: 'warn',
+    message: `Rust harness sources are packaged, but cargo probe failed with exit ${result.status} (install Rust or set ${EXPLORE_BIN_ENV})`,
+  };
+}
+
 function checkDirectory(name: string, path: string): Check {
   if (existsSync(path)) {
     return { name, status: 'pass', message: path };
@@ -521,15 +599,28 @@ async function checkSkills(dir: string): Promise<Check> {
   }
 }
 
-function checkAgentsMd(scope: DoctorSetupScope): Check {
-  const agentsMd = join(process.cwd(), 'AGENTS.md');
-  if (existsSync(agentsMd)) {
+function checkAgentsMd(scope: DoctorSetupScope, codexHomeDir: string): Check {
+  if (scope === 'user') {
+    const userAgentsMd = join(codexHomeDir, 'AGENTS.md');
+    if (existsSync(userAgentsMd)) {
+      return { name: 'AGENTS.md', status: 'pass', message: `found in ${userAgentsMd}` };
+    }
+    return {
+      name: 'AGENTS.md',
+      status: 'warn',
+      message: `not found in ${userAgentsMd} (run omx setup --scope user)`,
+    };
+  }
+
+  const projectAgentsMd = join(process.cwd(), 'AGENTS.md');
+  if (existsSync(projectAgentsMd)) {
     return { name: 'AGENTS.md', status: 'pass', message: 'found in project root' };
   }
-  if (scope === 'user') {
-    return { name: 'AGENTS.md', status: 'pass', message: 'user scope leaves project AGENTS.md unchanged' };
-  }
-  return { name: 'AGENTS.md', status: 'warn', message: 'not found in project root (run omx agents-init . or omx setup --scope project)' };
+  return {
+    name: 'AGENTS.md',
+    status: 'warn',
+    message: 'not found in project root (run omx agents-init . or omx setup --scope project)',
+  };
 }
 
 async function checkMcpServers(configPath: string): Promise<Check> {
