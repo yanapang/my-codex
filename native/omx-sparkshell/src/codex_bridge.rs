@@ -270,11 +270,11 @@ fn render_section(name: &str, entries: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::test_support::env_lock;
     use super::{
-        normalize_summary, read_summary_timeout_ms, resolve_fallback_model, resolve_model, DEFAULT_FRONTIER_MODEL, DEFAULT_SPARK_MODEL,
-        DEFAULT_SUMMARY_TIMEOUT_MS,
+        normalize_summary, read_summary_timeout_ms, resolve_fallback_model, resolve_model,
+        DEFAULT_FRONTIER_MODEL, DEFAULT_SPARK_MODEL, DEFAULT_SUMMARY_TIMEOUT_MS,
     };
+    use crate::test_support::env_lock;
     use std::env;
 
     #[test]

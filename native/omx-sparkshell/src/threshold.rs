@@ -23,10 +23,10 @@ pub fn combined_visible_lines(stdout: &[u8], stderr: &[u8]) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use crate::test_support::env_lock;
     use super::{
         combined_visible_lines, count_visible_lines, read_line_threshold, DEFAULT_MAX_VISIBLE_LINES,
     };
+    use crate::test_support::env_lock;
     use std::env;
 
     #[test]

@@ -17,6 +17,8 @@ Operational runtime for [OpenAI Codex CLI](https://github.com/openai/codex).
 ## Featured Guides
 
 - [OpenClaw / Generic Notification Gateway Integration Guide](./docs/openclaw-integration.md)
+- [Spark Initiative release notes (v0.9.0)](./docs/release-notes-0.9.0.md)
+- [Spark Initiative release body (v0.9.0)](./docs/release-body-0.9.0.md)
 
 ## Languages
 
@@ -138,12 +140,34 @@ Recommended trusted-environment launch profile:
 omx --xhigh --madmax
 ```
 
-## New in v0.5.0
+## New in v0.9.0 — Spark Initiative
 
-- **Scope-aware setup** with `omx setup --scope user|project` for flexible install modes.
-- **Spark worker routing** via `--spark` / `--madmax-spark` so team workers use the `OMX_DEFAULT_SPARK_MODEL` default without forcing the leader model.
-- **Catalog consolidation** — removed deprecated prompts (`deep-executor`, `scientist`) and 9 deprecated skills for a leaner surface.
-- **Notifier verbosity levels** for fine-grained CCNotifier output control.
+<p align="center">
+  <img src="./docs/shared/omx-character-spark-initiative.jpg" alt="OMX character sparked for the Spark Initiative" width="720">
+</p>
+
+`0.9.0` is the **Spark Initiative** release: OMX now ships a stronger native fast path for read-only repository discovery, shell-native inspection, and cross-platform native distribution.
+
+- **`omx explore` native harness** — qualifying read-only exploration runs through a constrained native Rust helper with explicit allowlists and fallback behavior.
+- **`omx sparkshell`** — a first-class operator surface for fast shell-native inspection, adaptive summaries, and explicit tmux-pane capture.
+- **Cross-platform native release assets** — tagged releases now publish native archives for both `omx-explore-harness` and `omx-sparkshell`, plus `native-release-manifest.json` for hydration and checksum verification.
+- **Release-oriented verification lanes** — `npm run build:full`, `npm run test:explore`, `npm run test:sparkshell`, and packed-install smoke verification now cover the new native surfaces.
+- **Sharper install/runtime fallback order** — OMX prefers explicit `OMX_*_BIN` overrides, then hydrated per-user native cache, then repo-local development artifacts.
+
+Spark Initiative references:
+
+- [Release notes: `v0.9.0`](./docs/release-notes-0.9.0.md)
+- [Release body: `v0.9.0`](./docs/release-body-0.9.0.md)
+- [Release readiness draft: `v0.9.0`](./docs/qa/release-readiness-0.9.0.md)
+
+Quick Spark Initiative smoke path:
+
+```bash
+npm run build:full
+omx explore --prompt "git log --oneline -10"
+omx sparkshell git --version
+omx sparkshell --tmux-pane %12 --tail-lines 400
+```
 
 ## First Session
 
@@ -320,9 +344,9 @@ OMX now includes `omx hooks` for plugin scaffolding and validation.
 
 See `docs/hooks-extension.md` for the full extension workflow and event model.
 
-## Sparkshell (preview)
+## Sparkshell (Spark Initiative surface)
 
-`omx sparkshell <command> [args...]` runs through a JS -> Rust sidecar bridge for fast command execution with adaptive summaries when output exceeds `OMX_SPARKSHELL_LINES`. `omx explore` now treats it as a backend for qualifying read-only shell-native tasks; `omx sparkshell` remains the explicit specialist surface for direct operator use.
+`omx sparkshell <command> [args...]` runs through a JS -> Rust sidecar bridge for fast command execution with adaptive summaries when output exceeds `OMX_SPARKSHELL_LINES`. In `0.9.0`, it became a first-class Spark Initiative surface: `omx explore` can use it as a backend for qualifying read-only shell-native tasks, while `omx sparkshell` remains the explicit operator-facing command for direct use.
 
 It remains an explicit operator-facing command, but OMX may also use it as a backend for qualifying `omx explore` read-only shell-native tasks. That backend relationship does not relax read-only safety: non-read-only or unsupported shell execution should still stay blocked or on the normal path.
 

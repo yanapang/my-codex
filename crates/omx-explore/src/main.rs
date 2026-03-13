@@ -615,7 +615,7 @@ fn validate_direct_command(command_name: &str, args: &[String]) -> Result<(), St
             if operands.is_empty() {
                 return Err("cat requires at least one file/path in omx explore".to_string());
             }
-            if operands.iter().any(|arg| *arg == "-") {
+            if operands.contains(&"-") {
                 return Err("cat stdin (`-`) is not allowed in omx explore".to_string());
             }
         }
@@ -626,7 +626,7 @@ fn validate_direct_command(command_name: &str, args: &[String]) -> Result<(), St
                     "{command_name} requires at least one file/path in omx explore"
                 ));
             }
-            if operands.iter().any(|arg| *arg == "-") {
+            if operands.contains(&"-") {
                 return Err(format!(
                     "{command_name} stdin (`-`) is not allowed in omx explore"
                 ));
@@ -637,7 +637,7 @@ fn validate_direct_command(command_name: &str, args: &[String]) -> Result<(), St
             if operands.is_empty() {
                 return Err("tail requires at least one file/path in omx explore".to_string());
             }
-            if operands.iter().any(|arg| *arg == "-") {
+            if operands.contains(&"-") {
                 return Err("tail stdin (`-`) is not allowed in omx explore".to_string());
             }
             if args.iter().any(|arg| {

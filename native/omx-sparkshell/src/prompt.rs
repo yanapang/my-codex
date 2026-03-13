@@ -1,6 +1,6 @@
 use crate::exec::CommandOutput;
-use std::env;
 use std::borrow::Cow;
+use std::env;
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy)]
@@ -186,13 +186,19 @@ fn truncate_for_prompt(text: &str, label: &str) -> String {
         let head_count = max_lines / 2;
         let tail_count = max_lines - head_count;
         let mut excerpt: Vec<String> = Vec::with_capacity(max_lines + 1);
-        excerpt.extend(lines.iter().take(head_count).map(|line| (*line).to_string()));
+        excerpt.extend(
+            lines
+                .iter()
+                .take(head_count)
+                .map(|line| (*line).to_string()),
+        );
         excerpt.push(format!(
             "[... truncated {label}: omitted {} of {total_lines} total lines ...]",
             total_lines.saturating_sub(max_lines),
         ));
         excerpt.extend(
-            lines.iter()
+            lines
+                .iter()
                 .skip(total_lines - tail_count)
                 .map(|line| (*line).to_string()),
         );
@@ -265,9 +271,9 @@ fn shell_join(command: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::test_support::env_lock;
     use super::{build_summary_prompt, select_command_family};
     use crate::exec::CommandOutput;
+    use crate::test_support::env_lock;
     use std::env;
     use std::process::Command;
 
