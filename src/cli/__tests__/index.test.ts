@@ -613,7 +613,7 @@ describe('detached tmux new-session sequencing', () => {
   });
 
   it('buildDetachedSessionFinalizeSteps keeps schedule after split-capture and before attach', () => {
-    const steps = buildDetachedSessionFinalizeSteps('omx-demo', '%12', '3', true, false);
+    const steps = buildDetachedSessionFinalizeSteps('omx-demo', '%12', '3', true);
     const names = steps.map((step) => step.name);
     const attachedIndex = names.indexOf('register-client-attached-reconcile');
     const scheduleIndex = names.indexOf('schedule-delayed-resize');
@@ -627,7 +627,7 @@ describe('detached tmux new-session sequencing', () => {
   });
 
   it('buildDetachedSessionFinalizeSteps uses quiet best-effort tmux resize commands', () => {
-    const steps = buildDetachedSessionFinalizeSteps('omx-demo', '%12', '3', false, false);
+    const steps = buildDetachedSessionFinalizeSteps('omx-demo', '%12', '3', false);
     const registerHook = steps.find((step) => step.name === 'register-resize-hook');
     const schedule = steps.find((step) => step.name === 'schedule-delayed-resize');
     const reconcile = steps.find((step) => step.name === 'reconcile-hud-resize');
@@ -641,11 +641,17 @@ describe('detached tmux new-session sequencing', () => {
   });
 
   it('buildDetachedSessionFinalizeSteps skips detached resize hooks on native Windows', () => {
-    const steps = buildDetachedSessionFinalizeSteps('omx-demo', '%12', '3', true, false, true);
+    const steps = buildDetachedSessionFinalizeSteps('omx-demo', '%12', '3', true, true);
     assert.deepEqual(
       steps.map((step) => step.name),
       ['set-mouse', 'attach-session'],
     );
+  });
+
+  it('buildDetachedSessionFinalizeSteps never appends server-global terminal-overrides', () => {
+    const steps = buildDetachedSessionFinalizeSteps('omx-demo', '%12', '3', true);
+    assert.equal(steps.some((step) => step.name === 'set-wsl-xt'), false);
+    assert.equal(steps.some((step) => step.args.includes('terminal-overrides')), false);
   });
 
   it('buildDetachedSessionRollbackSteps unregisters hooks before killing session', () => {

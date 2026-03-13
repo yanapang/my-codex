@@ -60,7 +60,6 @@ import {
   enableMouseScrolling,
   isNativeWindows,
   isTmuxAvailable,
-  isWsl2,
 } from '../team/tmux-session.js';
 import { getPackageRoot } from '../utils/package.js';
 import { codexConfigPath } from '../utils/paths.js';
@@ -1035,7 +1034,6 @@ export function buildDetachedSessionFinalizeSteps(
   hudPaneId: string | null,
   hookWindowIndex: string | null,
   enableMouse: boolean,
-  wsl2: boolean,
   nativeWindows = false,
 ): DetachedSessionTmuxStep[] {
   const steps: DetachedSessionTmuxStep[] = [];
@@ -1063,9 +1061,6 @@ export function buildDetachedSessionFinalizeSteps(
 
   if (enableMouse) {
     steps.push({ name: 'set-mouse', args: ['set-option', '-t', sessionName, 'mouse', 'on'] });
-    if (wsl2) {
-      steps.push({ name: 'set-wsl-xt', args: ['set-option', '-ga', 'terminal-overrides', ',xterm*:XT'] });
-    }
   }
   steps.push({ name: 'attach-session', args: ['attach-session', '-t', sessionName] });
   return steps;
@@ -1337,7 +1332,6 @@ function runCodex(
             hudPaneId,
             hookWindowIndex,
             process.env.OMX_MOUSE !== '0',
-            isWsl2(),
             nativeWindows,
           );
           if (nativeWindows && detachedWindowsCodexCmd) {
