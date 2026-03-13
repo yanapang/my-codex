@@ -673,7 +673,7 @@ sleep 5
         '--approval-mode',
         'yolo',
         '-i',
-        'Read .omx/state/team/team-gemini-prompt/workers/worker-1/inbox.md, start work now, then report concrete progress (not ACK-only).',
+        'Read .omx/state/team/team-gemini-prompt/workers/worker-1/inbox.md, start work now, report concrete progress, then continue assigned work or next feasible task.',
       ]);
 
       await shutdownTeam(runtime.teamName, cwd, { force: true });
