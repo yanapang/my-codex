@@ -14,70 +14,16 @@
 
 Livello di orchestrazione multi-agente per [OpenAI Codex CLI](https://github.com/openai/codex).
 
-## Guide in evidenza
+## Novità nella v0.9.0 — Spark Initiative
 
-- [Guida all’integrazione OpenClaw / gateway di notifiche generico](./docs/openclaw-integration.it.md)
+Spark Initiative è la release che rafforza il percorso nativo di esplorazione e ispezione in OMX.
 
-## Lingue
+- **Harness nativo per `omx explore`** — esegue l’esplorazione del repository in sola lettura tramite un percorso Rust più rapido e più rigoroso.
+- **`omx sparkshell`** — superficie nativa per operatori con riepiloghi dell’output lungo e cattura esplicita dei pannelli tmux.
+- **Asset nativi multipiattaforma** — il percorso di hydration per `omx-explore-harness`, `omx-sparkshell` e `native-release-manifest.json` ora fa parte della pipeline di release.
+- **CI/CD rafforzato** — aggiunge la configurazione esplicita della toolchain Rust nel job `build`, oltre a `cargo fmt --check` e `cargo clippy -- -D warnings`.
 
-- [English](./README.md)
-- [한국어 (Korean)](./README.ko.md)
-- [日本語 (Japanese)](./README.ja.md)
-- [简体中文 (Chinese Simplified)](./README.zh.md)
-- [繁體中文 (Chinese Traditional)](./README.zh-TW.md)
-- [Tiếng Việt (Vietnamese)](./README.vi.md)
-- [Español (Spanish)](./README.es.md)
-- [Português (Portuguese)](./README.pt.md)
-- [Русский (Russian)](./README.ru.md)
-- [Türkçe (Turkish)](./README.tr.md)
-- [Deutsch (German)](./README.de.md)
-- [Français (French)](./README.fr.md)
-- [Italiano (Italian)](./README.it.md)
-
-
-OMX trasforma Codex da un agente a sessione singola in un sistema coordinato con:
-- Role prompts (`/prompts:name`) per agenti specializzati
-- Workflow skills (`$name`) per modalità di esecuzione ripetibili
-- Orchestrazione team in tmux (`omx team`, `$team`)
-- Stato e memoria persistenti tramite server MCP
-
-## Perché OMX
-
-Codex CLI è efficace per compiti diretti. OMX aggiunge struttura per lavori più ampi:
-- Decomposizione ed esecuzione a stadi (`team-plan -> team-prd -> team-exec -> team-verify -> team-fix`)
-- Stato persistente del ciclo di vita delle modalità (`.omx/state/`)
-- Superfici di memoria e notepad per sessioni di lunga durata
-- Controlli operativi per avvio, verifica e annullamento
-
-OMX è un add-on, non un fork. Utilizza i punti di estensione nativi di Codex.
-
-## Requisiti
-
-- macOS o Linux (Windows tramite WSL2)
-- Node.js >= 20
-- Codex CLI installato (`npm install -g @openai/codex`)
-- Autenticazione Codex configurata
-
-## Avvio rapido (3 minuti)
-
-```bash
-npm install -g oh-my-codex
-omx setup
-omx doctor
-```
-
-Profilo di avvio consigliato per ambienti fidati:
-
-```bash
-omx --xhigh --madmax
-```
-
-## Novità nella v0.5.0
-
-- **Setup sensibile allo scope** con `omx setup --scope user|project` per modalità di installazione flessibili.
-- **Routing Spark worker** tramite `--spark` / `--madmax-spark` in modo che i worker del team possano usare `OMX_DEFAULT_SPARK_MODEL` senza forzare il modello leader.
-- **Consolidamento del catalogo** — rimossi prompt obsoleti (`deep-executor`, `scientist`) e 9 skill obsolete.
-- **Livelli di verbosità delle notifiche** per un controllo dettagliato dell'output CCNotifier.
+Vedi anche le [note di rilascio v0.9.0](./docs/release-notes-0.9.0.md) e il [testo della release](./docs/release-body-0.9.0.md).
 
 ## Prima sessione
 

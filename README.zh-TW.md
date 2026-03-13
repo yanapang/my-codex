@@ -14,88 +14,16 @@
 
 [OpenAI Codex CLI](https://github.com/openai/codex) 的多智能體編排層。
 
-## 精選指南
+## v0.9.0 新功能 — Spark Initiative
 
-- [OpenClaw／通用通知閘道整合指南](./docs/openclaw-integration.zh-TW.md)
+Spark Initiative 是一個強化 OMX 原生探索與檢查路徑的版本發布。
 
-## 語言
+- **`omx explore` 原生 harness** —— 以 Rust 原生 harness 更快且更嚴格地執行唯讀儲存庫探索。
+- **`omx sparkshell`** —— 面向操作員的原生檢查介面，支援長輸出摘要與 tmux pane 擷取。
+- **跨平台原生釋出資產** —— `omx-explore-harness`、`omx-sparkshell` 與 `native-release-manifest.json` 的 hydration 路徑已納入釋出流程。
+- **強化的 CI/CD** —— 在 `build` job 中加入明確的 Rust toolchain 設定，並新增 `cargo fmt --check` 與 `cargo clippy -- -D warnings`。
 
-- [English](./README.md)
-- [한국어 (Korean)](./README.ko.md)
-- [日本語 (Japanese)](./README.ja.md)
-- [简体中文 (Chinese Simplified)](./README.zh.md)
-- [繁體中文 (Chinese Traditional)](./README.zh-TW.md)
-- [Tiếng Việt (Vietnamese)](./README.vi.md)
-- [Español (Spanish)](./README.es.md)
-- [Português (Portuguese)](./README.pt.md)
-- [Русский (Russian)](./README.ru.md)
-- [Türkçe (Turkish)](./README.tr.md)
-- [Deutsch (German)](./README.de.md)
-- [Français (French)](./README.fr.md)
-- [Italiano (Italian)](./README.it.md)
-
-
-OMX 讓 Codex 從單一會話代理進化為協同運作的系統，具備以下能力：
-- 角色提示詞 (`/prompts:name`)，賦予代理各司其職的專業特質
-- 工作流程技能 (`$name`)，實現可重複執行的作業模式
-- 透過 tmux 互動模式（預設）或非 tmux 提示模式進行團隊編排 (`omx team`、`$team`)
-- 透過 MCP 伺服器實現持久化狀態與記憶
-
-## 為何選擇 OMX
-
-Codex CLI 擅長處理直接明確的任務。OMX 為更大規模的工作注入結構：
-- 分解任務並分階段執行 (`team-plan -> team-prd -> team-exec -> team-verify -> team-fix`)
-- 持久化的模式生命週期狀態 (`.omx/state/`)
-- 長時間運行會話所需的記憶與備忘錄介面
-- 啟動、驗證與取消的作業控制
-
-OMX 是插件，而非分支版本。它完全運用 Codex 的原生擴充點。
-
-## 定位：CLI 優先的編排層，MCP 支援的狀態管理
-
-OMX 最適合作為**外層 CLI 編排層**使用：
-- **控制平面（CLI/執行期）：** `omx team`、tmux 工作進程、生命週期指令
-- **能力/狀態平面（MCP）：** 任務狀態、信箱、記憶、診斷工具
-
-實際模式分工：
-- **`$team` / `omx team`**：耐久、可檢視、可恢復的多工作進程執行
-- **`$ultrawork`**：針對獨立任務的輕量平行扇出（元件模式）
-
-低 Token 消耗的團隊設定範例：
-
-```bash
-OMX_TEAM_WORKER_CLI=codex \
-OMX_TEAM_WORKER_LAUNCH_ARGS='-c model_reasoning_effort="low"' \
-omx team 2:explore "短暫有界的分析任務"
-```
-
-## 系統需求
-
-- macOS 或 Linux（Windows 可透過 WSL2 使用）
-- Node.js >= 20（CI 驗證 Node 20 及目前 LTS，目前為 Node 22）
-- 已安裝 Codex CLI（`npm install -g @openai/codex`）
-- 已完成 Codex 身份驗證設定
-
-## 快速入門（3 分鐘）
-
-```bash
-npm install -g oh-my-codex
-omx setup
-omx doctor
-```
-
-推薦的信任環境啟動設定：
-
-```bash
-omx --xhigh --madmax
-```
-
-## v0.5.0 新功能
-
-- 透過 `omx setup --scope user|project` 實現**範圍感知設定** — 彈性的安裝模式。
-- 透過 `--spark` / `--madmax-spark` 實現 **Spark 工作進程路由** — 團隊工作進程可使用 `OMX_DEFAULT_SPARK_MODEL`，無需強制套用領導者模型。
-- **目錄整合** — 移除已棄用的提示詞（`deep-executor`、`scientist`）及 9 個已棄用的技能，讓介面更為精簡。
-- **通知詳細程度等級** — 對 CCNotifier 輸出進行精細控制。
+詳細內容請參閱 [v0.9.0 版本說明](./docs/release-notes-0.9.0.md) 與 [釋出正文](./docs/release-body-0.9.0.md)。
 
 ## 首次會話
 

@@ -14,70 +14,16 @@
 
 [OpenAI Codex CLI](https://github.com/openai/codex)のためのマルチエージェントオーケストレーションレイヤー。
 
-## 注目ガイド
+## v0.9.0 の新機能 — Spark Initiative
 
-- [OpenClaw / 汎用通知ゲートウェイ統合ガイド](./docs/openclaw-integration.ja.md)
+Spark Initiative は、OMX のネイティブ探索・検査経路を強化するリリースです。
 
-## 言語
+- **`omx explore` ネイティブハーネス** — 読み取り専用のリポジトリ探索を Rust ベースのハーネスで高速かつ厳格に実行します。
+- **`omx sparkshell`** — 長い出力の要約と tmux pane キャプチャを行う、オペレーター向けのネイティブ検査サーフェスです。
+- **クロスプラットフォームのネイティブリリース資産** — `omx-explore-harness`、`omx-sparkshell`、`native-release-manifest.json` を中心とした hydration 経路がリリースパイプラインに組み込まれました。
+- **強化された CI/CD** — `build` ジョブでの明示的な Rust toolchain セットアップ、`cargo fmt --check`、`cargo clippy -- -D warnings` を追加しました。
 
-- [English](./README.md)
-- [한국어 (Korean)](./README.ko.md)
-- [日本語 (Japanese)](./README.ja.md)
-- [简体中文 (Chinese Simplified)](./README.zh.md)
-- [繁體中文 (Chinese Traditional)](./README.zh-TW.md)
-- [Tiếng Việt (Vietnamese)](./README.vi.md)
-- [Español (Spanish)](./README.es.md)
-- [Português (Portuguese)](./README.pt.md)
-- [Русский (Russian)](./README.ru.md)
-- [Türkçe (Turkish)](./README.tr.md)
-- [Deutsch (German)](./README.de.md)
-- [Français (French)](./README.fr.md)
-- [Italiano (Italian)](./README.it.md)
-
-
-OMXはCodexをシングルセッションエージェントから協調システムに変換します：
-- 専門エージェント用の role prompts (`/prompts:name`)
-- 再現可能な実行モード用の workflow skills (`$name`)
-- tmuxでのチームオーケストレーション (`omx team`, `$team`)
-- MCPサーバーによる永続的な状態とメモリ
-
-## なぜOMXか
-
-Codex CLIは直接的なタスクに強力です。OMXはより大規模な作業のための構造を追加します：
-- 分解と段階的実行 (`team-plan -> team-prd -> team-exec -> team-verify -> team-fix`)
-- 永続的なモードライフサイクル状態 (`.omx/state/`)
-- 長期セッション用のメモリとメモ帳サーフェス
-- 起動、検証、キャンセルのための運用制御
-
-OMXはアドオンであり、フォークではありません。Codexのネイティブ拡張ポイントを使用します。
-
-## 要件
-
-- macOSまたはLinux（WindowsはWSL2経由）
-- Node.js >= 20
-- Codex CLIがインストール済み (`npm install -g @openai/codex`)
-- Codex認証が設定済み
-
-## クイックスタート（3分）
-
-```bash
-npm install -g oh-my-codex
-omx setup
-omx doctor
-```
-
-信頼された環境向けの推奨起動プロファイル：
-
-```bash
-omx --xhigh --madmax
-```
-
-## v0.5.0の新機能
-
-- `omx setup --scope user|project`による**スコープ対応セットアップ** — 柔軟なインストールモード。
-- `--spark` / `--madmax-spark`による**Sparkワーカールーティング** — チームワーカーがリーダーモデルを強制せずに`OMX_DEFAULT_SPARK_MODEL`を使用可能。
-- **カタログ統合** — 非推奨プロンプト（`deep-executor`、`scientist`）と9つの非推奨スキルを削除し、よりスリムなサーフェスに。
-- **通知の詳細レベル** — CCNotifier出力のきめ細かい制御。
+詳細は [v0.9.0 リリースノート](./docs/release-notes-0.9.0.md) と [リリース本文](./docs/release-body-0.9.0.md) を参照してください。
 
 ## 最初のセッション
 

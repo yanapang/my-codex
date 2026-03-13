@@ -14,70 +14,16 @@
 
 [OpenAI Codex CLI](https://github.com/openai/codex)를 위한 멀티 에이전트 오케스트레이션 레이어.
 
-## 주요 가이드
+## v0.9.0 새로운 기능 — Spark Initiative
 
-- [OpenClaw / 범용 알림 게이트웨이 통합 가이드](./docs/openclaw-integration.ko.md)
+Spark Initiative는 OMX의 네이티브 탐색/검사 경로를 강화한 릴리스입니다.
 
-## 언어
+- **`omx explore` 네이티브 하네스** — 읽기 전용 저장소 탐색을 Rust 기반 하네스로 더 빠르고 엄격하게 실행합니다.
+- **`omx sparkshell`** — 긴 출력을 요약하고 tmux pane 캡처를 지원하는 운영자용 네이티브 검사 표면입니다.
+- **크로스 플랫폼 네이티브 릴리스 자산** — `omx-explore-harness`, `omx-sparkshell`, `native-release-manifest.json` 기반 hydration 경로가 릴리스 파이프라인에 포함됩니다.
+- **강화된 CI/CD** — `build` job의 명시적 Rust toolchain 설정, `cargo fmt --check`, `cargo clippy -- -D warnings`가 추가되었습니다.
 
-- [English](./README.md)
-- [한국어 (Korean)](./README.ko.md)
-- [日本語 (Japanese)](./README.ja.md)
-- [简体中文 (Chinese Simplified)](./README.zh.md)
-- [繁體中文 (Chinese Traditional)](./README.zh-TW.md)
-- [Tiếng Việt (Vietnamese)](./README.vi.md)
-- [Español (Spanish)](./README.es.md)
-- [Português (Portuguese)](./README.pt.md)
-- [Русский (Russian)](./README.ru.md)
-- [Türkçe (Turkish)](./README.tr.md)
-- [Deutsch (German)](./README.de.md)
-- [Français (French)](./README.fr.md)
-- [Italiano (Italian)](./README.it.md)
-
-
-OMX는 Codex를 단일 세션 에이전트에서 조율된 시스템으로 전환합니다:
-- 전문 에이전트를 위한 role prompts (`/prompts:name`)
-- 반복 가능한 실행 모드를 위한 workflow skills (`$name`)
-- tmux에서의 팀 오케스트레이션 (`omx team`, `$team`)
-- MCP 서버를 통한 영구 상태 및 메모리
-
-## OMX를 사용하는 이유
-
-Codex CLI는 직접적인 작업에 강합니다. OMX는 더 큰 작업을 위한 구조를 추가합니다:
-- 분해 및 단계적 실행 (`team-plan -> team-prd -> team-exec -> team-verify -> team-fix`)
-- 영구 모드 라이프사이클 상태 (`.omx/state/`)
-- 장기 세션을 위한 메모리 및 메모장 표면
-- 시작, 검증 및 취소를 위한 운영 제어
-
-OMX는 애드온이며, 포크가 아닙니다. Codex의 네이티브 확장 포인트를 사용합니다.
-
-## 요구사항
-
-- macOS 또는 Linux (Windows는 WSL2를 통해)
-- Node.js >= 20
-- Codex CLI 설치됨 (`npm install -g @openai/codex`)
-- Codex 인증 구성됨
-
-## 빠른 시작 (3분)
-
-```bash
-npm install -g oh-my-codex
-omx setup
-omx doctor
-```
-
-신뢰할 수 있는 환경을 위한 권장 시작 프로필:
-
-```bash
-omx --xhigh --madmax
-```
-
-## v0.5.0의 새로운 기능
-
-- `omx setup --scope user|project`를 통한 **범위 인식 설정** — 유연한 설치 모드.
-- `--spark` / `--madmax-spark`를 통한 **Spark worker 라우팅** — 팀 워커가 리더 모델을 강제하지 않고 `OMX_DEFAULT_SPARK_MODEL`를 사용 가능.
-- **카탈로그 통합** — 더 간결한 표면을 위해 deprecated 프롬프트(`deep-executor`, `scientist`)와 9개의 deprecated 스킬 제거.
-- **알림 상세 레벨** — CCNotifier 출력에 대한 세밀한 제어.
+자세한 내용은 [v0.9.0 릴리스 노트](./docs/release-notes-0.9.0.md) 및 [릴리스 본문](./docs/release-body-0.9.0.md)을 참고하세요.
 
 ## 첫 번째 세션
 

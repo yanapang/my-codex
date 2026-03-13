@@ -14,70 +14,16 @@
 
 [OpenAI Codex CLI](https://github.com/openai/codex) için çok ajanlı orkestrasyon katmanı.
 
-## Öne çıkan kılavuzlar
+## v0.9.0'daki Yenilikler — Spark Initiative
 
-- [OpenClaw / Genel Bildirim Geçidi Entegrasyon Kılavuzu](./docs/openclaw-integration.tr.md)
+Spark Initiative, OMX içindeki native keşif ve inceleme yolunu güçlendiren sürümdür.
 
-## Diller
+- **`omx explore` için native harness** — salt okunur depo keşfini Rust tabanlı daha hızlı ve daha sıkı bir yol üzerinden çalıştırır.
+- **`omx sparkshell`** — uzun çıktıları özetleyen ve açık tmux pane yakalama desteği veren operatör odaklı native inceleme yüzeyidir.
+- **Çapraz platform native release varlıkları** — `omx-explore-harness`, `omx-sparkshell` ve `native-release-manifest.json` için hydration yolu artık release pipeline'ın parçasıdır.
+- **Güçlendirilmiş CI/CD** — `build` job'ına açık Rust toolchain kurulumu ile birlikte `cargo fmt --check` ve `cargo clippy -- -D warnings` eklendi.
 
-- [English](./README.md)
-- [한국어 (Korean)](./README.ko.md)
-- [日本語 (Japanese)](./README.ja.md)
-- [简体中文 (Chinese Simplified)](./README.zh.md)
-- [繁體中文 (Chinese Traditional)](./README.zh-TW.md)
-- [Tiếng Việt (Vietnamese)](./README.vi.md)
-- [Español (Spanish)](./README.es.md)
-- [Português (Portuguese)](./README.pt.md)
-- [Русский (Russian)](./README.ru.md)
-- [Türkçe (Turkish)](./README.tr.md)
-- [Deutsch (German)](./README.de.md)
-- [Français (French)](./README.fr.md)
-- [Italiano (Italian)](./README.it.md)
-
-
-OMX, Codex'i tek oturumlu bir ajandan koordineli bir sisteme dönüştürür:
-- Uzmanlaşmış ajanlar için role prompts (`/prompts:name`)
-- Tekrarlanabilir çalışma modları için workflow skills (`$name`)
-- tmux'ta takım orkestrasyonu (`omx team`, `$team`)
-- MCP sunucuları aracılığıyla kalıcı durum ve bellek
-
-## Neden OMX
-
-Codex CLI doğrudan görevler için güçlüdür. OMX daha büyük işler için yapı ekler:
-- Ayrıştırma ve aşamalı yürütme (`team-plan -> team-prd -> team-exec -> team-verify -> team-fix`)
-- Kalıcı mod yaşam döngüsü durumu (`.omx/state/`)
-- Uzun süreli oturumlar için bellek ve notepad yüzeyleri
-- Başlatma, doğrulama ve iptal için operasyonel kontroller
-
-OMX bir eklentidir, fork değil. Codex'in yerel uzantı noktalarını kullanır.
-
-## Gereksinimler
-
-- macOS veya Linux (Windows WSL2 ile)
-- Node.js >= 20
-- Codex CLI kurulu (`npm install -g @openai/codex`)
-- Codex kimlik doğrulaması yapılandırılmış
-
-## Hızlı Başlangıç (3 dakika)
-
-```bash
-npm install -g oh-my-codex
-omx setup
-omx doctor
-```
-
-Güvenilir ortam için önerilen başlatma profili:
-
-```bash
-omx --xhigh --madmax
-```
-
-## v0.5.0'daki Yenilikler
-
-- `omx setup --scope user|project` ile **kapsam duyarlı kurulum** — esnek kurulum modları.
-- `--spark` / `--madmax-spark` ile **Spark worker yönlendirmesi** — takım çalışanlarının lider modelini zorlamadan `OMX_DEFAULT_SPARK_MODEL` kullanabilmesi.
-- **Katalog birleştirme** — kullanımdan kaldırılmış prompt'lar (`deep-executor`, `scientist`) ve 9 kullanımdan kaldırılmış skill kaldırıldı.
-- **Bildirim ayrıntı seviyeleri** — CCNotifier çıktısı için ince taneli kontrol.
+Ayrıntılar için [v0.9.0 release notları](./docs/release-notes-0.9.0.md) ve [release body](./docs/release-body-0.9.0.md) dosyalarına bakın.
 
 ## İlk Oturum
 
