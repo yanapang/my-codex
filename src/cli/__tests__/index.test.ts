@@ -485,12 +485,20 @@ describe('project launch scope helpers', () => {
 });
 
 describe('resolveCodexLaunchPolicy', () => {
-  it('launches directly when outside tmux', () => {
-    assert.equal(resolveCodexLaunchPolicy({}), 'direct');
+  it('launches directly on macOS when outside tmux to preserve native image paste', () => {
+    assert.equal(resolveCodexLaunchPolicy({}, 'darwin', true), 'direct');
   });
 
   it('uses tmux-aware launch path when already inside tmux', () => {
-    assert.equal(resolveCodexLaunchPolicy({ TMUX: '/tmp/tmux-1000/default,123,0' }), 'inside-tmux');
+    assert.equal(resolveCodexLaunchPolicy({ TMUX: '/tmp/tmux-1000/default,123,0' }, 'darwin', true), 'inside-tmux');
+  });
+
+  it('uses detached tmux on non-macOS hosts when outside tmux and tmux is available', () => {
+    assert.equal(resolveCodexLaunchPolicy({}, 'linux', true), 'detached-tmux');
+  });
+
+  it('launches directly when tmux is unavailable outside tmux', () => {
+    assert.equal(resolveCodexLaunchPolicy({}, 'linux', false), 'direct');
   });
 });
 

@@ -274,10 +274,19 @@ export function commandOwnsLocalHelp(command: CliCommand): boolean {
   return NESTED_HELP_COMMANDS.has(command);
 }
 
-export type CodexLaunchPolicy = 'inside-tmux' | 'direct';
+export type CodexLaunchPolicy = 'inside-tmux' | 'detached-tmux' | 'direct';
 
-export function resolveCodexLaunchPolicy(env: NodeJS.ProcessEnv = process.env): CodexLaunchPolicy {
-  return env.TMUX ? 'inside-tmux' : 'direct';
+export function resolveCodexLaunchPolicy(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+  tmuxAvailable: boolean = isTmuxAvailable(),
+): CodexLaunchPolicy {
+  if (env.TMUX) return 'inside-tmux';
+  // On macOS, preserve the native terminal paste path for clipboard images.
+  // Detached tmux sessions strip the rich paste payload that Codex consumes,
+  // so image pastes appear to do nothing.
+  if (platform === 'darwin') return 'direct';
+  return tmuxAvailable ? 'detached-tmux' : 'direct';
 }
 
 type ExecFileSyncFailure = NodeJS.ErrnoException & {
@@ -1278,7 +1287,7 @@ function runCodex(
         killTmuxPane(paneId);
       }
     }
-  } else if (!isTmuxAvailable()) {
+  } else if (launchPolicy === 'direct') {
     // Detached HUD sessions require tmux. Skip the bootstrap entirely when the
     // binary is unavailable so direct launches do not emit noisy ENOENT logs.
     runCodexBlocking(cwd, launchArgs, codexEnvWithNotify);
