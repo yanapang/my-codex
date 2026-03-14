@@ -7,9 +7,5 @@ name = "omx-explore-harness"
 version = "0.9.0"
 
 [[package]]
-name = "omx-runtime"
-version = "0.9.0"
-
-[[package]]
 name = "omx-sparkshell"
 version = "0.9.0"

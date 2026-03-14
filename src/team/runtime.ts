@@ -2270,7 +2270,7 @@ async function notifyWorkerOutcome(config: TeamConfig, workerIndex: number, mess
   const worker = config.workers.find((candidate) => candidate.index === workerIndex);
   if (!worker) return { ok: false, transport: 'none', reason: 'worker_not_found' };
 
-  if (shouldUsePromptTransport(config)) {
+  if (config.worker_launch_mode === 'prompt') {
     const handle = getPromptWorkerHandle(config.name, worker.name);
     if (!handle) return { ok: false, transport: 'prompt_stdin', reason: 'prompt_worker_handle_missing' };
     try {
@@ -2298,16 +2298,6 @@ async function notifyWorkerOutcome(config: TeamConfig, workerIndex: number, mess
       reason: `tmux_send_keys_failed:${error instanceof Error ? error.message : String(error)}`,
     };
   }
-}
-
-function isPhase1PromptModeDisabled(): boolean {
-  return process.env.OMX_RUNTIME_HUD_NATIVE === '1'
-    || process.env.OMX_RUNTIME_WATCHERS_NATIVE === '1'
-    || process.env.OMX_RUNTIME_REPLY_LISTENER_NATIVE === '1';
-}
-
-function shouldUsePromptTransport(config: TeamConfig): boolean {
-  return config.worker_launch_mode === 'prompt' && !isPhase1PromptModeDisabled();
 }
 
 function resolveDispatchPolicy(
@@ -2385,7 +2375,7 @@ async function dispatchCriticalInboxInstruction(params: {
     requireWorkerStartupEvidence,
   } = params;
 
-  if (shouldUsePromptTransport(config)) {
+  if (config.worker_launch_mode === 'prompt') {
     return await queueInboxInstruction({
       teamName,
       workerName,
@@ -2758,7 +2748,7 @@ async function deliverPendingMailboxMessages(
         1,
         resolveInstructionStateRoot(workerInfo.worktree_path),
       );
-      const transportPreference = shouldUsePromptTransport(config)
+      const transportPreference = config.worker_launch_mode === 'prompt'
         ? 'prompt_stdin'
         : (dispatchPolicy.dispatch_mode === 'transport_direct' ? 'transport_direct' : 'hook_preferred_with_fallback');
       const fallbackAllowed = transportPreference === 'hook_preferred_with_fallback';
@@ -2899,7 +2889,7 @@ export async function sendWorkerMessage(
     1,
     resolveInstructionStateRoot(recipient.worktree_path),
   );
-  const transportPreference = shouldUsePromptTransport(config)
+  const transportPreference = config.worker_launch_mode === 'prompt'
     ? 'prompt_stdin'
     : (dispatchPolicy.dispatch_mode === 'transport_direct' ? 'transport_direct' : 'hook_preferred_with_fallback');
   const outcome = await queueDirectMailboxMessage({
@@ -2951,7 +2941,7 @@ export async function broadcastWorkerMessage(
   if (!config) throw new Error(`Team ${sanitized} not found`);
   const manifest = await readTeamManifestV2(sanitized, cwd);
   const dispatchPolicy = resolveDispatchPolicy(manifest?.policy, config.worker_launch_mode);
-  const transportPreference = shouldUsePromptTransport(config)
+  const transportPreference = config.worker_launch_mode === 'prompt'
     ? 'prompt_stdin'
     : (dispatchPolicy.dispatch_mode === 'transport_direct' ? 'transport_direct' : 'hook_preferred_with_fallback');
 

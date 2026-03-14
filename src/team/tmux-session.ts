@@ -18,7 +18,6 @@ import {
 } from '../../scripts/tmux-hook-engine.js';
 import { sleep, sleepSync } from '../utils/sleep.js';
 import { classifySpawnError, resolveCommandPathForPlatform, spawnPlatformCommandSync } from '../utils/platform-command.js';
-import { buildPhase1HudWatchCommand, resolveRuntimeBinaryPath } from '../cli/runtime-native.js';
 
 const execFileAsync = promisify(execFile);
 import { HUD_RESIZE_RECONCILE_DELAY_SECONDS, HUD_TMUX_TEAM_HEIGHT_LINES } from '../hud/constants.js';
@@ -81,19 +80,6 @@ interface TmuxPaneInfo {
   paneId: string;
   currentCommand: string;
   startCommand: string;
-}
-
-function buildTeamHudWatchCommand(omxEntry: string, cwd: string): string {
-  const translatedOmxEntry = translatePathForMsys(omxEntry);
-  try {
-    const runtimeBinary = translatePathForMsys(resolveRuntimeBinaryPath({ cwd, env: process.env }));
-    return buildPhase1HudWatchCommand(translatedOmxEntry, {
-      env: { ...process.env, OMX_RUNTIME_HUD_NATIVE: '1' },
-      runtimeBinary,
-    });
-  } catch {
-    return buildPhase1HudWatchCommand(translatedOmxEntry);
-  }
 }
 
 type SpawnSyncLike = typeof spawnSync;
@@ -885,7 +871,7 @@ export function createTeamSession(
     let resizeHookTarget: string | null = null;
     const omxEntry = process.argv[1];
     if (omxEntry && omxEntry.trim() !== '') {
-      const hudCmd = buildTeamHudWatchCommand(omxEntry, cwd);
+      const hudCmd = `node ${shellQuoteSingle(translatePathForMsys(omxEntry))} hud --watch`;
       const hudCwd = translatePathForMsys(cwd);
       const hudResult = runTmux([
         'split-window', '-v', '-f', '-l', String(HUD_TMUX_TEAM_HEIGHT_LINES), '-t', teamTarget, '-d', '-P', '-F', '#{pane_id}', '-c', hudCwd, hudCmd,
@@ -982,7 +968,7 @@ export function restoreStandaloneHudPane(
   const omxEntry = process.argv[1];
   if (!omxEntry || omxEntry.trim() === '') return null;
 
-  const hudCmd = buildTeamHudWatchCommand(omxEntry, cwd);
+  const hudCmd = `node ${shellQuoteSingle(translatePathForMsys(omxEntry))} hud --watch`;
   const hudCwd = translatePathForMsys(cwd);
   const hudResult = runTmux([
     'split-window',
