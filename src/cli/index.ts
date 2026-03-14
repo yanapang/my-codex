@@ -37,7 +37,6 @@ import {
 } from '../mcp/state-paths.js';
 import { maybeCheckAndPromptUpdate } from './update.js';
 import { maybePromptGithubStar } from './star-prompt.js';
-import { buildPhase1HudWatchCommand, resolveRuntimeBinaryPath } from './runtime-native.js';
 import {
   generateOverlay,
   removeSessionModelInstructionsFile,
@@ -1330,15 +1329,7 @@ function runCodex(
     sessionModelInstructionsPath(cwd, sessionId),
   );
   const omxBin = process.argv[1];
-  let hudWatchCommand = buildPhase1HudWatchCommand(omxBin);
-  try {
-    const runtimeBinary = resolveRuntimeBinaryPath({ cwd, env: process.env });
-    hudWatchCommand = buildPhase1HudWatchCommand(omxBin, {
-      env: { ...process.env, OMX_RUNTIME_HUD_NATIVE: '1' },
-      runtimeBinary,
-    });
-  } catch {}
-  const hudCmd = buildTmuxPaneCommand('sh', ['-lc', hudWatchCommand]);
+  const hudCmd = buildTmuxPaneCommand('node', [omxBin, 'hud', '--watch']);
   const inheritLeaderFlags = process.env[TEAM_INHERIT_LEADER_FLAGS_ENV] !== '0';
   const workerLaunchArgs = resolveTeamWorkerLaunchArgsEnv(
     process.env[TEAM_WORKER_LAUNCH_ARGS_ENV],
@@ -1781,30 +1772,15 @@ function tryKillPid(pid: number, signal: NodeJS.Signals = 'SIGTERM'): boolean {
   }
 }
 
-function shouldUseNativeWatchers(cwd: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  if (env.OMX_RUNTIME_WATCHERS_NATIVE === '1') return true;
-
-  try {
-    resolveRuntimeBinaryPath({ cwd, env });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function startNotifyFallbackWatcher(cwd: string): Promise<void> {
   if (process.env.OMX_NOTIFY_FALLBACK === '0') return;
 
   const { mkdir, writeFile, readFile } = await import('fs/promises');
   const pidPath = notifyFallbackPidPath(cwd);
   const pkgRoot = getPackageRoot();
+  const watcherScript = join(pkgRoot, 'scripts', 'notify-fallback-watcher.js');
   const notifyScript = join(pkgRoot, 'scripts', 'notify-hook.js');
-  if (!existsSync(notifyScript)) return;
-  const useNativeWatcher = shouldUseNativeWatchers(cwd);
-  if (!useNativeWatcher) {
-    console.warn('[omx] warning: native notify-fallback watcher unavailable; phase-1 runtime path requires omx-runtime');
-    return;
-  }
+  if (!existsSync(watcherScript) || !existsSync(notifyScript)) return;
 
   // Stop stale watcher from a previous run.
   if (existsSync(pidPath)) {
@@ -1829,32 +1805,28 @@ async function startNotifyFallbackWatcher(cwd: string): Promise<void> {
       error: error instanceof Error ? error.message : String(error),
     });
   });
-  const child = useNativeWatcher
-    ? spawn(
-      resolveRuntimeBinaryPath({ cwd, env: process.env }),
-      [
-        'notify-fallback',
-        '--cwd',
-        cwd,
-        '--notify-script',
-        notifyScript,
-        '--pid-file',
-        pidPath,
-        '--parent-pid',
-        String(process.pid),
-        ...(process.env.OMX_NOTIFY_FALLBACK_MAX_LIFETIME_MS
-          ? ['--max-lifetime-ms', process.env.OMX_NOTIFY_FALLBACK_MAX_LIFETIME_MS]
-          : []),
-      ],
-      {
-        cwd,
-        detached: true,
-        stdio: 'ignore',
-        env: process.env,
-      }
-    )
-    : null;
-  if (!child) return;
+  const child = spawn(
+    process.execPath,
+    [
+      watcherScript,
+      '--cwd',
+      cwd,
+      '--notify-script',
+      notifyScript,
+      '--pid-file',
+      pidPath,
+      '--parent-pid',
+      String(process.pid),
+      ...(process.env.OMX_NOTIFY_FALLBACK_MAX_LIFETIME_MS
+        ? ['--max-lifetime-ms', process.env.OMX_NOTIFY_FALLBACK_MAX_LIFETIME_MS]
+        : []),
+    ],
+    {
+      cwd,
+      detached: true,
+      stdio: 'ignore',
+    }
+  );
   child.unref();
 
   await writeFile(
@@ -1873,11 +1845,9 @@ async function startHookDerivedWatcher(cwd: string): Promise<void> {
 
   const { mkdir, writeFile, readFile } = await import('fs/promises');
   const pidPath = hookDerivedWatcherPidPath(cwd);
-  const useNativeWatcher = shouldUseNativeWatchers(cwd);
-  if (!useNativeWatcher) {
-    console.warn('[omx] warning: native hook-derived watcher unavailable; phase-1 runtime path requires omx-runtime');
-    return;
-  }
+  const pkgRoot = getPackageRoot();
+  const watcherScript = join(pkgRoot, 'scripts', 'hook-derived-watcher.js');
+  if (!existsSync(watcherScript)) return;
 
   if (existsSync(pidPath)) {
     try {
@@ -1899,25 +1869,16 @@ async function startHookDerivedWatcher(cwd: string): Promise<void> {
       error: error instanceof Error ? error.message : String(error),
     });
   });
-  const child = useNativeWatcher
-    ? spawn(
-      resolveRuntimeBinaryPath({ cwd, env: process.env }),
-      [
-        'hook-derived',
-        '--cwd',
-        cwd,
-        '--pid-file',
-        pidPath,
-      ],
-      {
-        cwd,
-        detached: true,
-        stdio: 'ignore',
-        env: process.env,
-      }
-    )
-    : null;
-  if (!child) return;
+  const child = spawn(
+    process.execPath,
+    [watcherScript, '--cwd', cwd],
+    {
+      cwd,
+      detached: true,
+      stdio: 'ignore',
+      env: process.env,
+    }
+  );
   child.unref();
 
   await writeFile(
@@ -1986,38 +1947,31 @@ async function stopHookDerivedWatcher(cwd: string): Promise<void> {
 async function flushNotifyFallbackOnce(cwd: string): Promise<void> {
   const { spawnSync } = await import('child_process');
   const pkgRoot = getPackageRoot();
+  const watcherScript = join(pkgRoot, 'scripts', 'notify-fallback-watcher.js');
   const notifyScript = join(pkgRoot, 'scripts', 'notify-hook.js');
-  if (!existsSync(notifyScript)) return;
-  if (shouldUseNativeWatchers(cwd)) {
-    const runtimeBinaryPath = resolveRuntimeBinaryPath({ cwd, env: process.env });
-    spawnSync(runtimeBinaryPath, ['notify-fallback', '--once', '--cwd', cwd, '--notify-script', notifyScript], {
-      cwd,
-      stdio: 'ignore',
-      timeout: 3000,
-      env: process.env,
-    });
-    return;
-  }
-  console.warn('[omx] warning: native notify-fallback watcher unavailable; skipped one-shot flush because phase-1 runtime path requires omx-runtime');
+  if (!existsSync(watcherScript) || !existsSync(notifyScript)) return;
+  spawnSync(process.execPath, [watcherScript, '--once', '--cwd', cwd, '--notify-script', notifyScript], {
+    cwd,
+    stdio: 'ignore',
+    timeout: 3000,
+  });
 }
 
 async function flushHookDerivedWatcherOnce(cwd: string): Promise<void> {
   if (process.env.OMX_HOOK_DERIVED_SIGNALS !== '1') return;
   const { spawnSync } = await import('child_process');
-  if (shouldUseNativeWatchers(cwd)) {
-    const runtimeBinaryPath = resolveRuntimeBinaryPath({ cwd, env: process.env });
-    spawnSync(runtimeBinaryPath, ['hook-derived', '--once', '--cwd', cwd], {
-      cwd,
-      stdio: 'ignore',
-      timeout: 3000,
-      env: {
-        ...process.env,
-        OMX_HOOK_DERIVED_SIGNALS: '1',
-      },
-    });
-    return;
-  }
-  console.warn('[omx] warning: native hook-derived watcher unavailable; skipped one-shot flush because phase-1 runtime path requires omx-runtime');
+  const pkgRoot = getPackageRoot();
+  const watcherScript = join(pkgRoot, 'scripts', 'hook-derived-watcher.js');
+  if (!existsSync(watcherScript)) return;
+  spawnSync(process.execPath, [watcherScript, '--once', '--cwd', cwd], {
+    cwd,
+    stdio: 'ignore',
+    timeout: 3000,
+    env: {
+      ...process.env,
+      OMX_HOOK_DERIVED_SIGNALS: '1',
+    },
+  });
 }
 
 async function cancelModes(): Promise<void> {

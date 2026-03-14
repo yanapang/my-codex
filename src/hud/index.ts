@@ -15,7 +15,6 @@ import { renderHud } from './render.js';
 import type { HudFlags, HudPreset, HudRenderContext, ResolvedHudConfig } from './types.js';
 import { HUD_TMUX_HEIGHT_LINES } from './constants.js';
 import { sleep } from '../utils/sleep.js';
-import { buildPhase1HudWatchCommand } from '../cli/runtime-native.js';
 
 export const HUD_USAGE = [
   'Usage:',
@@ -279,7 +278,10 @@ export function buildTmuxSplitArgs(
   omxBin: string,
   preset?: string,
 ): string[] {
-  const cmd = buildPhase1HudWatchCommand(omxBin, { preset });
+  // Defense-in-depth: keep preset constrained even if this helper is reused.
+  const safePreset = parseHudPreset(preset);
+  const presetArg = safePreset ? ` --preset=${safePreset}` : '';
+  const cmd = `node ${shellEscape(omxBin)} hud --watch${presetArg}`;
   return ['split-window', '-v', '-l', String(HUD_TMUX_HEIGHT_LINES), '-c', cwd, cmd];
 }
 

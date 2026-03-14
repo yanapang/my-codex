@@ -411,18 +411,13 @@ function resolveTeamWorkingDirectoryFromMetadata(
 function resolveTeamWorkingDirectory(teamName: string, preferredCwd: string): string {
   const normalizedTeamName = String(teamName || '').trim();
   if (!normalizedTeamName) return preferredCwd;
-
   const envTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
   if (typeof envTeamStateRoot === 'string' && envTeamStateRoot.trim() !== '') {
     return stateRootToWorkingDirectory(envTeamStateRoot.trim());
   }
 
   const seeds: string[] = [];
-  const normalizedPreferredCwd = typeof preferredCwd === 'string' ? preferredCwd.trim() : '';
-  const candidateSeeds = normalizedPreferredCwd
-    ? [normalizedPreferredCwd]
-    : [process.cwd()];
-  for (const seed of candidateSeeds) {
+  for (const seed of [preferredCwd, process.cwd()]) {
     if (typeof seed !== 'string' || seed.trim() === '') continue;
     if (!seeds.includes(seed)) seeds.push(seed);
   }
@@ -439,7 +434,6 @@ function resolveTeamWorkingDirectory(teamName: string, preferredCwd: string): st
       cursor = parent;
     }
   }
-
   return preferredCwd;
 }
 

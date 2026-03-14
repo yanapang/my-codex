@@ -12,7 +12,6 @@ for (const path of [
   join(root, 'bin', 'omx-explore-harness.exe'),
   join(root, 'bin', 'omx-explore-harness.meta.json'),
   join(root, 'bin', 'native'),
-  join(root, 'bin', 'rust'),
 ]) {
   await rm(path, { recursive: true, force: true });
 }

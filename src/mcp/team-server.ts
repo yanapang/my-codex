@@ -11,7 +11,8 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { readFile } from 'fs/promises';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import { homedir } from 'os';
 import { z } from 'zod';
@@ -19,7 +20,6 @@ import { killWorkerPanes } from '../team/tmux-session.js';
 import { teamReadConfig as readTeamConfig } from '../team/team-ops.js';
 import { NudgeTracker } from '../team/idle-nudge.js';
 import { getLatestTeamEventCursor, waitForTeamEvent } from '../team/state/events.js';
-import { resolveRuntimeBinaryPath } from '../cli/runtime-native.js';
 import { autoStartStdioMcpServer } from './bootstrap.js';
 
 // ---------------------------------------------------------------------------
@@ -324,12 +324,12 @@ export async function handleTeamToolCall(request: {
         const { teamName, agentTypes, tasks, cwd: inputCwd } = startSchema.parse(a);
 
         const jobId = `omx-${Date.now().toString(36)}`;
-        const runtimeBinaryPath = resolveRuntimeBinaryPath({ cwd: inputCwd, env: process.env });
+        const runtimeCliPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'team', 'runtime-cli.js');
 
         const job: OmxTeamJob = { status: 'running', startedAt: Date.now(), teamName, cwd: inputCwd };
         omxTeamJobs.set(jobId, job);
 
-        const child = spawn(runtimeBinaryPath, ['runtime-run'], {
+        const child = spawn('node', [runtimeCliPath], {
           env: { ...process.env, OMX_JOB_ID: jobId, OMX_JOBS_DIR: getOmxJobsDir() },
           stdio: ['pipe', 'pipe', 'pipe'],
         });
