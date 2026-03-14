@@ -36,6 +36,7 @@ describe('sparkshell packaging scaffold', () => {
     assert.equal(pkg.files?.includes('bin/omx.js'), true, 'expected package files allowlist to include bin/omx.js');
     assert.equal(pkg.files?.includes('bin/'), false, 'did not expect broad bin/ allowlist in package files');
     assert.equal(pkg.files?.includes('bin/native/'), false, 'did not expect package files to include bin/native/');
+    assert.equal(pkg.files?.includes('bin/rust/'), false, 'did not expect package files to include bin/rust/');
     assert.equal(pkg.files?.includes('scripts/build-sparkshell.mjs'), true);
     assert.equal(pkg.files?.includes('scripts/test-sparkshell.mjs'), true);
 
@@ -51,7 +52,7 @@ describe('sparkshell packaging scaffold', () => {
         encoding: 'utf-8',
         env: {
           ...process.env,
-          OMX_SPARKSHELL_MANIFEST: join(process.cwd(), 'native', 'omx-sparkshell', 'Cargo.toml'),
+          OMX_SPARKSHELL_MANIFEST: join(process.cwd(), 'crates', 'omx-sparkshell', 'Cargo.toml'),
           OMX_SPARKSHELL_STAGE_DIR: stagedRoot,
         },
       });
