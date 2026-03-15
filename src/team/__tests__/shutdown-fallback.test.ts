@@ -31,8 +31,9 @@ function withoutTeamWorkerEnv<T>(fn: () => Promise<T>): Promise<T> {
 describe('shutdown fallback worktree reports', () => {
   it('shutdownTeam checkpoints dirty detached worker worktrees, merges them, and writes a report', async () => {
     const repo = await initRepo();
-    const binDir = await mkdtemp(join(tmpdir(), 'omx-shutdown-fallback-bin-'));
+    const binDir = join(repo, 'bin');
     const fakeCodexPath = join(binDir, 'codex');
+    await mkdir(binDir, { recursive: true });
     await writeFile(
       fakeCodexPath,
       `#!/usr/bin/env node
@@ -103,7 +104,6 @@ process.on('SIGTERM', () => process.exit(0));
       else delete process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
       if (typeof prevWorkerCli === 'string') process.env.OMX_TEAM_WORKER_CLI = prevWorkerCli;
       else delete process.env.OMX_TEAM_WORKER_CLI;
-      await rm(binDir, { recursive: true, force: true }).catch(() => {});
       if (preservedWorktreePath) {
         await rm(preservedWorktreePath, { recursive: true, force: true }).catch(() => {});
       }
