@@ -4,8 +4,41 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-03-15
+
+54 commits across 26 PRs from `v0.9.0..dev`. Contributors: [@Yeachan-Heo](https://github.com/Yeachan-Heo), [@HaD0Yun](https://github.com/HaD0Yun).
+
+### Added
+- **`omx autoresearch`** _(experimental)_ — new autonomous research mode that iteratively explores topics and self-terminates after repeated noop iterations. (PRs [#847](https://github.com/Yeachan-Heo/oh-my-codex/pull/847), [#849](https://github.com/Yeachan-Heo/oh-my-codex/pull/849))
+- **`omx exec` wrapper** — first-pass execution wrapper that lets users run commands through the OMX orchestration layer directly. (PR [#832](https://github.com/Yeachan-Heo/oh-my-codex/pull/832))
+- **Team worktrees enforced by default** — team mode now creates isolated git worktrees for each worker by default, improving parallel safety. (PR [#804](https://github.com/Yeachan-Heo/oh-my-codex/pull/804))
+- **Deep-interview intent-first mode** — deep-interview now classifies user intent upfront before entering the Socratic question loop. (PR [#829](https://github.com/Yeachan-Heo/oh-my-codex/pull/829))
+- **Incremental worktree merge tracking** — team worktree merges are now tracked incrementally, enabling smarter conflict detection and resolution. (PR [#846](https://github.com/Yeachan-Heo/oh-my-codex/pull/846))
+
 ### Changed
-- **Team event/docs contract now spells out wakeable vs audit-only signals more clearly** — the interop contract now documents canonical event reads, durable-but-non-wakeable merge/diff reports, and continued `worker_merge_conflict` compatibility for actionable integration conflicts; the team allocation reference now reflects the current lane-aware startup heuristic and `allocation_reason` review seam.
+- **Deep-interview execution handoff contract documented** — the bridge between interview and autonomous execution is now an explicit, testable contract. (PR [#851](https://github.com/Yeachan-Heo/oh-my-codex/pull/851))
+- **Team event/docs contract clarified** — interop contract now documents canonical event reads, wakeable vs audit-only signals, and `allocation_reason` review seam.
+- **CI Rust runtime alignment reverted** — crates runtime packaging was reverted after compatibility issues. (PRs [#821](https://github.com/Yeachan-Heo/oh-my-codex/pull/821), [#840](https://github.com/Yeachan-Heo/oh-my-codex/pull/840))
+
+### Fixed
+- **Windows psmux bootstrap hardened** — detached psmux bootstrap on Windows now handles edge cases that caused silent failures. (PR [#854](https://github.com/Yeachan-Heo/oh-my-codex/pull/854), closes [#853](https://github.com/Yeachan-Heo/oh-my-codex/issues/853))
+- **Team worktree continuous integration** — hybrid merge strategy with auto-commit and cross-worker rebase for reliable worktree synchronization. (PR [#852](https://github.com/Yeachan-Heo/oh-my-codex/pull/852))
+- **Setup skill validation** — skills are now validated before install to prevent broken skill directories. (PR [#845](https://github.com/Yeachan-Heo/oh-my-codex/pull/845), issue [#844](https://github.com/Yeachan-Heo/oh-my-codex/issues/844))
+- **Ralph auto-expand iterations** — active Ralph sessions now auto-expand `max_iterations` instead of halting prematurely. (PR [#843](https://github.com/Yeachan-Heo/oh-my-codex/pull/843), issue [#842](https://github.com/Yeachan-Heo/oh-my-codex/issues/842))
+- **Setup defaults to CODEX_HOME** — user skills path now correctly defaults to `CODEX_HOME`. (PR [#839](https://github.com/Yeachan-Heo/oh-my-codex/pull/839))
+- **Post-ralplan team context preserved** — team follow-up context no longer lost after ralplan completes. (PR [#833](https://github.com/Yeachan-Heo/oh-my-codex/pull/833))
+- **Pipeline planning artifact checks unified** — planning-complete artifact detection now uses a single consistent check. (PR [#828](https://github.com/Yeachan-Heo/oh-my-codex/pull/828), issue [#827](https://github.com/Yeachan-Heo/oh-my-codex/issues/827))
+- **Config.toml merge fix** — existing notify and tui entries are now preserved during config merge. (PR [#826](https://github.com/Yeachan-Heo/oh-my-codex/pull/826), issue [#825](https://github.com/Yeachan-Heo/oh-my-codex/issues/825))
+- **Project .omx gitignore sync** — fixed gitignore sync for project-scoped `.omx` directories. (PR [#824](https://github.com/Yeachan-Heo/oh-my-codex/pull/824), issue [#823](https://github.com/Yeachan-Heo/oh-my-codex/issues/823))
+- **Team HUD full-width** — team HUD layout now spans the full terminal width. (PR [#822](https://github.com/Yeachan-Heo/oh-my-codex/pull/822), issue [#822](https://github.com/Yeachan-Heo/oh-my-codex/issues/822))
+- **tmux mouse state leak** — stopped leaking server-global mouse state across sessions. (PR [#820](https://github.com/Yeachan-Heo/oh-my-codex/pull/820), issue [#817](https://github.com/Yeachan-Heo/oh-my-codex/issues/817))
+- **Sparkshell glibc fallback** — sparkshell now falls back gracefully when encountering glibc mismatch on older Linux systems. (PR [#813](https://github.com/Yeachan-Heo/oh-my-codex/pull/813), issue [#812](https://github.com/Yeachan-Heo/oh-my-codex/issues/812))
+- **macOS clipboard image paste** — preserved correct clipboard image paste path on macOS. (PR [#810](https://github.com/Yeachan-Heo/oh-my-codex/pull/810), issue [#809](https://github.com/Yeachan-Heo/oh-my-codex/issues/809))
+- **Release smoke hydration** — localized smoke hydration assets for offline validation. (PR [#806](https://github.com/Yeachan-Heo/oh-my-codex/pull/806))
+
+### Internal
+- Removed unused `sendRebaseConflictMessageToWorker` function. (PR [#852](https://github.com/Yeachan-Heo/oh-my-codex/pull/852))
+- Isolated dirty-worktree test helpers for better test hygiene. (PR [#849](https://github.com/Yeachan-Heo/oh-my-codex/pull/849))
 
 ## [0.9.0] - 2026-03-12
 
