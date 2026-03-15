@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from 'child_process';
 import { existsSync } from 'fs';
-import { mkdir, readFile, writeFile } from 'fs/promises';
+import { mkdir, readFile, symlink, writeFile } from 'fs/promises';
 import { dirname, join } from 'path';
 import { cancelMode, readModeState, startMode, updateModeState } from '../modes/base.js';
 import {
@@ -129,7 +129,7 @@ interface AutoresearchInstructionLedgerSummary {
 }
 
 const AUTORESEARCH_RESULTS_HEADER = 'iteration\tcommit\tpass\tscore\tstatus\tdescription\n';
-const ALLOWED_RUNTIME_UNTRACKED_FILES = ['results.tsv', 'run.log'];
+const AUTORESEARCH_WORKTREE_EXCLUDES = ['results.tsv', 'run.log', 'node_modules'];
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -185,8 +185,7 @@ function tryResolveGitCommit(worktreePath: string, ref: string): string | null {
 }
 
 async function writeGitInfoExclude(worktreePath: string, pattern: string): Promise<void> {
-  const gitDir = readGit(worktreePath, ['rev-parse', '--git-dir']);
-  const excludePath = join(worktreePath, gitDir, 'info', 'exclude');
+  const excludePath = readGit(worktreePath, ['rev-parse', '--git-path', 'info/exclude']);
   const existing = existsSync(excludePath)
     ? await readFile(excludePath, 'utf-8')
     : '';
@@ -198,9 +197,18 @@ async function writeGitInfoExclude(worktreePath: string, pattern: string): Promi
 }
 
 async function ensureRuntimeExcludes(worktreePath: string): Promise<void> {
-  for (const file of ALLOWED_RUNTIME_UNTRACKED_FILES) {
+  for (const file of AUTORESEARCH_WORKTREE_EXCLUDES) {
     await writeGitInfoExclude(worktreePath, file);
   }
+}
+
+async function ensureAutoresearchWorktreeDependencies(repoRoot: string, worktreePath: string): Promise<void> {
+  const sourceNodeModules = join(repoRoot, 'node_modules');
+  const targetNodeModules = join(worktreePath, 'node_modules');
+  if (!existsSync(sourceNodeModules) || existsSync(targetNodeModules)) {
+    return;
+  }
+  await symlink(sourceNodeModules, targetNodeModules, process.platform === 'win32' ? 'junction' : 'dir');
 }
 
 function readGitShortHead(worktreePath: string): string {
@@ -238,7 +246,7 @@ function isAllowedRuntimeDirtyLine(line: string): boolean {
   const trimmed = line.trim();
   if (trimmed.length < 4) return false;
   const path = trimmed.slice(3).trim();
-  return trimmed.startsWith('?? ') && ALLOWED_RUNTIME_UNTRACKED_FILES.includes(path);
+  return trimmed.startsWith('?? ') && AUTORESEARCH_WORKTREE_EXCLUDES.includes(path);
 }
 
 export function assertResetSafeWorktree(worktreePath: string): void {
@@ -366,6 +374,17 @@ async function readAutoresearchLedgerEntries(ledgerFile: string): Promise<Autore
   if (!existsSync(ledgerFile)) return [];
   const parsed = await readJsonFile<{ entries?: AutoresearchLedgerEntry[] }>(ledgerFile);
   return Array.isArray(parsed.entries) ? parsed.entries : [];
+}
+
+export async function countTrailingAutoresearchNoops(ledgerFile: string): Promise<number> {
+  const entries = await readAutoresearchLedgerEntries(ledgerFile);
+  let count = 0;
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (!entry || entry.kind !== 'iteration' || entry.decision !== 'noop') break;
+    count += 1;
+  }
+  return count;
 }
 
 function formatAutoresearchInstructionSummary(
@@ -743,6 +762,7 @@ export async function prepareAutoresearchRuntime(
 ): Promise<PreparedAutoresearchRuntime> {
   await assertAutoresearchLockAvailable(projectRoot);
   await ensureRuntimeExcludes(worktreePath);
+  await ensureAutoresearchWorktreeDependencies(projectRoot, worktreePath);
   assertResetSafeWorktree(worktreePath);
 
   const runTag = options.runTag || buildAutoresearchRunTag();
@@ -883,6 +903,7 @@ export async function resumeAutoresearchRuntime(projectRoot: string, runId: stri
     throw new Error(`autoresearch_resume_missing_worktree:${manifest.worktree_path}`);
   }
   await ensureRuntimeExcludes(manifest.worktree_path);
+  await ensureAutoresearchWorktreeDependencies(projectRoot, manifest.worktree_path);
   assertResetSafeWorktree(manifest.worktree_path);
   await startMode('autoresearch', `autoresearch resume ${runId}`, 1, projectRoot);
   await activateAutoresearchRun(manifest);

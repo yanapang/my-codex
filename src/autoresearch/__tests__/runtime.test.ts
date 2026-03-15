@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { AutoresearchMissionContract } from '../contracts.js';
 import {
+  assertResetSafeWorktree,
   buildAutoresearchInstructions,
   loadAutoresearchRunManifest,
   materializeAutoresearchMissionToWorktree,
@@ -78,6 +79,8 @@ describe('autoresearch runtime', () => {
     const repo = await initRepo();
     try {
       const contract = await makeContract(repo);
+      await mkdir(join(repo, 'node_modules', 'fixture-dep'), { recursive: true });
+      await writeFile(join(repo, 'node_modules', 'fixture-dep', 'index.js'), 'export default 1;\n', 'utf-8');
       const worktreePath = join(repo, '..', `${repo.split('/').pop()}.omx-worktrees`, 'autoresearch-missions-demo-20260314t000000z');
       execFileSync('git', ['worktree', 'add', '-b', 'autoresearch/missions-demo/20260314t000000z', worktreePath, 'HEAD'], {
         cwd: repo,
@@ -93,6 +96,8 @@ describe('autoresearch runtime', () => {
       assert.equal(existsSync(runtime.ledgerFile), true);
       assert.equal(existsSync(runtime.latestEvaluatorFile), true);
       assert.equal(existsSync(runtime.resultsFile), true);
+      assert.equal(existsSync(join(worktreePath, 'node_modules')), true);
+      assert.doesNotThrow(() => assertResetSafeWorktree(worktreePath));
 
       const manifest = JSON.parse(await readFile(runtime.manifestFile, 'utf-8')) as Record<string, unknown>;
       assert.equal(manifest.mission_slug, 'missions-demo');
