@@ -392,15 +392,6 @@ async function sendIntegrationMessageToLeader(
   await sendWorkerMessage(teamName, worker.name, 'leader-fixed', body, cwd).catch(() => {});
 }
 
-async function sendRebaseConflictMessageToWorker(
-  teamName: string,
-  worker: WorkerInfo,
-  body: string,
-  cwd: string,
-): Promise<void> {
-  await sendWorkerMessage(teamName, 'leader-fixed', worker.name, body, cwd).catch(() => {});
-}
-
 function autoCommitDirtyWorktree(
   worker: WorkerInfo,
 ): { committed: boolean; commitHash: string | null } {
