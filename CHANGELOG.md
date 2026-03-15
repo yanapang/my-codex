@@ -6,7 +6,7 @@ All notable changes to this project are documented in this file.
 
 ## [0.10.0] - 2026-03-15
 
-54 commits across 26 PRs from `v0.9.0..dev`. Contributors: [@Yeachan-Heo](https://github.com/Yeachan-Heo), [@HaD0Yun](https://github.com/HaD0Yun).
+54 commits across 26 PRs from `v0.9.1..dev`. Contributors: [@Yeachan-Heo](https://github.com/Yeachan-Heo), [@HaD0Yun](https://github.com/HaD0Yun).
 
 ### Added
 - **`omx autoresearch`** _(experimental)_ — new autonomous research mode that iteratively explores topics and self-terminates after repeated noop iterations. (PRs [#847](https://github.com/Yeachan-Heo/oh-my-codex/pull/847), [#849](https://github.com/Yeachan-Heo/oh-my-codex/pull/849))
@@ -39,6 +39,14 @@ All notable changes to this project are documented in this file.
 ### Internal
 - Removed unused `sendRebaseConflictMessageToWorker` function. (PR [#852](https://github.com/Yeachan-Heo/oh-my-codex/pull/852))
 - Isolated dirty-worktree test helpers for better test hygiene. (PR [#849](https://github.com/Yeachan-Heo/oh-my-codex/pull/849))
+
+## [0.9.1] - 2026-03-13
+
+### Fixed
+- **Release smoke hydration hotfix** — cherry-picked PR [#806](https://github.com/Yeachan-Heo/oh-my-codex/pull/806)'s packed-install smoke fix onto `main` so hydration assets are localized correctly during release verification. (commit `d86165d`)
+
+### Changed
+- **Release metadata for the superseding patch release** — bumped package/workspace versions to `0.9.1` and added release notes/readiness docs that explicitly preserve the historical record: `v0.9.0` remains red, and `v0.9.1` is the clean superseding release.
 
 ## [0.9.0] - 2026-03-12
 

@@ -46,4 +46,4 @@
 - [@Yeachan-Heo](https://github.com/Yeachan-Heo) — 52 commits
 - [@HaD0Yun](https://github.com/HaD0Yun) — 2 commits
 
-**Full Changelog**: [`v0.9.0...v0.10.0`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.9.0...v0.10.0)
+**Full Changelog**: [`v0.9.1...v0.10.0`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.9.1...v0.10.0)
