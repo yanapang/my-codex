@@ -27,6 +27,7 @@ Arguments:
 Behavior:
   - validates mission.md and sandbox.md
   - requires sandbox.md YAML frontmatter with evaluator.command and evaluator.format=json
+  - codex exec defaults to --dangerously-bypass-approvals-and-sandbox unless already provided in codex-args
   - fresh launch creates a run-tagged autoresearch/<slug>/<run-tag> lane
   - supervisor records baseline, candidate, keep/discard/reset, and results artifacts under .omx/logs/autoresearch/
   - --resume loads the authoritative per-run manifest and continues from the last kept commit
@@ -37,7 +38,9 @@ const AUTORESEARCH_MAX_CONSECUTIVE_NOOPS = 3;
 
 function runAutoresearchTurn(worktreePath: string, instructionsFile: string, codexArgs: string[]): void {
   const prompt = readFileSync(instructionsFile, 'utf-8');
-  const launchArgs = ['exec', ...codexArgs, '-'];
+  const bypassFlag = '--dangerously-bypass-approvals-and-sandbox';
+  const hasBypass = codexArgs.includes(bypassFlag);
+  const launchArgs = ['exec', ...(hasBypass ? [] : [bypassFlag]), ...codexArgs, '-'];
   const result = spawnSync('codex', launchArgs, {
     cwd: worktreePath,
     stdio: ['pipe', 'inherit', 'inherit'],

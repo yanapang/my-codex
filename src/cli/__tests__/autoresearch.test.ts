@@ -64,13 +64,14 @@ describe('omx autoresearch', () => {
     }
   });
 
-  it('documents --resume in command-local help', async () => {
+  it('documents --resume and default bypass in command-local help', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-autoresearch-resume-help-'));
     try {
       const result = runOmx(cwd, ['autoresearch', '--help']);
       assert.equal(result.status, 0, result.stderr || result.stdout);
       assert.match(result.stdout, /--resume <run-id>/i);
       assert.match(result.stdout, /run-tagged/i);
+      assert.match(result.stdout, /defaults to --dangerously-bypass-approvals-and-sandbox/i);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
@@ -184,7 +185,7 @@ describe('omx autoresearch', () => {
     }
   });
 
-  it('launches codex exec for autoresearch turns', async () => {
+  it('defaults autoresearch codex exec to bypass approvals and sandbox', async () => {
     const repo = await initRepo();
     const fakeBin = await mkdtemp(join(tmpdir(), 'omx-autoresearch-fake-bin-'));
     try {
@@ -205,7 +206,62 @@ describe('omx autoresearch', () => {
       await writeFile(
         fakeCodexPath,
         `#!/bin/sh
-printf 'fake-codex:%s\\n' "$*" >&2
+printf 'fake-codex:%s\n' "$*" >&2
+cat >/dev/null
+candidate_file=$(find /tmp -path '*/.omx/logs/autoresearch/*/candidate.json' | head -n 1)
+candidate_file=$(find "$OMX_TEST_REPO_ROOT/.omx/logs/autoresearch" -name candidate.json | head -n 1)
+head_commit=$(git rev-parse HEAD)
+cat >"$candidate_file" <<EOF
+{
+  "status": "abort",
+  "candidate_commit": null,
+  "base_commit": "$head_commit",
+  "description": "stop after first exec",
+  "notes": ["fake codex exec"],
+  "created_at": "2026-03-15T00:00:00.000Z"
+}
+EOF
+`,
+        'utf-8',
+      );
+      execFileSync('chmod', ['+x', fakeCodexPath], { stdio: 'ignore' });
+
+      const result = runOmx(
+        repo,
+        ['autoresearch', missionDir],
+        { PATH: `${fakeBin}:${process.env.PATH || ''}`, OMX_TEST_REPO_ROOT: repo },
+      );
+
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.match(result.stderr, /fake-codex:exec --dangerously-bypass-approvals-and-sandbox -/);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+      await rm(fakeBin, { recursive: true, force: true });
+    }
+  });
+
+  it('does not duplicate bypass when codex args already include it', async () => {
+    const repo = await initRepo();
+    const fakeBin = await mkdtemp(join(tmpdir(), 'omx-autoresearch-dup-bin-'));
+    try {
+      const missionDir = join(repo, 'missions', 'demo');
+      await mkdir(missionDir, { recursive: true });
+      await mkdir(join(repo, 'scripts'), { recursive: true });
+      await writeFile(join(missionDir, 'mission.md'), '# Mission\nWrite a noop candidate artifact.\n', 'utf-8');
+      await writeFile(
+        join(missionDir, 'sandbox.md'),
+        '---\nevaluator:\n  command: node scripts/eval.js\n  format: json\n  keep_policy: pass_only\n---\nStay inside the mission boundary.\n',
+        'utf-8',
+      );
+      await writeFile(join(repo, 'scripts', 'eval.js'), "process.stdout.write(JSON.stringify({ pass: true }));\n", 'utf-8');
+      execFileSync('git', ['add', '.'], { cwd: repo, stdio: 'ignore' });
+      execFileSync('git', ['commit', '-m', 'add autoresearch mission'], { cwd: repo, stdio: 'ignore' });
+
+      const fakeCodexPath = join(fakeBin, 'codex');
+      await writeFile(
+        fakeCodexPath,
+        `#!/bin/sh
+printf 'fake-codex:%s\n' "$*" >&2
 cat >/dev/null
 candidate_file=$(find /tmp -path '*/.omx/logs/autoresearch/*/candidate.json' | head -n 1)
 candidate_file=$(find "$OMX_TEST_REPO_ROOT/.omx/logs/autoresearch" -name candidate.json | head -n 1)
@@ -232,6 +288,8 @@ EOF
       );
 
       assert.equal(result.status, 0, result.stderr || result.stdout);
+      const matches = result.stderr.match(/--dangerously-bypass-approvals-and-sandbox/g) || [];
+      assert.equal(matches.length, 1, result.stderr);
       assert.match(result.stderr, /fake-codex:exec --dangerously-bypass-approvals-and-sandbox -/);
     } finally {
       await rm(repo, { recursive: true, force: true });
