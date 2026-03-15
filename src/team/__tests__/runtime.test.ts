@@ -1311,11 +1311,10 @@ process.on('SIGTERM', () => process.exit(0));
 
   it('resumeTeam preserves detached worktree metadata for live prompt workers', async () => {
     const repo = await initRepo();
-    const binDir = join(repo, 'bin');
+    const binDir = await mkdtemp(join(tmpdir(), 'omx-runtime-prompt-bin-'));
     const fakeCodexPath = join(binDir, 'codex');
-    const logDir = join(repo, 'worker-logs');
+    const logDir = await mkdtemp(join(tmpdir(), 'omx-runtime-prompt-logs-'));
     const envLogPath = join(logDir, 'env.json');
-    await mkdir(binDir, { recursive: true });
     await writeFile(
       fakeCodexPath,
       `#!/usr/bin/env node
@@ -1414,6 +1413,8 @@ process.on('SIGTERM', () => process.exit(0));
       else delete process.env.OMX_TEAM_WORKER_CLI;
       if (typeof prevLogDir === 'string') process.env.OMX_TEST_LOG_DIR = prevLogDir;
       else delete process.env.OMX_TEST_LOG_DIR;
+      await rm(binDir, { recursive: true, force: true });
+      await rm(logDir, { recursive: true, force: true });
       await rm(repo, { recursive: true, force: true });
     }
   });
