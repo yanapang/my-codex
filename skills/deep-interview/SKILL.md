@@ -196,21 +196,56 @@ Spec should include:
 
 ## Phase 5: Execution Bridge
 
-Present execution options after artifact generation:
+Present execution options after artifact generation using explicit handoff contracts. Treat the deep-interview spec as the current requirements source of truth and preserve intent, non-goals, decision boundaries, acceptance criteria, and any residual-risk warnings across the handoff.
 
-1. **`$ralplan` (Recommended)**
-   - Run consensus refinement on the spec:
-   - `$plan --consensus --direct <spec-path>`
-2. **`$autopilot`**
-   - Use spec as high-clarity execution input
-3. **`$ralph`**
-   - Sequential persistence loop using spec/criteria
-4. **`$team`**
-   - Parallel coordinated execution using shared spec
-5. **Refine further**
-   - Continue interview loop for lower ambiguity
+### 1. **`$ralplan` (Recommended)**
+- **Input Artifact:** `.omx/specs/deep-interview-{slug}.md` (optionally accompanied by the transcript/context snapshot for traceability)
+- **Invocation:** `$plan --consensus --direct <spec-path>`
+- **Consumer Behavior:** Treat the deep-interview spec as the requirements source of truth. Do not repeat the interview by default; refine architecture/feasibility around the clarified intent and boundaries instead.
+- **Skipped / Already-Satisfied Stages:** Requirements discovery, ambiguity clarification, and early intent-boundary elicitation
+- **Expected Output:** Canonical planning artifacts under `.omx/plans/`, especially `prd-*.md` and `test-spec-*.md`
+- **Best When:** Requirements are clear enough to stop interviewing, but architectural validation / consensus planning is still desirable
+- **Next Recommended Step:** Use the approved planning artifacts with `$autopilot`, `$ralph`, or `$team` depending on the desired execution style
 
-**IMPORTANT:** Deep-interview is a requirements mode. On handoff, invoke the selected skill. **Do NOT implement directly** inside deep-interview.
+### 2. **`$autopilot`**
+- **Input Artifact:** `.omx/specs/deep-interview-{slug}.md`
+- **Invocation:** `$autopilot <spec-path>`
+- **Consumer Behavior:** Use the deep-interview spec as the clarified execution brief. Preserve intent, non-goals, decision boundaries, and acceptance criteria as binding context for planning/execution.
+- **Skipped / Already-Satisfied Stages:** Initial requirement discovery and ambiguity reduction
+- **Expected Output:** Planning/execution progress, QA evidence, and validation artifacts produced by autopilot
+- **Best When:** The clarified spec is already strong enough for direct planning + execution without an additional consensus gate
+- **Next Recommended Step:** Continue through autopilot's execution/QA/validation flow; if coordination-heavy execution emerges, prefer a follow-up `$team` or `$ralph` lane as appropriate
+
+### 3. **`$ralph`**
+- **Input Artifact:** `.omx/specs/deep-interview-{slug}.md`
+- **Invocation:** `$ralph <spec-path>`
+- **Consumer Behavior:** Use the spec's acceptance criteria and boundary constraints as the persistence target. Do not reopen requirements discovery unless the user explicitly asks to refine further.
+- **Skipped / Already-Satisfied Stages:** Requirement interview, ambiguity clarification, and initial scope-definition work
+- **Expected Output:** Iterative execution progress and verification evidence tracked against the clarified criteria
+- **Best When:** The task benefits from persistent sequential completion pressure and the user wants execution to keep moving until the criteria are satisfied or a real blocker exists
+- **Next Recommended Step:** Continue Ralph's persistence loop; if work expands into coordination-heavy lanes, hand off to `$team` and keep Ralph for verification continuity
+
+### 4. **`$team`**
+- **Input Artifact:** `.omx/specs/deep-interview-{slug}.md`
+- **Invocation:** `$team <spec-path>`
+- **Consumer Behavior:** Treat the spec as shared execution context for coordinated parallel work. Preserve the clarified intent, non-goals, decision boundaries, and acceptance criteria as common lane constraints.
+- **Skipped / Already-Satisfied Stages:** Requirement clarification and early ambiguity reduction
+- **Expected Output:** Coordinated multi-agent execution against the shared spec, with evidence that can later feed a Ralph verification pass when appropriate
+- **Best When:** The task is large, multi-lane, or blocker-sensitive enough to justify coordinated parallel execution instead of a single persistent loop
+- **Next Recommended Step:** Follow the `team -> ralph` verification path when the coordinated execution phase finishes or needs a persistent verification/fix loop
+
+### 5. **Refine further**
+- **Input Artifact:** Existing transcript, context snapshot, and current spec draft
+- **Invocation:** Continue the interview loop
+- **Consumer Behavior:** Re-enter questioning to resolve the highest-leverage remaining uncertainty
+- **Skipped / Already-Satisfied Stages:** None beyond already-captured context
+- **Expected Output:** A lower-ambiguity spec with tighter boundaries and fewer unresolved assumptions
+- **Best When:** Residual ambiguity is still too high, the user wants stronger clarity, or the above-threshold / early-exit warning indicates too much risk to proceed cleanly
+- **Next Recommended Step:** Return to one of the execution handoff contracts above once the spec is sufficiently clarified
+
+**Residual-Risk Rule:** If the interview ended via early exit, hard-cap completion, or above-threshold proceed-with-warning, explicitly preserve that residual-risk state in the handoff so the downstream skill knows it inherited a partially clarified brief.
+
+**IMPORTANT:** Deep-interview is a requirements mode. On handoff, invoke the selected skill using the contract above. **Do NOT implement directly** inside deep-interview.
 
 </Steps>
 

@@ -54,13 +54,27 @@ describe('deep-interview Ouroboros contract', () => {
     assert.match(deepInterviewSkill, /Ontologist/i);
   });
 
-  it('includes execution bridge and no-direct-implementation guard', () => {
+  it('includes contract-style execution bridge and no-direct-implementation guard', () => {
     assert.match(deepInterviewSkill, /Execution Bridge/i);
     assert.match(deepInterviewSkill, /\$ralplan/i);
     assert.match(deepInterviewSkill, /\$autopilot/i);
     assert.match(deepInterviewSkill, /\$ralph/i);
     assert.match(deepInterviewSkill, /\$team/i);
+    assert.match(deepInterviewSkill, /Input Artifact/i);
+    assert.match(deepInterviewSkill, /Invocation/i);
+    assert.match(deepInterviewSkill, /Consumer Behavior/i);
+    assert.match(deepInterviewSkill, /Skipped \/ Already-Satisfied Stages/i);
+    assert.match(deepInterviewSkill, /Expected Output/i);
+    assert.match(deepInterviewSkill, /Best When/i);
+    assert.match(deepInterviewSkill, /Next Recommended Step/i);
+    assert.match(deepInterviewSkill, /Residual-Risk Rule/i);
     assert.match(deepInterviewSkill, /Do NOT implement directly/i);
+  });
+
+  it('preserves clarified intent and boundary constraints across execution handoff', () => {
+    assert.match(deepInterviewSkill, /preserve intent, non-goals, decision boundaries, acceptance criteria/i);
+    assert.match(deepInterviewSkill, /binding context/i);
+    assert.match(deepInterviewSkill, /team -> ralph/i);
   });
 
   it('uses OMX-native output paths', () => {
