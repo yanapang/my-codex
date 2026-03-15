@@ -1,13 +1,15 @@
-import { execFileSync } from 'child_process';
-import { launchWithHud } from './index.js';
+import { execFileSync, spawnSync } from 'child_process';
+import { readFileSync } from 'fs';
 import { ensureWorktree, planWorktreeTarget } from '../team/worktree.js';
 import { loadAutoresearchMissionContract } from '../autoresearch/contracts.js';
 import {
+  countTrailingAutoresearchNoops,
   loadAutoresearchRunManifest,
   materializeAutoresearchMissionToWorktree,
   prepareAutoresearchRuntime,
   processAutoresearchCandidate,
   resumeAutoresearchRuntime,
+  stopAutoresearchRuntime,
   buildAutoresearchRunTag,
 } from '../autoresearch/runtime.js';
 import { assertModeStartAllowed } from '../modes/base.js';
@@ -31,6 +33,27 @@ Behavior:
 `;
 
 const AUTORESEARCH_APPEND_INSTRUCTIONS_ENV = 'OMX_AUTORESEARCH_APPEND_INSTRUCTIONS_FILE';
+const AUTORESEARCH_MAX_CONSECUTIVE_NOOPS = 3;
+
+function runAutoresearchTurn(worktreePath: string, instructionsFile: string, codexArgs: string[]): void {
+  const prompt = readFileSync(instructionsFile, 'utf-8');
+  const launchArgs = ['exec', ...codexArgs, '-'];
+  const result = spawnSync('codex', launchArgs, {
+    cwd: worktreePath,
+    stdio: ['pipe', 'inherit', 'inherit'],
+    input: prompt,
+    encoding: 'utf-8',
+    env: process.env,
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    process.exitCode = typeof result.status === 'number' ? result.status : 1;
+    throw new Error(`autoresearch_codex_exec_failed:${result.status ?? 'unknown'}`);
+  }
+}
 
 export interface ParsedAutoresearchArgs {
   missionDir: string | null;
@@ -91,15 +114,20 @@ async function runAutoresearchLoop(
 
   try {
     while (true) {
-      process.chdir(runtime.worktreePath);
-      await launchWithHud(codexArgs);
-      process.chdir(originalCwd);
+      runAutoresearchTurn(runtime.worktreePath, runtime.instructionsFile, codexArgs);
 
       const contract = await loadAutoresearchMissionContract(missionDir);
       const manifest = await loadAutoresearchRunManifest(runtime.repoRoot, JSON.parse(execFileSync('cat', [runtime.manifestFile], { encoding: 'utf-8' })).run_id);
       const decision = await processAutoresearchCandidate(contract, manifest, runtime.repoRoot);
       if (decision === 'abort' || decision === 'error') {
         return;
+      }
+      if (decision === 'noop') {
+        const trailingNoops = await countTrailingAutoresearchNoops(manifest.ledger_file);
+        if (trailingNoops >= AUTORESEARCH_MAX_CONSECUTIVE_NOOPS) {
+          await stopAutoresearchRuntime(runtime.repoRoot);
+          return;
+        }
       }
       process.env[AUTORESEARCH_APPEND_INSTRUCTIONS_ENV] = runtime.instructionsFile;
     }

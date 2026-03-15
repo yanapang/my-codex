@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -181,6 +181,130 @@ describe('omx autoresearch', () => {
       assert.equal(existsSync(worktreePath), false, 'expected launch to abort before creating autoresearch worktree');
     } finally {
       await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('launches codex exec for autoresearch turns', async () => {
+    const repo = await initRepo();
+    const fakeBin = await mkdtemp(join(tmpdir(), 'omx-autoresearch-fake-bin-'));
+    try {
+      const missionDir = join(repo, 'missions', 'demo');
+      await mkdir(missionDir, { recursive: true });
+      await mkdir(join(repo, 'scripts'), { recursive: true });
+      await writeFile(join(missionDir, 'mission.md'), '# Mission\nWrite a noop candidate artifact.\n', 'utf-8');
+      await writeFile(
+        join(missionDir, 'sandbox.md'),
+        '---\nevaluator:\n  command: node scripts/eval.js\n  format: json\n  keep_policy: pass_only\n---\nStay inside the mission boundary.\n',
+        'utf-8',
+      );
+      await writeFile(join(repo, 'scripts', 'eval.js'), "process.stdout.write(JSON.stringify({ pass: true }));\n", 'utf-8');
+      execFileSync('git', ['add', '.'], { cwd: repo, stdio: 'ignore' });
+      execFileSync('git', ['commit', '-m', 'add autoresearch mission'], { cwd: repo, stdio: 'ignore' });
+
+      const fakeCodexPath = join(fakeBin, 'codex');
+      await writeFile(
+        fakeCodexPath,
+        `#!/bin/sh
+printf 'fake-codex:%s\\n' "$*" >&2
+cat >/dev/null
+candidate_file=$(find /tmp -path '*/.omx/logs/autoresearch/*/candidate.json' | head -n 1)
+candidate_file=$(find "$OMX_TEST_REPO_ROOT/.omx/logs/autoresearch" -name candidate.json | head -n 1)
+head_commit=$(git rev-parse HEAD)
+cat >"$candidate_file" <<EOF
+{
+  "status": "abort",
+  "candidate_commit": null,
+  "base_commit": "$head_commit",
+  "description": "stop after first exec",
+  "notes": ["fake codex exec"],
+  "created_at": "2026-03-15T00:00:00.000Z"
+}
+EOF
+`,
+        'utf-8',
+      );
+      execFileSync('chmod', ['+x', fakeCodexPath], { stdio: 'ignore' });
+
+      const result = runOmx(
+        repo,
+        ['autoresearch', missionDir, '--dangerously-bypass-approvals-and-sandbox'],
+        { PATH: `${fakeBin}:${process.env.PATH || ''}`, OMX_TEST_REPO_ROOT: repo },
+      );
+
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.match(result.stderr, /fake-codex:exec --dangerously-bypass-approvals-and-sandbox -/);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+      await rm(fakeBin, { recursive: true, force: true });
+    }
+  });
+
+  it('stops after repeated noop turns', async () => {
+    const repo = await initRepo();
+    const fakeBin = await mkdtemp(join(tmpdir(), 'omx-autoresearch-noop-bin-'));
+    try {
+      const missionDir = join(repo, 'missions', 'demo');
+      await mkdir(missionDir, { recursive: true });
+      await mkdir(join(repo, 'scripts'), { recursive: true });
+      await writeFile(join(missionDir, 'mission.md'), '# Mission\nKeep returning noop.\n', 'utf-8');
+      await writeFile(
+        join(missionDir, 'sandbox.md'),
+        '---\nevaluator:\n  command: node scripts/eval.js\n  format: json\n  keep_policy: pass_only\n---\nStay inside the mission boundary.\n',
+        'utf-8',
+      );
+      await writeFile(join(repo, 'scripts', 'eval.js'), "process.stdout.write(JSON.stringify({ pass: true }));\n", 'utf-8');
+      execFileSync('git', ['add', '.'], { cwd: repo, stdio: 'ignore' });
+      execFileSync('git', ['commit', '-m', 'add autoresearch noop mission'], { cwd: repo, stdio: 'ignore' });
+
+      const fakeCodexPath = join(fakeBin, 'codex');
+      await writeFile(
+        fakeCodexPath,
+        `#!/bin/sh
+cat >/dev/null
+candidate_file=$(find /tmp -path '*/.omx/logs/autoresearch/*/candidate.json' | head -n 1)
+candidate_file=$(find "$OMX_TEST_REPO_ROOT/.omx/logs/autoresearch" -name candidate.json | head -n 1)
+head_commit=$(git rev-parse HEAD)
+cat >"$candidate_file" <<EOF
+{
+  "status": "noop",
+  "candidate_commit": null,
+  "base_commit": "$head_commit",
+  "description": "noop from fake codex exec",
+  "notes": ["fake noop"],
+  "created_at": "2026-03-15T00:00:00.000Z"
+}
+EOF
+`,
+        'utf-8',
+      );
+      execFileSync('chmod', ['+x', fakeCodexPath], { stdio: 'ignore' });
+
+      const result = runOmx(
+        repo,
+        ['autoresearch', missionDir, '--dangerously-bypass-approvals-and-sandbox'],
+        { PATH: `${fakeBin}:${process.env.PATH || ''}`, OMX_TEST_REPO_ROOT: repo },
+      );
+
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+
+      const state = JSON.parse(await readFile(join(repo, '.omx', 'state', 'autoresearch-state.json'), 'utf-8')) as { active: boolean; current_phase?: string };
+      assert.equal(state.active, false);
+      assert.equal(state.current_phase, 'cancelled');
+
+      const logsRoot = join(repo, '.omx', 'logs', 'autoresearch');
+      const [runId] = execFileSync('find', [logsRoot, '-mindepth', '1', '-maxdepth', '1', '-type', 'd', '-printf', '%f\n'], { encoding: 'utf-8' })
+        .trim()
+        .split('\n')
+        .filter(Boolean);
+      assert.ok(runId);
+
+      const ledger = JSON.parse(await readFile(join(logsRoot, runId, 'iteration-ledger.json'), 'utf-8')) as {
+        entries: Array<{ decision: string }>;
+      };
+      assert.deepEqual(ledger.entries.map((entry) => entry.decision), ['baseline', 'noop', 'noop', 'noop']);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+      await rm(fakeBin, { recursive: true, force: true });
     }
   });
 });
