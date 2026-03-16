@@ -15,6 +15,7 @@ import { hooksCommand } from './hooks.js';
 import { hudCommand } from '../hud/index.js';
 import { teamCommand } from './team.js';
 import { ralphCommand } from './ralph.js';
+import { ralphthonCommand } from './ralphthon.js';
 import { askCommand } from './ask.js';
 import { exploreCommand } from './explore.js';
 import { sparkshellCommand } from './sparkshell.js';
@@ -45,6 +46,7 @@ import {
   sessionModelInstructionsPath,
   writeSessionModelInstructionsFile,
 } from '../hooks/agents-overlay.js';
+import { readModeState, updateModeState } from '../modes/base.js';
 import {
   readSessionState, isSessionStale, writeSessionStart, writeSessionEnd, resetSessionMetrics,
 } from '../hooks/session.js';
@@ -107,6 +109,7 @@ Usage:
                 Alias for agents-init (lightweight AGENTS bootstrap only)
   omx team      Spawn parallel worker panes in tmux and bootstrap inbox/task state
   omx ralph     Launch Codex with ralph persistence mode active
+  omx ralphthon Launch Codex with autonomous hackathon lifecycle mode active
   omx autoresearch Launch thin-supervisor autoresearch with keep/discard/reset parity
   omx version   Show version information
   omx tmux-hook Manage tmux prompt injection workaround (init|status|validate|test)
@@ -160,6 +163,7 @@ const TEAM_INHERIT_LEADER_FLAGS_ENV = 'OMX_TEAM_INHERIT_LEADER_FLAGS';
 const OMX_BYPASS_DEFAULT_SYSTEM_PROMPT_ENV = 'OMX_BYPASS_DEFAULT_SYSTEM_PROMPT';
 const OMX_MODEL_INSTRUCTIONS_FILE_ENV = 'OMX_MODEL_INSTRUCTIONS_FILE';
 const OMX_AUTORESEARCH_APPEND_INSTRUCTIONS_FILE_ENV = 'OMX_AUTORESEARCH_APPEND_INSTRUCTIONS_FILE';
+const OMX_RALPHTHON_APPEND_INSTRUCTIONS_FILE_ENV = 'OMX_RALPHTHON_APPEND_INSTRUCTIONS_FILE';
 const REASONING_MODES = ['low', 'medium', 'high', 'xhigh'] as const;
 type ReasoningMode = typeof REASONING_MODES[number];
 const REASONING_MODE_SET = new Set<string>(REASONING_MODES);
@@ -172,7 +176,7 @@ const ALLOWED_SHELLS = new Set([
 const WINDOWS_DETACHED_BOOTSTRAP_DELAY_MS = 2500;
 const CODEX_VERSION_FLAGS = new Set(['--version', '-V']);
 
-type CliCommand = 'launch' | 'exec' | 'setup' | 'agents-init' | 'deepinit' | 'uninstall' | 'doctor' | 'ask' | 'explore' | 'sparkshell' | 'team' | 'session' | 'resume' | 'version' | 'tmux-hook' | 'hooks' | 'hud' | 'status' | 'cancel' | 'help' | 'reasoning' | string;
+type CliCommand = 'launch' | 'exec' | 'setup' | 'agents-init' | 'deepinit' | 'uninstall' | 'doctor' | 'ask' | 'explore' | 'sparkshell' | 'team' | 'ralphthon' | 'session' | 'resume' | 'version' | 'tmux-hook' | 'hooks' | 'hud' | 'status' | 'cancel' | 'help' | 'reasoning' | string;
 
 const NESTED_HELP_COMMANDS = new Set<CliCommand>([
   'ask',
@@ -183,6 +187,8 @@ const NESTED_HELP_COMMANDS = new Set<CliCommand>([
   'hooks',
   'hud',
   'ralph',
+  'ralphthon',
+  'ralphthon',
   'resume',
   'session',
   'sparkshell',
@@ -481,7 +487,7 @@ export function buildHudPaneCleanupTargets(existingPaneIds: string[], createdPan
 
 export async function main(args: string[]): Promise<void> {
   const knownCommands = new Set([
-    'launch', 'exec', 'setup', 'agents-init', 'deepinit', 'uninstall', 'doctor', 'ask', 'autoresearch', 'explore', 'sparkshell', 'team', 'ralph', 'session', 'resume', 'version', 'tmux-hook', 'hooks', 'hud', 'status', 'cancel', 'help', '--help', '-h',
+    'launch', 'exec', 'setup', 'agents-init', 'deepinit', 'uninstall', 'doctor', 'ask', 'autoresearch', 'explore', 'sparkshell', 'team', 'ralph', 'ralphthon', 'session', 'resume', 'version', 'tmux-hook', 'hooks', 'hud', 'status', 'cancel', 'help', '--help', '-h',
   ]);
   const firstArg = args[0];
   const { command, launchArgs } = resolveCliInvocation(args);
@@ -558,6 +564,9 @@ export async function main(args: string[]): Promise<void> {
         break;
       case 'ralph':
         await ralphCommand(args.slice(1));
+        break;
+      case 'ralphthon':
+        await ralphthonCommand(args.slice(1));
         break;
       case 'version':
         version();
@@ -1152,7 +1161,7 @@ export function buildDetachedSessionBootstrapSteps(
   nativeWindows = false,
 ): DetachedSessionTmuxStep[] {
   const newSessionArgs: string[] = [
-    'new-session', '-d', '-s', sessionName, '-c', cwd,
+    'new-session', '-d', '-P', '-F', '#{pane_id}', '-s', sessionName, '-c', cwd,
     ...(workerLaunchArgs ? ['-e', `${TEAM_WORKER_LAUNCH_ARGS_ENV}=${workerLaunchArgs}`] : []),
     ...(codexHomeOverride ? ['-e', `CODEX_HOME=${codexHomeOverride}`] : []),
     ...(notifyTempContractRaw ? ['-e', `${OMX_NOTIFY_TEMP_CONTRACT_ENV}=${notifyTempContractRaw}`] : []),
@@ -1166,6 +1175,45 @@ export function buildDetachedSessionBootstrapSteps(
     { name: 'new-session', args: newSessionArgs },
     { name: 'split-and-capture-hud-pane', args: splitCaptureArgs },
   ];
+}
+
+async function updateActiveRalphthonLaunchTarget(
+  cwd: string,
+  patch: {
+    leader_pane_id?: string | null;
+    tmux_pane_id?: string | null;
+    tmux_session?: string | null;
+  },
+): Promise<void> {
+  const state = await readModeState('ralphthon', cwd).catch(() => null);
+  if (!state || state.active !== true) return;
+
+  const next: Record<string, unknown> = {};
+  if (typeof patch.leader_pane_id === 'string' && patch.leader_pane_id.trim().startsWith('%')) {
+    next.leader_pane_id = patch.leader_pane_id.trim();
+    next.tmux_pane_id = patch.leader_pane_id.trim();
+  } else if (typeof patch.tmux_pane_id === 'string' && patch.tmux_pane_id.trim().startsWith('%')) {
+    next.tmux_pane_id = patch.tmux_pane_id.trim();
+  }
+  if (typeof patch.tmux_session === 'string' && patch.tmux_session.trim() !== '') {
+    next.tmux_session = patch.tmux_session.trim();
+  }
+  if (Object.keys(next).length === 0) return;
+  await updateModeState('ralphthon', next, cwd).catch(() => {});
+}
+
+async function readLaunchAppendInstructions(): Promise<string> {
+  const appendixCandidates = [
+    process.env[OMX_RALPHTHON_APPEND_INSTRUCTIONS_FILE_ENV]?.trim(),
+    process.env[OMX_AUTORESEARCH_APPEND_INSTRUCTIONS_FILE_ENV]?.trim(),
+  ].filter((value): value is string => typeof value === 'string' && value.length > 0);
+  if (appendixCandidates.length === 0) return '';
+  const appendixPath = appendixCandidates[0];
+  if (!existsSync(appendixPath)) {
+    throw new Error(`launch instructions file not found: ${appendixPath}`);
+  }
+  const { readFile } = await import('fs/promises');
+  return (await readFile(appendixPath, 'utf-8')).trim();
 }
 
 export function buildDetachedSessionFinalizeSteps(
@@ -1229,16 +1277,6 @@ export function buildDetachedSessionRollbackSteps(
 }
 
 
-async function readAutoresearchAppendInstructions(): Promise<string> {
-  const appendixPath = process.env[OMX_AUTORESEARCH_APPEND_INSTRUCTIONS_FILE_ENV]?.trim();
-  if (!appendixPath) return '';
-  if (!existsSync(appendixPath)) {
-    throw new Error(`autoresearch instructions file not found: ${appendixPath}`);
-  }
-  const { readFile } = await import('fs/promises');
-  return (await readFile(appendixPath, 'utf-8')).trim();
-}
-
 export function buildNotifyTempStartupMessages(
   contract: NotifyTempContract,
   hasValidProviders: boolean,
@@ -1282,11 +1320,11 @@ async function preLaunch(cwd: string, sessionId: string, notifyTempContract?: No
   // 2. Generate runtime overlay + write session-scoped model instructions file
   const orchestrationMode = await resolveSessionOrchestrationMode(cwd, sessionId);
   const overlay = await generateOverlay(cwd, sessionId, { orchestrationMode });
-  const autoresearchAppendix = await readAutoresearchAppendInstructions();
-  const sessionInstructions = autoresearchAppendix
+  const launchAppendix = await readLaunchAppendInstructions();
+  const sessionInstructions = launchAppendix.trim().length > 0
     ? `${overlay}
 
-${autoresearchAppendix}`
+${launchAppendix}`
     : overlay;
   await writeSessionModelInstructionsFile(cwd, sessionId, sessionInstructions);
 
@@ -1297,10 +1335,10 @@ ${autoresearchAppendix}`
   // 4. Start notify fallback watcher (best effort)
   try {
     await startNotifyFallbackWatcher(cwd);
-    } catch (err) {
-      process.stderr.write(`[cli/index] operation failed: ${err}\n`);
-      // Non-fatal
-    }
+  } catch (err) {
+    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    // Non-fatal
+  }
 
   // 5. Start derived watcher (best effort, opt-in)
   try {
@@ -1433,6 +1471,20 @@ function runCodex(
       }
     }
 
+    const activePaneId = process.env.TMUX_PANE?.trim();
+    if (activePaneId) {
+      let tmuxSessionName: string | undefined;
+      try {
+        const displayArgs = ['display-message', '-p', '-t', activePaneId, '#S'];
+        tmuxSessionName = execFileSync('tmux', displayArgs, { encoding: 'utf-8' }).trim() || undefined;
+      } catch {}
+      void updateActiveRalphthonLaunchTarget(cwd, {
+        leader_pane_id: activePaneId,
+        tmux_pane_id: activePaneId,
+        tmux_session: tmuxSessionName ?? null,
+      });
+    }
+
     try {
       runCodexBlocking(cwd, launchArgs, codexEnvWithNotify);
     } finally {
@@ -1458,6 +1510,7 @@ function runCodex(
     const tmuxSessionId = `omx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const sessionName = buildTmuxSessionName(cwd, tmuxSessionId);
     let createdDetachedSession = false;
+    let detachedLeaderPaneId: string | null = null;
     let registeredHookTarget: string | null = null;
     let registeredHookName: string | null = null;
     let registeredClientAttachedHookName: string | null = null;
@@ -1473,9 +1526,15 @@ function runCodex(
         nativeWindows,
       );
       for (const step of bootstrapSteps) {
-        const output = execFileSync('tmux', step.args, { stdio: step.name === 'new-session' ? 'ignore' : 'pipe', encoding: 'utf-8' });
+        const output = execFileSync('tmux', step.args, { stdio: 'pipe', encoding: 'utf-8' });
         if (step.name === 'new-session') {
           createdDetachedSession = true;
+          detachedLeaderPaneId = parsePaneIdFromTmuxOutput(output || '');
+          void updateActiveRalphthonLaunchTarget(cwd, {
+            leader_pane_id: detachedLeaderPaneId,
+            tmux_pane_id: detachedLeaderPaneId,
+            tmux_session: sessionName,
+          });
         }
         if (step.name === 'split-and-capture-hud-pane') {
           const hudPaneId = parsePaneIdFromTmuxOutput(output || '');
