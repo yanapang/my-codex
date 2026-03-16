@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-03-16
+
+3 PRs landed after the `0.10.1` release tag and before this `0.10.2` release-prep commit: all 3 are targeted fixes. The `0.10.1` tag landed at `2026-03-16 06:57 UTC`; the last shipped merge (`#878`) landed at `2026-03-16 08:43 UTC`, for a turnaround of about 1 hour 46 minutes before release prep closed the patch.
+
+### Fixed
+- **Autoresearch codex args normalized for sandbox bypass** — ensures `--dangerously-bypass-approvals-and-sandbox` flag is correctly normalized when composing codex launch arguments, preventing double-flag or missing-flag edge cases. (PR [#875](https://github.com/Yeachan-Heo/oh-my-codex/pull/875))
+- **Duplicate `[tui]` config sections auto-repaired before Codex CLI launch** — detects and merges duplicate `[tui]` sections in `config.toml` before invoking Codex, preventing TOML parse failures. (PR [#876](https://github.com/Yeachan-Heo/oh-my-codex/pull/876))
+- **tmux launch policy on darwin** — uses the correct tmux launch policy on macOS to prevent session startup failures when tmux server is not yet running. (PR [#878](https://github.com/Yeachan-Heo/oh-my-codex/pull/878))
+
+### CI
+- Release workflow now sets the GitHub Release title and body from `RELEASE_BODY.md` via `softprops/action-gh-release`.
+
 ## [0.10.1] - 2026-03-16
 
 6 PRs landed after the `0.10.0` release bump and before this `0.10.1` release-prep commit: 4 urgent hotfix PRs, 1 fast-follow autoresearch UX PR, and 1 docs follow-up. The `0.10.0` bump commit landed at `2026-03-15 17:22 UTC`; the urgent hotfix train was merged by `2026-03-16 03:18 UTC`, and the last shipped `dev` follow-up merge landed at `2026-03-16 05:59 UTC`, for a turnaround of about 12 hours 37 minutes before release prep closed the patch.
