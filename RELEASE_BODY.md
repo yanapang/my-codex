@@ -1,8 +1,8 @@
 # oh-my-codex v0.10.1
 
-**7 non-merge commits | 6 PRs in the release window**
+**6 PRs in the release window**
 
-`0.10.1` is the fast-follow stabilization release for `0.10.0`. The release window began with the `0.10.0` bump commit at `2026-03-15 17:22 UTC`; the four urgent hotfix PRs landed in the next ~9 hours 57 minutes, and the final follow-up merge (`#873`) landed at `2026-03-16 05:59 UTC`, bringing the full `v0.10.0..dev` turnaround to about **12 hours 37 minutes**.
+`0.10.1` is the fast-follow stabilization release for `0.10.0`. The release window began with the `0.10.0` bump commit at `2026-03-15 17:22 UTC`; the four urgent hotfix PRs landed by `2026-03-16 03:18 UTC` (just under 10 hours later), and the final shipped follow-up merge (`#873`) landed at `2026-03-16 05:59 UTC`, bringing the shipped turnaround to about **12 hours 37 minutes** before this release-prep commit.
 
 ## Highlights
 
@@ -31,7 +31,7 @@
 - feat(cli): autoresearch guided setup + init subcommand ([#873](https://github.com/Yeachan-Heo/oh-my-codex/pull/873), closes [#863](https://github.com/Yeachan-Heo/oh-my-codex/issues/863))
 
 ### Docs follow-up
-- docs: add Discord community server badge to all READMEs ([#869](https://github.com/Yeachan-Heo/oh-my-codex/pull/869))
+- docs: add Discord community server badge to the primary multilingual READMEs ([#869](https://github.com/Yeachan-Heo/oh-my-codex/pull/869))
 
 ## Patch-window timeline
 

@@ -6,7 +6,7 @@ All notable changes to this project are documented in this file.
 
 ## [0.10.1] - 2026-03-16
 
-7 non-merge commits shipped via 6 PRs from `v0.10.0..dev`: 4 urgent hotfix PRs, 1 fast-follow autoresearch UX PR, and 1 docs follow-up. The release window started at the `0.10.0` release bump commit on `2026-03-15 17:22 UTC` and the last `dev` merge landed on `2026-03-16 05:59 UTC`, for an exact turnaround of about 12 hours 37 minutes.
+6 PRs landed after the `0.10.0` release bump and before this `0.10.1` release-prep commit: 4 urgent hotfix PRs, 1 fast-follow autoresearch UX PR, and 1 docs follow-up. The `0.10.0` bump commit landed at `2026-03-15 17:22 UTC`; the urgent hotfix train was merged by `2026-03-16 03:18 UTC`, and the last shipped `dev` follow-up merge landed at `2026-03-16 05:59 UTC`, for a turnaround of about 12 hours 37 minutes before release prep closed the patch.
 
 ### Added
 - **Guided autoresearch setup and `init` scaffolding** — `omx autoresearch` now supports an interactive guided setup on TTYs plus a scriptable `omx autoresearch init` path for creating mission files and launching the supervisor cleanly. (PR [#873](https://github.com/Yeachan-Heo/oh-my-codex/pull/873), closes [#863](https://github.com/Yeachan-Heo/oh-my-codex/issues/863))
