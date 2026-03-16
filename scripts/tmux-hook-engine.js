@@ -222,6 +222,9 @@ export function paneLooksReady(captured) {
   const hasClaudePromptLine = lines.some((line) => /^\s*❯\s*/u.test(line));
   if (hasCodexPromptLine || hasClaudePromptLine) return true;
 
+  const hasCodexWelcomePrompt = lines.some((line) => /\bhow can i help(?: you)?\b/i.test(line));
+  if (hasCodexWelcomePrompt) return true;
+
   return lines.some((line) => /^\s*(?:[›>❯]\s*)?[A-Z][A-Z0-9]+-\d+\s+only(?:\s*(?:…|\.{3}))?\s*$/iu.test(line));
 }
 

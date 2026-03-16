@@ -1267,6 +1267,37 @@ describe('tmux-dependent functions when tmux is unavailable', () => {
     });
   });
 
+  it('waitForWorkerReady accepts Codex 0.114.0-style welcome helper text', async () => {
+    await withMockTmuxFixture(
+      'omx-tmux-worker-ready-hello-',
+      (logPath) => `#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "${logPath}"
+case "$1" in
+  capture-pane)
+    cat <<'EOF'
+╭────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.114.0)                 │
+│                                            │
+│ model:     gpt-5.4 high   /model to change │
+│ directory: ~/Workspace/demo                │
+╰────────────────────────────────────────────╯
+
+How can I help you today?
+EOF
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`,
+      async () => {
+        assert.equal(waitForWorkerReady('omx-team-x', 1, 1_000), true);
+      },
+    );
+  });
+
   it('waitForWorkerReady returns false on timeout', () => {
     withEmptyPath(() => {
       assert.equal(waitForWorkerReady('omx-team-x', 1, 1), false);
