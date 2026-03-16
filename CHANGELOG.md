@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-03-16
+
+7 non-merge commits shipped via 6 PRs from `v0.10.0..dev`: 4 urgent hotfix PRs, 1 fast-follow autoresearch UX PR, and 1 docs follow-up. The release window started at the `0.10.0` release bump commit on `2026-03-15 17:22 UTC` and the last `dev` merge landed on `2026-03-16 05:59 UTC`, for an exact turnaround of about 12 hours 37 minutes.
+
+### Added
+- **Guided autoresearch setup and `init` scaffolding** — `omx autoresearch` now supports an interactive guided setup on TTYs plus a scriptable `omx autoresearch init` path for creating mission files and launching the supervisor cleanly. (PR [#873](https://github.com/Yeachan-Heo/oh-my-codex/pull/873), closes [#863](https://github.com/Yeachan-Heo/oh-my-codex/issues/863))
+
+### Fixed
+- **Autoresearch now bypasses approvals and sandbox by default** — prevents autonomous runs from stalling on approval/sandbox prompts unless callers already supplied their own flags. (PR [#856](https://github.com/Yeachan-Heo/oh-my-codex/pull/856), closes [#855](https://github.com/Yeachan-Heo/oh-my-codex/issues/855))
+- **Autoresearch worktree cleanliness ignores `.omx/` runtime artifacts** — avoids false dirty-worktree failures caused by session state and other runtime files. (PR [#858](https://github.com/Yeachan-Heo/oh-my-codex/pull/858), closes [#857](https://github.com/Yeachan-Heo/oh-my-codex/issues/857))
+- **Installed skills are deduplicated across project and user scopes** — project-local skills now take precedence and shadowed duplicates are filtered from composed AGENTS/team instructions. (PR [#864](https://github.com/Yeachan-Heo/oh-my-codex/pull/864), closes [#861](https://github.com/Yeachan-Heo/oh-my-codex/issues/861))
+- **Team worker readiness detection matches Codex 0.114.0 startup behavior** — accepts the new welcome-helper text and uses a safer ready wait path to reduce false startup failures. (PR [#868](https://github.com/Yeachan-Heo/oh-my-codex/pull/868), closes [#866](https://github.com/Yeachan-Heo/oh-my-codex/issues/866))
+
+### Docs
+- Added the Discord community server badge to the primary multilingual READMEs. (PR [#869](https://github.com/Yeachan-Heo/oh-my-codex/pull/869))
+
 ## [0.10.0] - 2026-03-15
 
 54 commits across 26 PRs from `v0.9.1..dev`. Contributors: [@Yeachan-Heo](https://github.com/Yeachan-Heo), [@HaD0Yun](https://github.com/HaD0Yun).
