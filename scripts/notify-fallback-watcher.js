@@ -808,6 +808,46 @@ async function updateRalphthonModePatch(patch) {
   } catch {}
 }
 
+async function readActiveSessionId() {
+  try {
+    const session = JSON.parse(await readFile(join(stateDir, 'session.json'), 'utf-8'));
+    const sessionId = safeString(session?.session_id).trim();
+    return sessionId || 'ralphthon-watchdog';
+  } catch {
+    return 'ralphthon-watchdog';
+  }
+}
+
+async function notifyRalphthonWatchdogFailure(message) {
+  const sessionId = await readActiveSessionId();
+  try {
+    const { notifyLifecycle } = await import('../dist/notifications/index.js');
+    const result = await notifyLifecycle('session-stop', {
+      sessionId,
+      projectPath: cwd,
+      projectName: cwd.split('/').filter(Boolean).at(-1) || 'unknown',
+      activeMode: 'ralphthon',
+      reason: 'ralphthon_watchdog_restart_limit_reached',
+      tmuxTail: message,
+      contextSummary: message,
+    });
+    await eventLog({
+      type: 'ralphthon_alert_notification',
+      status: result ? 'delivered' : 'skipped',
+      session_id: sessionId,
+      message,
+    });
+  } catch (error) {
+    await eventLog({
+      type: 'ralphthon_alert_notification',
+      status: 'failed',
+      session_id: sessionId,
+      message,
+      error: error instanceof Error ? error.message : safeString(error),
+    });
+  }
+}
+
 function shouldRestartRalphthonWatchdog(nowMs) {
   if (!ralphthonRestartWindowStartedAt || (nowMs - ralphthonRestartWindowStartedAt) > RALPHTHON_WATCHDOG_RESTART_WINDOW_MS) {
     ralphthonRestartWindowStartedAt = nowMs;
@@ -947,6 +987,7 @@ async function runRalphthonWatchdogTick() {
     const notifyLine = `[ralphthon] watchdog failed permanently after ${ralphthonRestartCount} restarts: ${message || 'unknown error'}`;
     process.stderr.write(`${notifyLine}\n`);
     await eventLog({ type: 'ralphthon_alert', message: notifyLine, user_visible: true });
+    await notifyRalphthonWatchdogFailure(notifyLine);
   }
 }
 

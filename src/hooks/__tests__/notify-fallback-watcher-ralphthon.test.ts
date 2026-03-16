@@ -198,6 +198,8 @@ describe('notify-fallback watcher ralphthon integration', () => {
       const logEntries = (await readFile(logPath, 'utf-8')).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
       const alertEvent = logEntries.find((entry: { type?: string; user_visible?: boolean }) => entry.type === 'ralphthon_alert' && entry.user_visible === true);
       assert.ok(alertEvent, 'expected user-visible watchdog alert event');
+      const notificationEvent = logEntries.find((entry: { type?: string; status?: string }) => entry.type === 'ralphthon_alert_notification' && typeof entry.status === 'string');
+      assert.ok(notificationEvent, 'expected platform notification attempt event');
     } finally {
       await rm(wd, { recursive: true, force: true });
       await rm(fakeBin, { recursive: true, force: true });
