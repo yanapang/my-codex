@@ -1,0 +1,8 @@
+{
+  "model": "decision_tree",
+  "params": {
+    "max_depth": 3,
+    "min_samples_leaf": 4,
+    "random_state": 42
+  }
+}
