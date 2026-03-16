@@ -344,6 +344,19 @@ That bundled mission demonstrates the full thin-supervisor loop on a deliberatel
 
 For a broader set of research-style autoresearch demos, including tabular ML and noisy high-dimensional optimization, see [`playground/README.md`](playground/README.md).
 
+Autoresearch showcase quick start:
+
+```bash
+# List the bundled showcase missions
+./scripts/run-autoresearch-showcase.sh --list
+
+# Run one showcase
+./scripts/run-autoresearch-showcase.sh bayesopt
+
+# Run several showcase demos back-to-back
+./scripts/run-autoresearch-showcase.sh omx-self ml-tabular bayesopt
+```
+
 `omx explore` is the default OMX surface for simple read-only exploration. It stays intentionally read-only and shell-only, and qualifying shell-native read-only tasks may be routed through `omx sparkshell` as a backend when that is the cheaper/more direct fit. The routing flag only adds advisory steering in generated session instructions; ambiguous or implementation-heavy requests stay on the normal Codex path, and OMX falls back normally if the explore harness is unavailable. The harness constrains Codex through a temporary allowlisted shell/bin layer so only approved repository-inspection command families are available during the offloaded run.
 
 - Current shell allowlist: `rg`, `grep`, `ls`, `find`, `wc`, `cat`, `head`, `tail`, `pwd`, `printf`
