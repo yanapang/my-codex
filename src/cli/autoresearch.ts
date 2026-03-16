@@ -13,14 +13,20 @@ import {
   buildAutoresearchRunTag,
 } from '../autoresearch/runtime.js';
 import { assertModeStartAllowed } from '../modes/base.js';
+import { guidedAutoresearchSetup, initAutoresearchMission, parseInitArgs, spawnAutoresearchTmux } from './autoresearch-guided.js';
 
 export const AUTORESEARCH_HELP = `omx autoresearch - Launch OMX autoresearch with thin-supervisor parity semantics
 
 Usage:
+  omx autoresearch                                                (guided setup + background launch)
+  omx autoresearch init [--topic T] [--evaluator CMD] [--keep-policy P] [--slug S]
   omx autoresearch <mission-dir> [codex-args...]
   omx autoresearch --resume <run-id> [codex-args...]
 
 Arguments:
+  (no args)        Interactive guided setup: collects topic, evaluator, policy, and slug,
+                   generates a mission directory, then spawns autoresearch in a background tmux session.
+  init             Non-interactive mission scaffolding via flags (all four flags required).
   <mission-dir>    Directory inside a git repository containing mission.md and sandbox.md
   <run-id>         Existing autoresearch run id from .omx/logs/autoresearch/<run-id>/manifest.json
 
@@ -59,6 +65,8 @@ export interface ParsedAutoresearchArgs {
   missionDir: string | null;
   runId: string | null;
   codexArgs: string[];
+  guided?: boolean;
+  initArgs?: string[];
 }
 
 function resolveRepoRoot(cwd: string): string {
@@ -72,9 +80,16 @@ function resolveRepoRoot(cwd: string): string {
 export function parseAutoresearchArgs(args: readonly string[]): ParsedAutoresearchArgs {
   const values = [...args];
   if (values.length === 0) {
-    throw new Error(`mission-dir is required.\n${AUTORESEARCH_HELP}`);
+    // TTY guard: preserve error for non-interactive callers (CI, scripts, piped stdin)
+    if (!process.stdin.isTTY) {
+      throw new Error(`mission-dir is required.\n${AUTORESEARCH_HELP}`);
+    }
+    return { missionDir: null, runId: null, codexArgs: [], guided: true };
   }
   const first = values[0];
+  if (first === 'init') {
+    return { missionDir: null, runId: null, codexArgs: [], guided: true, initArgs: values.slice(1) };
+  }
   if (first === '--help' || first === '-h' || first === 'help') {
     return { missionDir: '--help', runId: null, codexArgs: [] };
   }
@@ -148,6 +163,34 @@ export async function autoresearchCommand(args: string[]): Promise<void> {
   const parsed = parseAutoresearchArgs(args);
   if (parsed.missionDir === '--help') {
     console.log(AUTORESEARCH_HELP);
+    return;
+  }
+
+  if (parsed.guided) {
+    const repoRoot = resolveRepoRoot(process.cwd());
+    let result;
+    if (parsed.initArgs && parsed.initArgs.length > 0) {
+      // Non-interactive init with flags
+      const initOpts = parseInitArgs(parsed.initArgs);
+      if (!initOpts.topic || !initOpts.evaluatorCommand || !initOpts.slug) {
+        throw new Error(
+          'init requires --topic, --evaluator, and --slug flags.\n' +
+          'Optional: --keep-policy (default: score_improvement)\n\n' +
+          `${AUTORESEARCH_HELP}`,
+        );
+      }
+      result = await initAutoresearchMission({
+        topic: initOpts.topic,
+        evaluatorCommand: initOpts.evaluatorCommand,
+        keepPolicy: initOpts.keepPolicy || 'score_improvement',
+        slug: initOpts.slug,
+        repoRoot,
+      });
+    } else {
+      // Interactive guided setup
+      result = await guidedAutoresearchSetup(repoRoot);
+    }
+    spawnAutoresearchTmux(result.missionDir, result.slug);
     return;
   }
 
