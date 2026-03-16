@@ -1,8 +1,9 @@
 {
-  "model": "decision_tree",
+  "model": "logistic_regression",
   "params": {
-    "max_depth": 3,
-    "min_samples_leaf": 4,
+    "C": 1.0,
+    "max_iter": 5000,
+    "solver": "lbfgs",
     "random_state": 42
   }
 }
