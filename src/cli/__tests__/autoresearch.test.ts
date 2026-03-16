@@ -57,7 +57,8 @@ describe('omx autoresearch', () => {
     try {
       const result = runOmx(cwd, ['autoresearch', '--help']);
       assert.equal(result.status, 0, result.stderr || result.stdout);
-      assert.match(result.stdout, /Usage:\s*omx autoresearch <mission-dir>/i);
+      assert.match(result.stdout, /Usage:[\s\S]*omx autoresearch <mission-dir>/i);
+      assert.match(result.stdout, /omx autoresearch init/i);
       assert.doesNotMatch(result.stdout, /oh-my-codex \(omx\) - Multi-agent orchestration for Codex CLI/i);
     } finally {
       await rm(cwd, { recursive: true, force: true });
