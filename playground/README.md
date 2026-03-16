@@ -9,6 +9,17 @@ Design goals:
 - no heavyweight runtime artifacts committed
 - evaluator-driven keep/discard loops that are easy to inspect under `.omx/logs/autoresearch/`
 
+## Showcase index
+
+| Showcase | Mission | Evaluator | Status | Representative result |
+|---|---|---|---|---|
+| OMX self-optimization | `missions/in-action-cat-shellout-demo/` | `scripts/eval-in-action-cat-shellout-demo.js` | completed | kept commit `99ebf16` / cherry-picked as `8478261` removing the autoresearch manifest `cat` shell-out |
+| Kaggle-style tabular ML | `missions/ml-kaggle-model-optimization/` | `scripts/eval-ml-kaggle-model-optimization.py` | completed | ROC AUC improved from `0.9458071278825997` to `0.9976939203354298` |
+| Noisy high-dimensional Bayes-opt | `missions/noisy-bayesopt-highdim/` | `scripts/eval-noisy-bayesopt-highdim.py` | completed | score improved from `2.833048700169374` to `4.75978993804531` |
+| Latent subspace discovery | `missions/noisy-latent-subspace-discovery/` | `scripts/eval-noisy-latent-subspace-discovery.py` | scaffolded | baseline established; showcase run intentionally stopped before completion during docs pass |
+
+Use `scripts/run-autoresearch-showcase.sh --list` to see the bundled launch targets, or run one or more showcases directly with the wrapper script.
+
 ## Showcase demos
 
 ### 1. OMX self-optimization
