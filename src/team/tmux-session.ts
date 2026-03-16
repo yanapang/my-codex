@@ -1162,16 +1162,16 @@ async function attemptSubmitRounds(
   return false;
 }
 
-// Poll tmux capture-pane for Codex prompt indicator (> or similar)
-// Uses exponential backoff: 1s, 2s, 4s, 8s (total ~15s)
-// Returns true if ready, false on timeout
+// Poll tmux capture-pane for a worker-ready Codex/Claude prompt or welcome screen.
+// Start with short waits so we notice the first ready frame quickly, then back off.
+// Returns true if ready, false on timeout.
 export function waitForWorkerReady(
   sessionName: string,
   workerIndex: number,
-  timeoutMs: number = 15000,
+  timeoutMs: number = 30_000,
   workerPaneId?: string,
 ): boolean {
-  const initialBackoffMs = 300;
+  const initialBackoffMs = 150;
   const maxBackoffMs = 8000;
   const startedAt = Date.now();
   let blockedByTrustPrompt = false;

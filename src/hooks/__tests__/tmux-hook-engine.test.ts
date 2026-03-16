@@ -331,6 +331,14 @@ describe('paneLooksReady', () => {
     assert.equal(paneLooksReady('model: loading\n› '), false);
   });
 
+  it('accepts Codex welcome-screen helper text', () => {
+    assert.equal(paneLooksReady('How can I help you today?'), true);
+  });
+
+  it('accepts Codex welcome-screen suggestion rows with a prompt glyph', () => {
+    assert.equal(paneLooksReady('› Explain this codebase'), true);
+  });
+
   it('accepts issue-only prompts without a glyph', () => {
     assert.equal(paneLooksReady('IND-123 only...'), true);
   });

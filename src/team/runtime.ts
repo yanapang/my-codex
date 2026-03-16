@@ -2118,7 +2118,12 @@ export async function assignTask(
       if (outcome.ok) break;
       if (attempt < maxAssignRetries && config.worker_launch_mode === 'interactive' && config.tmux_session) {
         if (dismissTrustPromptIfPresent(config.tmux_session, workerInfo.index, workerInfo.pane_id)) {
-          waitForWorkerReady(config.tmux_session, workerInfo.index, 15_000, workerInfo.pane_id);
+          waitForWorkerReady(
+            config.tmux_session,
+            workerInfo.index,
+            resolveWorkerReadyTimeoutMs(process.env),
+            workerInfo.pane_id,
+          );
         } else {
           await new Promise<void>(r => setTimeout(r, assignRetryDelayS * 1000));
         }
