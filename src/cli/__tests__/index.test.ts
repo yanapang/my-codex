@@ -546,8 +546,8 @@ describe('project launch scope helpers', () => {
 });
 
 describe('resolveCodexLaunchPolicy', () => {
-  it('launches directly on macOS when outside tmux to preserve native image paste', () => {
-    assert.equal(resolveCodexLaunchPolicy({}, 'darwin', true), 'direct');
+  it('uses detached tmux on macOS when outside tmux and tmux is available', () => {
+    assert.equal(resolveCodexLaunchPolicy({}, 'darwin', true), 'detached-tmux');
   });
 
   it('uses tmux-aware launch path when already inside tmux', () => {

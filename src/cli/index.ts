@@ -329,14 +329,10 @@ export type CodexLaunchPolicy = 'inside-tmux' | 'detached-tmux' | 'direct';
 
 export function resolveCodexLaunchPolicy(
   env: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = process.platform,
+  _platform: NodeJS.Platform = process.platform,
   tmuxAvailable: boolean = isTmuxAvailable(),
 ): CodexLaunchPolicy {
   if (env.TMUX) return 'inside-tmux';
-  // On macOS, preserve the native terminal paste path for clipboard images.
-  // Detached tmux sessions strip the rich paste payload that Codex consumes,
-  // so image pastes appear to do nothing.
-  if (platform === 'darwin') return 'direct';
   return tmuxAvailable ? 'detached-tmux' : 'direct';
 }
 
