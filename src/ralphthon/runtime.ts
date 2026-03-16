@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { ralphthonDir } from './prd.js';
 
 const PROCESSED_MARKER_LIMIT = 200;
+const CAPTURE_TEXT_LIMIT = 24_000;
 
 export const RALPHTHON_RUNTIME_SCHEMA_VERSION = 1;
 
@@ -13,6 +14,7 @@ export const ralphthonRuntimeStateSchema = z.object({
   schemaVersion: z.literal(RALPHTHON_RUNTIME_SCHEMA_VERSION).default(RALPHTHON_RUNTIME_SCHEMA_VERSION),
   leaderTarget: z.string().trim().default(''),
   lastCaptureHash: z.string().trim().min(1).optional(),
+  lastCaptureText: z.string().optional(),
   lastOutputChangeAt: z.string().trim().min(1).optional(),
   lastPollAt: z.string().trim().min(1).optional(),
   lastInjectionAt: z.string().trim().min(1).optional(),
@@ -35,10 +37,16 @@ export function createRalphthonRuntimeState(leaderTarget: string): RalphthonRunt
   };
 }
 
+function trimCaptureText(value: string | undefined): string | undefined {
+  if (typeof value !== 'string' || value.length === 0) return undefined;
+  return value.slice(-CAPTURE_TEXT_LIMIT);
+}
+
 export function parseRalphthonRuntimeState(input: unknown): RalphthonRuntimeState {
   const parsed = ralphthonRuntimeStateSchema.parse(input);
   return {
     ...parsed,
+    lastCaptureText: trimCaptureText(parsed.lastCaptureText),
     processedMarkers: parsed.processedMarkers.slice(-PROCESSED_MARKER_LIMIT),
   };
 }
@@ -67,5 +75,30 @@ export function rememberProcessedMarker(state: RalphthonRuntimeState, marker: st
   return {
     ...state,
     processedMarkers,
+  };
+}
+
+export function diffPaneCapture(previousCapture: string | undefined, currentCapture: string): string {
+  const previous = previousCapture || '';
+  if (!previous) return currentCapture;
+  if (!currentCapture) return '';
+  if (previous === currentCapture) return '';
+  if (currentCapture.startsWith(previous)) return currentCapture.slice(previous.length);
+
+  const maxOverlap = Math.min(previous.length, currentCapture.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    if (previous.slice(-overlap) === currentCapture.slice(0, overlap)) {
+      return currentCapture.slice(overlap);
+    }
+  }
+
+  return currentCapture;
+}
+
+export function withPersistedCapture(runtime: RalphthonRuntimeState, capture: string): RalphthonRuntimeState {
+  return {
+    ...runtime,
+    lastCaptureHash: hashPaneCapture(capture),
+    lastCaptureText: trimCaptureText(capture),
   };
 }

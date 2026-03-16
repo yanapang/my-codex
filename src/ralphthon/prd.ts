@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 
 export const RALPHTHON_SCHEMA_VERSION = 1;
+export const RALPHTHON_MODE = 'ralphthon';
 const DEFAULT_IDLE_TIMEOUT_SEC = 30;
 const DEFAULT_POLL_INTERVAL_SEC = 120;
 const DEFAULT_MAX_RETRIES = 3;
@@ -48,6 +49,7 @@ const runtimeSchema = z.object({
 });
 
 export const ralphthonPrdSchema = z.object({
+  mode: z.literal(RALPHTHON_MODE).default(RALPHTHON_MODE),
   schemaVersion: z.literal(RALPHTHON_SCHEMA_VERSION).default(RALPHTHON_SCHEMA_VERSION),
   project: z.string().trim().min(1),
   phase: phaseSchema.default('development'),
@@ -114,11 +116,21 @@ export function legacyRalphthonPrdPath(cwd: string): string {
 
 export function resolveExistingRalphthonPrdPath(cwd: string): string | null {
   const canonicalPath = canonicalRalphthonPrdPath(cwd);
-  if (existsSync(canonicalPath)) return canonicalPath;
+  if (existsSync(canonicalPath)) {
+    try {
+      parseRalphthonPrd(JSON.parse(readFileSync(canonicalPath, 'utf-8')));
+      return canonicalPath;
+    } catch {
+      return null;
+    }
+  }
+
   const legacyPath = legacyRalphthonPrdPath(cwd);
   if (!existsSync(legacyPath)) return null;
   try {
-    parseRalphthonPrd(JSON.parse(readFileSync(legacyPath, 'utf-8')));
+    const raw = JSON.parse(readFileSync(legacyPath, 'utf-8'));
+    if (!raw || typeof raw !== 'object' || raw.mode !== RALPHTHON_MODE) return null;
+    parseRalphthonPrd(raw);
     return legacyPath;
   } catch {
     return null;
@@ -141,6 +153,7 @@ export function parseRalphthonPrd(input: unknown): RalphthonPrd {
 export function createRalphthonPrd(input: CreateRalphthonPrdInput): RalphthonPrd {
   const timestamp = nowIso();
   return parseRalphthonPrd({
+    mode: RALPHTHON_MODE,
     schemaVersion: RALPHTHON_SCHEMA_VERSION,
     project: input.project,
     phase: 'development',

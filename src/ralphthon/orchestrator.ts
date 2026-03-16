@@ -12,9 +12,9 @@ import {
   type RalphthonTaskRef,
 } from './prd.js';
 import {
-  hashPaneCapture,
+  diffPaneCapture,
   readRalphthonRuntimeState,
-  rememberProcessedMarker,
+  withPersistedCapture,
   writeRalphthonRuntimeState,
   type RalphthonRuntimeState,
 } from './runtime.js';
@@ -32,7 +32,7 @@ export interface RalphthonOrchestratorDeps {
   readRuntime: () => Promise<RalphthonRuntimeState | null>;
   writeRuntime: (runtime: RalphthonRuntimeState) => Promise<void>;
   capturePane: (leaderTarget: string) => Promise<string>;
-  injectPrompt: (leaderTarget: string, prompt: string) => Promise<void>;
+  injectPrompt: (leaderTarget: string, prompt: string) => Promise<boolean | void>;
   updateModeState?: (patch: Record<string, unknown>) => Promise<void>;
   alert?: (message: string) => Promise<void> | void;
   now?: () => Date;
@@ -120,6 +120,13 @@ function injectionStillFresh(runtime: RalphthonRuntimeState, nowMs: number, poll
   return nowMs - lastInjectionMs < pollIntervalMs;
 }
 
+function markTaskAsStalled(prd: RalphthonPrd, taskId: string, timestamp: string): RalphthonPrd {
+  return markTaskStatus(prd, taskId, 'pending', {
+    lastError: 'stalled-waiting-for-ralphthon-marker',
+    timestamp,
+  });
+}
+
 async function defaultReadPrd(): Promise<RalphthonPrd | null> {
   return readRalphthonPrd(process.cwd());
 }
@@ -146,7 +153,7 @@ export class RalphthonOrchestrator {
       readRuntime: deps.readRuntime ?? defaultReadRuntime,
       writeRuntime: deps.writeRuntime ?? defaultWriteRuntime,
       capturePane: deps.capturePane ?? (async () => ''),
-      injectPrompt: deps.injectPrompt ?? (async () => {}),
+      injectPrompt: deps.injectPrompt ?? (async () => true),
       updateModeState: deps.updateModeState,
       alert: deps.alert,
       now: deps.now ?? (() => new Date()),
@@ -171,21 +178,18 @@ export class RalphthonOrchestrator {
     }
 
     const capture = await this.deps.capturePane(runtime.leaderTarget);
-    const captureHash = hashPaneCapture(capture);
-    if (captureHash !== runtime.lastCaptureHash) {
+    const changedCapture = diffPaneCapture(runtime.lastCaptureText, capture);
+    if (capture !== runtime.lastCaptureText) {
       runtime = {
-        ...runtime,
-        lastCaptureHash: captureHash,
+        ...withPersistedCapture(runtime, capture),
         lastOutputChangeAt: nowStamp,
       };
     }
 
     let prd = await this.deps.readPrd();
-    const processed = new Set(runtime.processedMarkers);
-    const freshMarkers = parseRalphthonMarkers(capture).filter((marker) => !processed.has(marker.raw));
+    const freshMarkers = parseRalphthonMarkers(changedCapture);
 
     for (const marker of freshMarkers) {
-      runtime = rememberProcessedMarker(runtime, marker.raw);
       if (!prd) continue;
 
       switch (marker.type) {
@@ -273,47 +277,71 @@ export class RalphthonOrchestrator {
       if (!prd) {
         const injectionKey = 'bootstrap';
         if (!injectionStillFresh(runtime, nowMs, pollIntervalMs, injectionKey)) {
-          injectedPrompt = promptForBootstrap();
-          await this.deps.injectPrompt(runtime.leaderTarget, injectedPrompt);
-          runtime = {
-            ...runtime,
-            lastInjectionAt: nowStamp,
-            lastInjectedTaskId: injectionKey,
-          };
+          const nextPrompt = promptForBootstrap();
+          const injected = await this.deps.injectPrompt(runtime.leaderTarget, nextPrompt);
+          if (injected !== false) {
+            injectedPrompt = nextPrompt;
+            runtime = {
+              ...runtime,
+              lastInjectionAt: nowStamp,
+              lastInjectedTaskId: injectionKey,
+            };
+          }
         }
       } else {
-        const activeTask = runtime.activeTaskId ? findTaskRef(prd, runtime.activeTaskId) : null;
+        let activeTask = runtime.activeTaskId ? findTaskRef(prd, runtime.activeTaskId) : null;
         const activeTaskStatus = activeTask?.task.status;
+        const activeTaskId = activeTask?.task.id;
+        const activeTaskHadFreshMarker = Boolean(
+          activeTaskId
+          && freshMarkers.some((marker) => 'taskId' in marker && marker.taskId === activeTaskId),
+        );
         const activeTaskStalled = Boolean(
           activeTask
-          && activeTaskStatus === 'pending'
-          && !injectionStillFresh(runtime, nowMs, pollIntervalMs, activeTask.task.id),
+          && !activeTaskHadFreshMarker
+          && (activeTaskStatus === 'pending' || activeTaskStatus === 'in_progress')
+          && !injectionStillFresh(runtime, nowMs, pollIntervalMs, activeTaskId || ''),
         );
+
+        if (activeTask && activeTaskStalled) {
+          prd = markTaskAsStalled(prd, activeTask.task.id, nowStamp);
+          activeTask = findTaskRef(prd, activeTask.task.id);
+          runtime = {
+            ...runtime,
+            activeTaskId: undefined,
+          };
+        }
 
         if (!activeTask || activeTask.task.status === 'done' || activeTask.task.status === 'failed' || activeTaskStalled) {
           const nextTask = nextPendingTask(prd);
           if (nextTask) {
             if (!injectionStillFresh(runtime, nowMs, pollIntervalMs, nextTask.task.id)) {
-              injectedPrompt = promptForTask(nextTask, prd);
-              await this.deps.injectPrompt(runtime.leaderTarget, injectedPrompt);
-              runtime = {
-                ...runtime,
-                activeTaskId: nextTask.task.id,
-                lastInjectionAt: nowStamp,
-                lastInjectedTaskId: nextTask.task.id,
-              };
+              const nextPrompt = promptForTask(nextTask, prd);
+              const injected = await this.deps.injectPrompt(runtime.leaderTarget, nextPrompt);
+              if (injected !== false) {
+                injectedPrompt = nextPrompt;
+                runtime = {
+                  ...runtime,
+                  activeTaskId: nextTask.task.id,
+                  lastInjectionAt: nowStamp,
+                  lastInjectedTaskId: nextTask.task.id,
+                };
+              }
             }
           } else if (prd.phase === 'hardening') {
             const injectionKey = `hardening-wave-${prd.runtime.currentHardeningWave + 1}`;
             if (!injectionStillFresh(runtime, nowMs, pollIntervalMs, injectionKey)) {
-              injectedPrompt = promptForHardeningWave(prd);
-              await this.deps.injectPrompt(runtime.leaderTarget, injectedPrompt);
-              runtime = {
-                ...runtime,
-                activeTaskId: undefined,
-                lastInjectionAt: nowStamp,
-                lastInjectedTaskId: injectionKey,
-              };
+              const nextPrompt = promptForHardeningWave(prd);
+              const injected = await this.deps.injectPrompt(runtime.leaderTarget, nextPrompt);
+              if (injected !== false) {
+                injectedPrompt = nextPrompt;
+                runtime = {
+                  ...runtime,
+                  activeTaskId: undefined,
+                  lastInjectionAt: nowStamp,
+                  lastInjectedTaskId: injectionKey,
+                };
+              }
             }
           }
         }

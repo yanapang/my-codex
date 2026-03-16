@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -32,6 +32,7 @@ describe('ralphthon PRD utilities', () => {
       }],
     });
 
+    assert.equal(prd.mode, 'ralphthon');
     assert.equal(prd.project, 'demo-app');
     assert.equal(prd.phase, 'development');
     assert.equal(prd.config.maxRetries, 3);
@@ -133,14 +134,26 @@ describe('ralphthon PRD utilities', () => {
     assert.equal(completeRalphthonPrd(noIssues3).phase, 'complete');
   });
 
-  it('falls back to legacy .omx/prd.json only when it matches the ralphthon schema', async () => {
+  it('accepts legacy .omx/prd.json only when it is explicitly tagged as ralphthon', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-ralphthon-legacy-'));
     try {
       const legacyPath = join(cwd, '.omx', 'prd.json');
       const prd = createRalphthonPrd({ project: 'legacy-ok' });
-      await (await import('node:fs/promises')).mkdir(join(cwd, '.omx'), { recursive: true });
-      await (await import('node:fs/promises')).writeFile(legacyPath, JSON.stringify(prd, null, 2));
+      await mkdir(join(cwd, '.omx'), { recursive: true });
+      await writeFile(legacyPath, JSON.stringify(prd, null, 2));
       assert.equal(resolveExistingRalphthonPrdPath(cwd), legacyPath);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('does not treat Ralph legacy .omx/prd.json as ralphthon state', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-ralphthon-legacy-collision-'));
+    try {
+      const legacyPath = join(cwd, '.omx', 'prd.json');
+      await mkdir(join(cwd, '.omx'), { recursive: true });
+      await writeFile(legacyPath, JSON.stringify({ project: 'Legacy Ralph Project', description: 'plain ralph artifact' }, null, 2));
+      assert.equal(resolveExistingRalphthonPrdPath(cwd), null);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

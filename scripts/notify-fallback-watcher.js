@@ -182,6 +182,14 @@ async function loadPersistedWatcherState() {
       ...lastRalphthonWatchdog,
       ...persisted.ralphthon_watchdog,
     };
+    const persistedRestartCount = Number(persisted.ralphthon_watchdog.restart_count);
+    if (Number.isFinite(persistedRestartCount) && persistedRestartCount >= 0) {
+      ralphthonRestartCount = Math.floor(persistedRestartCount);
+    }
+    const persistedWindowStart = Date.parse(safeString(persisted.ralphthon_watchdog.restart_window_started_at));
+    if (Number.isFinite(persistedWindowStart) && persistedWindowStart > 0) {
+      ralphthonRestartWindowStartedAt = persistedWindowStart;
+    }
   }
 }
 
@@ -860,11 +868,22 @@ async function runRalphthonWatchdogTick() {
         return result.status === 0 ? safeString(result.stdout) : '';
       },
       injectPrompt: async (leaderTarget, prompt) => {
+        const paneGuard = await checkPaneReadyForTeamSendKeys(leaderTarget);
+        if (!paneGuard.ok) {
+          await eventLog({
+            type: 'ralphthon_injection_skipped',
+            pane_id: leaderTarget,
+            reason: paneGuard.reason || 'pane_guard_blocked',
+            pane_current_command: paneGuard.paneCurrentCommand || null,
+          });
+          return false;
+        }
         const marked = `${prompt} ${DEFAULT_MARKER}`;
         const send = spawnSync('tmux', ['send-keys', '-t', leaderTarget, '-l', marked], { encoding: 'utf-8' });
         if (send.status !== 0) throw new Error((send.stderr || send.stdout || '').trim() || 'tmux send-keys failed');
         spawnSync('tmux', ['send-keys', '-t', leaderTarget, 'C-m'], { encoding: 'utf-8' });
         spawnSync('tmux', ['send-keys', '-t', leaderTarget, 'C-m'], { encoding: 'utf-8' });
+        return true;
       },
       updateModeState: updateRalphthonModePatch,
       alert: async (message) => { await eventLog({ type: 'ralphthon_alert', message }); },
@@ -907,7 +926,7 @@ async function runRalphthonWatchdogTick() {
     }
     lastRalphthonWatchdog = {
       ...lastRalphthonWatchdog,
-      active: true,
+      active: false,
       last_tick_at: nowIso,
       last_result: 'restart_limit_reached',
       last_error: message,
@@ -917,7 +936,17 @@ async function runRalphthonWatchdogTick() {
       restart_count: ralphthonRestartCount,
       restart_window_started_at: ralphthonRestartWindowStartedAt ? new Date(ralphthonRestartWindowStartedAt).toISOString() : '',
     };
+    await updateRalphthonModePatch({
+      active: false,
+      current_phase: 'failed',
+      completed_at: nowIso,
+      error: message || 'ralphthon_watchdog_restart_limit_reached',
+      stop_reason: 'ralphthon_watchdog_restart_limit_reached',
+    });
     await eventLog({ type: 'ralphthon_watchdog_failed', restart_count: ralphthonRestartCount, error: message });
+    const notifyLine = `[ralphthon] watchdog failed permanently after ${ralphthonRestartCount} restarts: ${message || 'unknown error'}`;
+    process.stderr.write(`${notifyLine}\n`);
+    await eventLog({ type: 'ralphthon_alert', message: notifyLine, user_visible: true });
   }
 }
 

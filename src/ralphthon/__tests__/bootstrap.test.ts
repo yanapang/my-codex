@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { bootstrapRalphthonPrdFromExistingArtifacts } from '../bootstrap.js';
+import type { RalphthonStoryTask } from '../prd.js';
 
 describe('bootstrapRalphthonPrdFromExistingArtifacts', () => {
   it('seeds a structured PRD from the latest deep-interview spec', async () => {
@@ -15,7 +16,7 @@ describe('bootstrapRalphthonPrdFromExistingArtifacts', () => {
       const prd = await bootstrapRalphthonPrdFromExistingArtifacts(cwd, 'fallback');
       assert.ok(prd);
       assert.equal(prd?.project, 'Demo app');
-      assert.deepEqual(prd?.stories[0]?.tasks.map((task) => task.desc), ['User can sign in', 'Dashboard renders']);
+      assert.deepEqual(prd?.stories[0]?.tasks.map((task: RalphthonStoryTask) => task.desc), ['User can sign in', 'Dashboard renders']);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

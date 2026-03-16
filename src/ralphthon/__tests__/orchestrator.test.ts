@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { RalphthonOrchestrator, parseRalphthonMarkers } from '../orchestrator.js';
-import { createRalphthonPrd } from '../prd.js';
-import { createRalphthonRuntimeState } from '../runtime.js';
+import { createRalphthonPrd, findTaskRef } from '../prd.js';
+import { createRalphthonRuntimeState, type RalphthonRuntimeState } from '../runtime.js';
 
 describe('parseRalphthonMarkers', () => {
   it('extracts task and hardening markers from pane output', () => {
@@ -38,7 +38,7 @@ describe('RalphthonOrchestrator', () => {
       readRuntime: async () => runtime,
       writeRuntime: async (next) => { runtime = next; },
       capturePane: async () => 'idle prompt',
-      injectPrompt: async (_target, prompt) => { injected.push(prompt); },
+      injectPrompt: async (_target, prompt) => { injected.push(prompt); return true; },
       now: () => new Date(nowMs),
     });
 
@@ -71,7 +71,7 @@ describe('RalphthonOrchestrator', () => {
       readRuntime: async () => runtime,
       writeRuntime: async (next) => { runtime = next; },
       capturePane: async () => capture,
-      injectPrompt: async () => {},
+      injectPrompt: async () => true,
       alert: async (message) => { alerts.push(message); },
       now: () => new Date(nowMs),
     });
@@ -101,6 +101,94 @@ describe('RalphthonOrchestrator', () => {
     assert.equal(alerts.length, 1);
   });
 
+  it('reprocesses repeated identical markers across retries by diffing new capture output', async () => {
+    let nowMs = Date.parse('2026-03-16T00:00:00.000Z');
+    let prd = createRalphthonPrd({
+      project: 'retry-starts',
+      stories: [{
+        id: 'S1',
+        title: 'Story 1',
+        status: 'pending',
+        tasks: [{ id: 'T1', desc: 'Retry me', status: 'pending', retries: 0 }],
+      }],
+      config: { maxRetries: 3, pollIntervalSec: 1 },
+    });
+    let runtime = createRalphthonRuntimeState('%1');
+    let capture = '[RALPHTHON_TASK_START] id=T1';
+
+    const orchestrator = new RalphthonOrchestrator({
+      readPrd: async () => prd,
+      writePrd: async (next) => { prd = next; },
+      readRuntime: async () => runtime,
+      writeRuntime: async (next) => { runtime = next; },
+      capturePane: async () => capture,
+      injectPrompt: async () => true,
+      now: () => new Date(nowMs),
+    });
+
+    await orchestrator.tick();
+    assert.equal(findTaskRef(prd, 'T1')?.task.status, 'in_progress');
+
+    nowMs += 2_000;
+    capture += '\n[RALPHTHON_TASK_FAILED] id=T1 reason=first';
+    await orchestrator.tick();
+    assert.equal(findTaskRef(prd, 'T1')?.task.status, 'pending');
+    assert.equal(findTaskRef(prd, 'T1')?.task.retries, 1);
+
+    nowMs += 2_000;
+    capture += '\n[RALPHTHON_TASK_START] id=T1';
+    await orchestrator.tick();
+    assert.equal(findTaskRef(prd, 'T1')?.task.status, 'in_progress');
+  });
+
+  it('recovers stalled in-progress tasks by requeueing and reinjecting them', async () => {
+    let nowMs = Date.parse('2026-03-16T00:00:00.000Z');
+    let prd = createRalphthonPrd({
+      project: 'stalled-in-progress',
+      stories: [{
+        id: 'S1',
+        title: 'Story 1',
+        status: 'pending',
+        tasks: [{ id: 'T1', desc: 'Long task', status: 'pending', retries: 0 }],
+      }],
+      config: { pollIntervalSec: 1, idleTimeoutSec: 1 },
+    });
+    let runtime: RalphthonRuntimeState = {
+      ...createRalphthonRuntimeState('%1'),
+      activeTaskId: 'T1',
+      lastInjectionAt: '2026-03-16T00:00:00.000Z',
+      lastInjectedTaskId: 'T1',
+      lastOutputChangeAt: '2026-03-16T00:00:00.000Z',
+      lastPollAt: '2026-03-16T00:00:00.000Z',
+    };
+    prd = {
+      ...prd,
+      stories: [{
+        ...prd.stories[0]!,
+        tasks: [{ ...prd.stories[0]!.tasks[0]!, status: 'in_progress', startedAt: '2026-03-16T00:00:00.000Z' }],
+      }],
+    };
+    const injected: string[] = [];
+
+    const orchestrator = new RalphthonOrchestrator({
+      readPrd: async () => prd,
+      writePrd: async (next) => { prd = next; },
+      readRuntime: async () => runtime,
+      writeRuntime: async (next) => { runtime = next; },
+      capturePane: async () => 'quiet pane',
+      injectPrompt: async (_target, prompt) => { injected.push(prompt); return true; },
+      now: () => new Date(nowMs),
+    });
+
+    nowMs += 2_000;
+    await orchestrator.tick();
+
+    assert.equal(findTaskRef(prd, 'T1')?.task.status, 'pending');
+    assert.equal(findTaskRef(prd, 'T1')?.task.lastError, 'stalled-waiting-for-ralphthon-marker');
+    assert.equal(injected.length, 1);
+    assert.match(injected[0] || '', /\[RALPHTHON_ASSIGN\] id=T1/);
+  });
+
   it('enters hardening after development work is complete and injects a hardening wave prompt', async () => {
     let nowMs = Date.parse('2026-03-16T00:00:00.000Z');
     let prd = createRalphthonPrd({
@@ -121,7 +209,7 @@ describe('RalphthonOrchestrator', () => {
       readRuntime: async () => runtime,
       writeRuntime: async (next) => { runtime = next; },
       capturePane: async () => 'quiet leader pane',
-      injectPrompt: async (_target, prompt) => { injected.push(prompt); },
+      injectPrompt: async (_target, prompt) => { injected.push(prompt); return true; },
       now: () => new Date(nowMs),
     });
 
@@ -156,7 +244,7 @@ describe('RalphthonOrchestrator', () => {
       readRuntime: async () => runtime,
       writeRuntime: async (next) => { runtime = next; },
       capturePane: async () => 'idle',
-      injectPrompt: async () => {},
+      injectPrompt: async () => true,
       updateModeState: async (patch) => { modePatches.push(patch); },
     });
 
