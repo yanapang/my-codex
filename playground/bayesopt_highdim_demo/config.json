@@ -1,0 +1,13 @@
+{
+  "algorithm": "random_search",
+  "dimension": 24,
+  "budget": 48,
+  "final_resamples": 24,
+  "seed": 17,
+  "params": {
+    "n_initial_random": 10,
+    "candidate_pool_size": 1500,
+    "acq_beta": 1.5,
+    "active_dimensions": null
+  }
+}
