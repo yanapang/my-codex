@@ -74,22 +74,20 @@ def merge_sort(values: list[int], ops: Ops) -> list[int]:
     return out
 
 
-def counting_sort(values: list[int], max_value: int, ops: Ops) -> list[int]:
-    counts = [0] * (max_value + 1)
+def counting_sort(values: list[int], min_value: int, max_value: int, ops: Ops) -> list[int]:
+    offset = min_value
+    counts = [0] * (max_value - min_value + 1)
     ops.move(len(counts))
     for value in values:
-        counts[value] += 1
+        counts[value - offset] += 1
         ops.move()
     out: list[int] = []
-    for value, count in enumerate(counts):
+    for index, count in enumerate(counts):
         if count:
+            value = index + offset
             out.extend([value] * count)
             ops.move(count)
     return out
-
-
-def duplicate_ratio(values: list[int]) -> float:
-    return 1.0 - (len(set(values)) / max(1, len(values)))
 
 
 def longest_non_decreasing_run(values: list[int]) -> int:
@@ -108,14 +106,16 @@ def longest_non_decreasing_run(values: list[int]) -> int:
 def hybrid_sort(values: list[int], config: dict, ops: Ops) -> list[int]:
     params = dict(config.get('params', {}))
     insertion_threshold = int(params.get('insertion_threshold', 12))
-    duplicate_scan_threshold = float(params.get('duplicate_scan_threshold', 0.2))
     run_detection_min = int(params.get('run_detection_min', 10))
-    counting_max_value = int(params.get('counting_max_value', 255))
+    counting_span_limit = int(params.get('counting_span_limit', 128))
 
     if len(values) <= insertion_threshold:
         return insertion_sort(values, ops)
-    if values and min(values) >= 0 and max(values) <= counting_max_value and duplicate_ratio(values) >= duplicate_scan_threshold:
-        return counting_sort(values, counting_max_value, ops)
+    if values:
+        min_value = min(values)
+        max_value = max(values)
+        if max_value - min_value <= counting_span_limit:
+            return counting_sort(values, min_value, max_value, ops)
     if longest_non_decreasing_run(values) >= run_detection_min:
         return insertion_sort(values, ops)
     return merge_sort(values, ops)
