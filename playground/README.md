@@ -9,7 +9,14 @@ Design goals:
 - no heavyweight runtime artifacts committed
 - evaluator-driven keep/discard loops that are easy to inspect under `.omx/logs/autoresearch/`
 
-## Showcase index
+## Layout
+
+- `playground/*` — demo code and benchmark logic
+- `missions/*` — autoresearch mission contracts used by the showcase
+- `scripts/eval-*` — focused evaluator entrypoints
+- `scripts/run-autoresearch-showcase.sh` — convenience launcher for the bundled showcase missions
+
+## Index
 
 | Showcase | Mission | Evaluator | Status | Representative result |
 |---|---|---|---|---|
@@ -31,7 +38,7 @@ Use `scripts/run-autoresearch-showcase.sh --list` to see the bundled launch targ
 | Latent subspace discovery | 3.7019658949006504 | 4.176124116152444 | +0.47415822125179353 |
 | Adaptive sorting optimization | 2.1198297352756628 | 9.411498969440865 | +7.291669234165202 |
 
-## Showcase demos
+## Demos
 
 ### 1. OMX self-optimization
 - Mission: `missions/in-action-cat-shellout-demo/`
@@ -62,7 +69,7 @@ Use `scripts/run-autoresearch-showcase.sh --list` to see the bundled launch targ
 - Evaluator: `scripts/eval-adaptive-sort-optimization.py`
 - What it demonstrates: algorithm-engineering optimization over a deterministic mixed-distribution sorting benchmark using weighted comparison/move cost rather than noisy wall-clock timing.
 
-## How to run a showcase
+## Running the showcase
 
 Example:
 

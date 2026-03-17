@@ -324,46 +324,9 @@ omx autoresearch missions/demo
 
 `omx autoresearch` now runs as a thin supervisor around one Codex experiment session at a time. A fresh launch creates a run-tagged `autoresearch/<slug>/<run-tag>` worktree lane, seeds the baseline evaluator row, writes authoritative per-run artifacts under `.omx/logs/autoresearch/<run-id>/`, and expects the session to hand back a repo-root `candidate.json` artifact. Each iteration's bootstrap instructions include the current baseline/last-kept state plus a bounded recent ledger summary, and `status=candidate` artifacts must point at the current worktree `HEAD` and last-kept base commit. After each session exit, OMX evaluates the candidate, records keep/discard/reset state, hard-resets discarded or ambiguous experiments back to the last kept commit, and relaunches the next iteration unless the run aborts. Use `omx autoresearch --resume <run-id>` to continue an existing run from its manifest/worktree.
 
-Autoresearch in-action walkthrough:
+Autoresearch showcase:
 
-```bash
-# 1) Use the bundled demo mission that optimizes OMX itself.
-omx autoresearch missions/in-action-cat-shellout-demo
-
-# 2) Inspect the run artifacts after the first worker iteration exits.
-RUN_ID=$(find .omx/logs/autoresearch -maxdepth 1 -mindepth 1 -type d -printf '%f\n' | sort | tail -n 1)
-cat .omx/logs/autoresearch/$RUN_ID/manifest.json
-cat .omx/logs/autoresearch/$RUN_ID/candidate.json
-cat .omx/logs/autoresearch/$RUN_ID/iteration-ledger.json
-
-# 3) Re-run the same focused evaluator outside the supervisor if desired.
-node scripts/eval-in-action-cat-shellout-demo.js
-```
-
-That bundled mission demonstrates the full thin-supervisor loop on a deliberately small OMX cleanup: the baseline evaluator fails while `src/cli/autoresearch.ts` still shells out to `cat`, the launched worker replaces that shell-out with an in-process manifest read, the evaluator re-runs on the candidate, and the supervisor records a `keep` decision in the iteration ledger when the focused autoresearch tests pass. See `missions/in-action-cat-shellout-demo/` and `scripts/eval-in-action-cat-shellout-demo.js` for the exact mission/evaluator pair.
-
-For a broader set of research-style autoresearch demos, including tabular ML and noisy high-dimensional optimization, see [`playground/README.md`](playground/README.md).
-
-Autoresearch showcase quick start:
-
-```bash
-# List the bundled showcase missions
-./scripts/run-autoresearch-showcase.sh --list
-
-# Run one showcase
-./scripts/run-autoresearch-showcase.sh bayesopt
-
-# Run several showcase demos back-to-back
-./scripts/run-autoresearch-showcase.sh omx-self ml-tabular bayesopt
-```
-
-Autoresearch showcase summary:
-
-- OMX self-optimization: removes a real OMX runtime shell-out via autoresearch
-- Tabular ML: improves deterministic classification AUC on a lightweight benchmark
-- Noisy Bayes-opt: improves a high-dimensional noisy black-box optimizer under fixed budget
-- Latent subspace discovery: solves a harder mixed-direction optimization task
-- Adaptive sorting: now completed with a large weighted-cost improvement on the deterministic mixed-distribution benchmark
+For the canonical autoresearch showcase — including completed research-style demos, missions, evaluators, and the lightweight runner script — see [`playground/README.md`](playground/README.md).
 
 `omx explore` is the default OMX surface for simple read-only exploration. It stays intentionally read-only and shell-only, and qualifying shell-native read-only tasks may be routed through `omx sparkshell` as a backend when that is the cheaper/more direct fit. The routing flag only adds advisory steering in generated session instructions; ambiguous or implementation-heavy requests stay on the normal Codex path, and OMX falls back normally if the explore harness is unavailable. The harness constrains Codex through a temporary allowlisted shell/bin layer so only approved repository-inspection command families are available during the offloaded run.
 
