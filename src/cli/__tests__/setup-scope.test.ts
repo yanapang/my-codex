@@ -315,6 +315,7 @@ describe('omx setup scope behavior', () => {
       assert.equal(res.status, 0, res.stderr || res.stdout);
 
       const overwritten = await readFile(join(wd, 'AGENTS.md'), 'utf-8');
+      assert.match(overwritten, /^<!-- AUTONOMY DIRECTIVE — DO NOT REMOVE -->/);
       assert.match(overwritten, /# oh-my-codex - Intelligent Multi-Agent Orchestration/);
       assert.doesNotMatch(overwritten, /# old custom file/);
       assert.match(res.stdout, /Force mode: enabled additional destructive maintenance/);

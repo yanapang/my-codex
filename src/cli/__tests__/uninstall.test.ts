@@ -483,7 +483,13 @@ describe('omx uninstall', () => {
       await writeFile(join(wd, '.omx', 'setup-scope.json'), JSON.stringify({ scope: 'user' }));
       await writeFile(
         join(codexHome, 'AGENTS.md'),
-        '# oh-my-codex - Intelligent Multi-Agent Orchestration\n<!-- omx:generated:agents-md -->\n',
+        '<!-- AUTONOMY DIRECTIVE — DO NOT REMOVE -->\n'
+          + 'YOU ARE AN AUTONOMOUS CODING AGENT. EXECUTE TASKS TO COMPLETION WITHOUT ASKING FOR PERMISSION.\n'
+          + 'DO NOT STOP TO ASK "SHOULD I PROCEED?" — PROCEED. DO NOT WAIT FOR CONFIRMATION ON OBVIOUS NEXT STEPS.\n'
+          + 'IF BLOCKED, TRY AN ALTERNATIVE APPROACH. ONLY ASK WHEN TRULY AMBIGUOUS OR DESTRUCTIVE.\n'
+          + '<!-- END AUTONOMY DIRECTIVE -->\n'
+          + '<!-- omx:generated:agents-md -->\n'
+          + '# oh-my-codex - Intelligent Multi-Agent Orchestration\n',
       );
 
       const res = runOmx(wd, ['uninstall', '--keep-config'], { HOME: home });

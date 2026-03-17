@@ -117,6 +117,7 @@ describe('omx setup AGENTS refresh behavior', () => {
       const agentsContent = await readFile(join(wd, 'AGENTS.md'), 'utf-8');
       assert.match(output, /Generated AGENTS\.md in project root\./);
       assert.match(output, /agents_md: updated=1, unchanged=0, backed_up=1, skipped=0, removed=0/);
+      assert.match(agentsContent, /^<!-- AUTONOMY DIRECTIVE — DO NOT REMOVE -->/);
       assert.match(agentsContent, /# oh-my-codex - Intelligent Multi-Agent Orchestration/);
       assert.doesNotMatch(agentsContent, /# old agents file/);
 
