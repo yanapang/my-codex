@@ -94,7 +94,8 @@ When your mailbox receives a message, process delivery explicitly:
 - If you need to modify a shared file, report to the lead by writing to your status file with state "blocked"
 - Do NOT write lifecycle fields (\`status\`, \`owner\`, \`result\`, \`error\`) directly in task files; use claim-safe lifecycle APIs
 - If blocked, write {"state": "blocked", "reason": "..."} to your status file
-- Do NOT spawn sub-agents (no spawn_agent). Complete work in this worker session only.
+- You may spawn Codex native subagents when parallel execution improves throughput.
+- Use subagents only for independent, bounded subtasks that can run safely within this worker pane.
 </team_worker_protocol>
 ${TEAM_OVERLAY_END}`;
 }
@@ -433,7 +434,8 @@ ${buildVerificationSection('each assigned task')}
 - Only edit files described in your task descriptions
 - Do NOT edit files that belong to other workers
 - If you need to modify a shared/common file, write \`{"state": "blocked", "reason": "need to edit shared file X"}\` to your status file and wait
-- Do NOT spawn sub-agents (no \`spawn_agent\`). Complete work in this worker session.
+- You may spawn Codex native subagents when parallel execution improves throughput.
+- Use subagents only for independent, bounded subtasks that can run safely within this worker pane.
 ${specializationSection}`;
 }
 

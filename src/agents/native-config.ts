@@ -1,13 +1,13 @@
 /**
- * Native agent config generator for Codex CLI multi-agent roles
- * Generates per-agent .toml files at ~/.omx/agents/<name>.toml
+ * Native agent config generators for Codex CLI.
+ * Writes standalone TOML files under ~/.codex/agents/ or ./.codex/agents/.
  */
 
 import { existsSync } from 'fs';
 import { mkdir, readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { AGENT_DEFINITIONS, AgentDefinition } from './definitions.js';
-import { omxAgentsConfigDir } from '../utils/paths.js';
+import { codexAgentsDir } from '../utils/paths.js';
 
 const POSTURE_OVERLAYS: Record<AgentDefinition['posture'], string> = {
   'frontier-orchestrator': [
@@ -76,6 +76,14 @@ const MODEL_CLASS_OVERLAYS: Record<AgentDefinition['modelClass'], string> = {
   ].join('\n'),
 };
 
+export interface GeneratedNativeAgentConfig {
+  name: string;
+  description: string;
+  developerInstructions: string;
+  model?: string;
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+}
+
 function buildPromptInstructions(agent: AgentDefinition, promptContent: string): string {
   const instructions = stripFrontmatter(promptContent);
   return [
@@ -85,7 +93,7 @@ function buildPromptInstructions(agent: AgentDefinition, promptContent: string):
     '',
     MODEL_CLASS_OVERLAYS[agent.modelClass],
     '',
-    `## OMX Agent Metadata`,
+    '## OMX Agent Metadata',
     `- role: ${agent.name}`,
     `- posture: ${agent.posture}`,
     `- model_class: ${agent.modelClass}`,
@@ -94,9 +102,9 @@ function buildPromptInstructions(agent: AgentDefinition, promptContent: string):
 }
 
 /**
- * Strip YAML frontmatter (between --- markers) from markdown content
+ * Strip YAML frontmatter (between --- markers) from markdown content.
  */
-function stripFrontmatter(content: string): string {
+export function stripFrontmatter(content: string): string {
   const match = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
   if (match) {
     return content.slice(match[0].length).trim();
@@ -109,41 +117,87 @@ function stripFrontmatter(content: string): string {
  * TOML """ strings only need to escape sequences of 3+ consecutive quotes.
  */
 function escapeTomlMultiline(s: string): string {
-  // Replace sequences of 3+ double quotes with escaped versions
   return s.replace(/"{3,}/g, (match) => match.split('').join('\\'));
 }
 
-/**
- * Generate TOML content for a single agent config file
- */
-export function generateAgentToml(agent: AgentDefinition, promptContent: string): string {
-  const instructions = buildPromptInstructions(agent, promptContent);
-  const effort = agent.reasoningEffort;
-  const escaped = escapeTomlMultiline(instructions);
+function escapeTomlBasicString(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
 
-  return [
-    `# oh-my-codex agent: ${agent.name}`,
-    `model_reasoning_effort = "${effort}"`,
-    `developer_instructions = """`,
-    escaped,
-    `"""`,
+export function generateStandaloneAgentToml(config: GeneratedNativeAgentConfig): string {
+  const escapedInstructions = escapeTomlMultiline(config.developerInstructions);
+  const lines = [
+    `# oh-my-codex agent: ${config.name}`,
+    `name = "${escapeTomlBasicString(config.name)}"`,
+    `description = "${escapeTomlBasicString(config.description)}"`,
+  ];
+
+  if (config.model) {
+    lines.push(`model = "${escapeTomlBasicString(config.model)}"`);
+  }
+  if (config.reasoningEffort) {
+    lines.push(`model_reasoning_effort = "${config.reasoningEffort}"`);
+  }
+
+  lines.push(
+    'developer_instructions = """',
+    escapedInstructions,
+    '"""',
     '',
-  ].join('\n');
+  );
+
+  return lines.join('\n');
 }
 
 /**
- * Install native agent config .toml files to ~/.omx/agents/
- * Returns the number of agents installed
+ * Generate TOML content for a prompt-backed OMX role agent.
+ */
+export function generateAgentToml(agent: AgentDefinition, promptContent: string): string {
+  return generateStandaloneAgentToml({
+    name: agent.name,
+    description: agent.description,
+    developerInstructions: buildPromptInstructions(agent, promptContent),
+    reasoningEffort: agent.reasoningEffort,
+  });
+}
+
+/**
+ * Generate TOML content for a skill-backed OMX native agent.
+ */
+export function generateSkillAgentToml(
+  name: string,
+  description: string,
+  skillContent: string,
+): string {
+  const instructions = [
+    `You are the oh-my-codex skill agent "${name}".`,
+    `Purpose: ${description}`,
+    '- Follow the embedded OMX skill instructions below as your operating procedure.',
+    '- When parallel execution helps, you may use Codex native subagents for independent subtasks.',
+    '',
+    stripFrontmatter(skillContent),
+  ].join('\n');
+
+  return generateStandaloneAgentToml({
+    name,
+    description,
+    developerInstructions: instructions,
+  });
+}
+
+/**
+ * Install prompt-backed native agent config .toml files to ~/.codex/agents/
+ * Returns the number of agent files written.
  */
 export async function installNativeAgentConfigs(
   pkgRoot: string,
-  options: { force?: boolean; dryRun?: boolean; verbose?: boolean; agentsDir?: string } = {}
+  options: { force?: boolean; dryRun?: boolean; verbose?: boolean; agentsDir?: string } = {},
 ): Promise<number> {
   const {
     force = false,
     dryRun = false,
     verbose = false,
-    agentsDir = omxAgentsConfigDir(),
+    agentsDir = codexAgentsDir(),
   } = options;
 
   if (!dryRun) {
@@ -172,7 +226,7 @@ export async function installNativeAgentConfigs(
       await writeFile(dst, toml);
     }
     if (verbose) console.log(`  ${name}.toml`);
-    count++;
+    count += 1;
   }
 
   return count;

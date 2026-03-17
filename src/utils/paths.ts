@@ -24,6 +24,16 @@ export function codexPromptsDir(): string {
   return join(codexHome(), 'prompts');
 }
 
+/** Codex native agents directory (~/.codex/agents/) */
+export function codexAgentsDir(codexHomeDir?: string): string {
+  return join(codexHomeDir || codexHome(), 'agents');
+}
+
+/** Project-level Codex native agents directory (.codex/agents/) */
+export function projectCodexAgentsDir(projectRoot?: string): string {
+  return join(projectRoot || process.cwd(), '.codex', 'agents');
+}
+
 /** User-level skills directory ($CODEX_HOME/skills, defaults to ~/.codex/skills/) */
 export function userSkillsDir(): string {
   return join(codexHome(), 'skills');
@@ -115,11 +125,6 @@ export function omxPlansDir(projectRoot?: string): string {
 /** oh-my-codex logs directory (.omx/logs/) */
 export function omxLogsDir(projectRoot?: string): string {
   return join(projectRoot || process.cwd(), '.omx', 'logs');
-}
-
-/** oh-my-codex native agent config directory (~/.omx/agents/) */
-export function omxAgentsConfigDir(): string {
-  return join(homedir(), '.omx', 'agents');
 }
 
 /** Get the package root directory (where agents/, skills/, prompts/ live) */

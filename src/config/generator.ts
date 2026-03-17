@@ -14,13 +14,10 @@ import { readFile, writeFile } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
 import { AGENT_DEFINITIONS } from "../agents/definitions.js";
-import { tryReadCatalogManifest } from "../catalog/reader.js";
-import { omxAgentsConfigDir } from "../utils/paths.js";
 import { DEFAULT_FRONTIER_MODEL } from "./models.js";
 import type { UnifiedMcpRegistryServer } from "./mcp-registry.js";
 
 interface MergeOptions {
-  agentsConfigDir?: string;
   modelOverride?: string;
   sharedMcpServers?: UnifiedMcpRegistryServer[];
   sharedMcpRegistrySource?: string;
@@ -48,6 +45,8 @@ const DEFAULT_SETUP_MODEL_AUTO_COMPACT_TOKEN_LIMIT = 900000;
 const SHARED_MCP_REGISTRY_MARKER = "oh-my-codex (OMX) Shared MCP Registry Sync";
 const SHARED_MCP_REGISTRY_END_MARKER =
   "# End oh-my-codex shared MCP registry sync";
+const OMX_AGENTS_MAX_THREADS = 6;
+const OMX_AGENTS_MAX_DEPTH = 2;
 const OMX_TUI_STATUS_LINE =
   'status_line = ["model-with-reasoning", "git-branch", "context-remaining", "total-input-tokens", "total-output-tokens", "five-hour-limit"]';
 
@@ -84,7 +83,7 @@ function getOmxTopLevelLines(
     "# oh-my-codex top-level settings (must be before any [table])",
     `notify = ["node", "${escapedPath}"]`,
     'model_reasoning_effort = "high"',
-    `developer_instructions = "You have oh-my-codex installed. AGENTS.md is your orchestration brain and the main orchestration surface. Use /prompts:<role> and spawned role prompts for specialized subagent work. Use workflow skills via $name when explicitly invoked or clearly routed by AGENTS.md. Treat role prompts as narrower execution surfaces under AGENTS.md authority."`,
+    `developer_instructions = "You have oh-my-codex installed. AGENTS.md is your orchestration brain and the main orchestration surface. Use /prompts:<role> and spawned role prompts for specialized subagent work. Codex native subagents are available via .codex/agents and may be used for independent parallel subtasks within a single session or team pane. Use workflow skills via $name when explicitly invoked or clearly routed by AGENTS.md. Treat role prompts as narrower execution surfaces under AGENTS.md authority."`,
   ];
 
   const existingModel = rootValues.get("model");
@@ -223,6 +222,53 @@ function upsertFeatureFlags(config: string): string {
   return lines.join("\n");
 }
 
+function upsertAgentsSettings(config: string): string {
+  const lines = config.split(/\r?\n/);
+  const agentsStart = lines.findIndex((line) =>
+    /^\s*\[agents\]\s*$/.test(line),
+  );
+
+  if (agentsStart < 0) {
+    const base = config.trimEnd();
+    const agentsBlock = [
+      "[agents]",
+      `max_threads = ${OMX_AGENTS_MAX_THREADS}`,
+      `max_depth = ${OMX_AGENTS_MAX_DEPTH}`,
+      "",
+    ].join("\n");
+    if (base.length === 0) return agentsBlock;
+    return `${base}\n\n${agentsBlock}`;
+  }
+
+  let sectionEnd = lines.length;
+  for (let i = agentsStart + 1; i < lines.length; i++) {
+    if (/^\s*\[\[?[^\]]+\]?\]\s*$/.test(lines[i])) {
+      sectionEnd = i;
+      break;
+    }
+  }
+
+  let maxThreadsIdx = -1;
+  let maxDepthIdx = -1;
+  for (let i = agentsStart + 1; i < sectionEnd; i++) {
+    if (/^\s*max_threads\s*=/.test(lines[i])) {
+      maxThreadsIdx = i;
+    } else if (/^\s*max_depth\s*=/.test(lines[i])) {
+      maxDepthIdx = i;
+    }
+  }
+
+  if (maxThreadsIdx < 0) {
+    lines.splice(sectionEnd, 0, `max_threads = ${OMX_AGENTS_MAX_THREADS}`);
+    sectionEnd += 1;
+  }
+  if (maxDepthIdx < 0) {
+    lines.splice(sectionEnd, 0, `max_depth = ${OMX_AGENTS_MAX_DEPTH}`);
+  }
+
+  return lines.join("\n");
+}
+
 /**
  * Remove OMX-owned feature flags from the [features] section.
  * If the section becomes empty after removal, remove the section header too.
@@ -281,16 +327,14 @@ export function stripOmxFeatureFlags(config: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Check whether a TOML table name belongs to an OMX-defined agent.
+ * Check whether a TOML table name belongs to a legacy OMX-managed agent entry.
  * Handles both `agents.name` and `agents."name"` forms.
  */
-function isOmxAgentSection(
-  tableName: string,
-  agentNames: Set<string>,
-): boolean {
+function isLegacyOmxAgentSection(tableName: string): boolean {
   const m = tableName.match(/^agents\.(?:"([^"]+)"|(\w[\w-]*))$/);
   if (!m) return false;
-  return agentNames.has(m[1] || m[2]);
+  const name = m[1] || m[2] || "";
+  return Object.prototype.hasOwnProperty.call(AGENT_DEFINITIONS, name);
 }
 
 /**
@@ -298,12 +342,11 @@ function isOmxAgentSection(
  * This covers legacy configs that were written before markers were added,
  * or configs where the marker was accidentally removed.
  *
- * Targets: [mcp_servers.omx_*], [agents.<omx-agent>], [tui]
+ * Targets: [mcp_servers.omx_*], legacy [agents.<name>] entries, [tui]
  */
 function stripOrphanedOmxSections(config: string): string {
   const lines = config.split(/\r?\n/);
   const result: string[] = [];
-  const omxAgentNames = new Set(Object.keys(AGENT_DEFINITIONS));
 
   let i = 0;
   while (i < lines.length) {
@@ -317,7 +360,7 @@ function stripOrphanedOmxSections(config: string): string {
       // when it lives inside the OMX marker block.
       const isOmxSection =
         /^mcp_servers\.omx_/.test(tableName) ||
-        isOmxAgentSection(tableName, omxAgentNames);
+        isLegacyOmxAgentSection(tableName);
 
       if (isOmxSection) {
         // Remove preceding OMX comment lines and blank lines
@@ -560,52 +603,11 @@ function getSharedMcpRegistryBlock(
 }
 
 /**
- * Generate [agents.<name>] entries for Codex native multi-agent support.
- * Each agent gets a description and config_file pointing to ~/.omx/agents/<name>.toml
- */
-
-function getInstallableAgentEntries(): Array<[string, (typeof AGENT_DEFINITIONS)[string]]> {
-  const manifest = tryReadCatalogManifest();
-  if (!manifest) {
-    return Object.entries(AGENT_DEFINITIONS);
-  }
-
-  const installable = new Set(
-    manifest.agents
-      .filter((agent) => agent.status === "active" || agent.status === "internal")
-      .map((agent) => agent.name),
-  );
-
-  return Object.entries(AGENT_DEFINITIONS).filter(([name]) => installable.has(name));
-}
-
-function getAgentEntries(agentsConfigDir: string): string[] {
-  const entries: string[] = [
-    "",
-    "# OMX Native Agent Roles (Codex multi-agent)",
-  ];
-
-  for (const [name, agent] of getInstallableAgentEntries()) {
-    // TOML table headers with special chars need quoting
-    const tableKey = name.includes("-") ? `agents."${name}"` : `agents.${name}`;
-    const configFile = escapeTomlString(join(agentsConfigDir, `${name}.toml`));
-
-    entries.push("");
-    entries.push(`[${tableKey}]`);
-    entries.push(`description = "${agent.description}"`);
-    entries.push(`config_file = "${configFile}"`);
-  }
-
-  return entries;
-}
-
-/**
  * OMX table-section block (MCP servers, TUI).
  * Contains ONLY [table] sections — no bare keys.
  */
 function getOmxTablesBlock(
   pkgRoot: string,
-  agentsConfigDir: string,
   includeTui = true,
 ): string {
   const stateServerPath = escapeTomlString(
@@ -665,7 +667,6 @@ function getOmxTablesBlock(
     `args = ["${teamServerPath}"]`,
     "enabled = true",
     "startup_timeout_sec = 5",
-    ...getAgentEntries(agentsConfigDir),
     ...(includeTui
       ? [
         "",
@@ -718,6 +719,7 @@ export function buildMergedConfig(
   }
   existing = stripOrphanedOmxSections(existing);
   existing = upsertFeatureFlags(existing);
+  existing = upsertAgentsSettings(existing);
   const tuiUpsert = upsertTuiStatusLine(existing);
   existing = tuiUpsert.cleaned;
 
@@ -728,7 +730,6 @@ export function buildMergedConfig(
   );
   const tablesBlock = getOmxTablesBlock(
     pkgRoot,
-    options.agentsConfigDir || omxAgentsConfigDir(),
     !tuiUpsert.hadExistingTui,
   );
   const sharedRegistryBlock = getSharedMcpRegistryBlock(

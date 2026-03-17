@@ -21,21 +21,18 @@ import {
   codexHome,
   codexConfigPath,
   codexPromptsDir,
+  codexAgentsDir,
   userSkillsDir,
   legacyUserSkillsDir,
   omxStateDir,
   omxPlansDir,
   omxLogsDir,
-  omxAgentsConfigDir,
 } from "../utils/paths.js";
 import { buildMergedConfig, getRootModelName } from "../config/generator.js";
 import {
-  getUnifiedMcpRegistryCandidates,
-  loadUnifiedMcpRegistry,
-  planClaudeCodeMcpSettingsSync,
-  type UnifiedMcpRegistryLoadResult,
+  getUnifiedMcpRegistryCandidates, loadUnifiedMcpRegistry, planClaudeCodeMcpSettingsSync, type UnifiedMcpRegistryLoadResult,
 } from "../config/mcp-registry.js";
-import { generateAgentToml } from "../agents/native-config.js";
+import { generateAgentToml, generateSkillAgentToml } from "../agents/native-config.js";
 import { AGENT_DEFINITIONS } from "../agents/definitions.js";
 import { getPackageRoot } from "../utils/package.js";
 import { readSessionState, isSessionStale } from "../hooks/session.js";
@@ -333,7 +330,7 @@ export function resolveScopeDirectories(
     return {
       codexConfigFile: join(codexHomeDir, "config.toml"),
       codexHomeDir,
-      nativeAgentsDir: join(projectRoot, ".omx", "agents"),
+      nativeAgentsDir: join(codexHomeDir, "agents"),
       promptsDir: join(codexHomeDir, "prompts"),
       skillsDir: join(projectRoot, ".agents", "skills"),
     };
@@ -341,7 +338,7 @@ export function resolveScopeDirectories(
   return {
     codexConfigFile: codexConfigPath(),
     codexHomeDir: codexHome(),
-    nativeAgentsDir: omxAgentsConfigDir(),
+    nativeAgentsDir: codexAgentsDir(),
     promptsDir: codexPromptsDir(),
     skillsDir: skillTarget === "agents" ? legacyUserSkillsDir() : userSkillsDir(),
   };
@@ -672,26 +669,8 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
     }
   }
 
-  // Step 3: Install native agent configs
-  console.log("[3/8] Installing native agent configs...");
-  {
-    summary.nativeAgents = await refreshNativeAgentConfigs(
-      pkgRoot,
-      scopeDirs.nativeAgentsDir,
-      backupContext,
-      {
-        force,
-        dryRun,
-        verbose,
-      },
-    );
-    console.log(
-      `  Native agent refresh complete (${scopeDirs.nativeAgentsDir}).\n`,
-    );
-  }
-
-  // Step 4: Install skills
-  console.log("[4/8] Installing skills...");
+  // Step 3: Install skills
+  console.log("[3/8] Installing skills...");
   {
     const skillsSrc = join(pkgRoot, "skills");
     const skillsDst = scopeDirs.skillsDir;
@@ -707,6 +686,25 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
     } else {
       console.log("  Skill refresh complete.\n");
     }
+  }
+
+  // Step 4: Install native agent configs
+  console.log("[4/8] Installing native agent configs...");
+  {
+    summary.nativeAgents = await refreshNativeAgentConfigs(
+      pkgRoot,
+      scopeDirs.skillsDir,
+      scopeDirs.nativeAgentsDir,
+      backupContext,
+      {
+        force,
+        dryRun,
+        verbose,
+      },
+    );
+    console.log(
+      `  Native agent refresh complete (${scopeDirs.nativeAgentsDir}).\n`,
+    );
   }
 
   // Step 5: Update config.toml
@@ -738,7 +736,6 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
   await updateManagedConfig(
     scopeDirs.codexConfigFile,
     pkgRoot,
-    scopeDirs.nativeAgentsDir,
     sharedMcpRegistry,
     summary.config,
     backupContext,
@@ -888,7 +885,7 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
   );
   console.log("  3. Skills are available via /skills or implicit matching");
   console.log("  4. The AGENTS.md orchestration brain is loaded automatically");
-  console.log("  5. Native agent roles registered in config.toml [agents.*]");
+  console.log("  5. Native agent defaults configured in config.toml [agents] and TOML files written to .codex/agents/");
   console.log('  6. "omx explore" and "omx sparkshell" can hydrate native release binaries on first use; source installs still allow repo-local fallbacks and OMX_EXPLORE_BIN / OMX_SPARKSHELL_BIN overrides');
   if (isGitHubCliConfigured()) {
     console.log("\nSupport the project: gh repo star Yeachan-Heo/oh-my-codex");
@@ -1160,6 +1157,7 @@ async function installPrompts(
 
 async function refreshNativeAgentConfigs(
   pkgRoot: string,
+  skillsDir: string,
   agentsDir: string,
   backupContext: SetupBackupContext,
   options: Pick<SetupOptions, "dryRun" | "verbose" | "force">,
@@ -1174,11 +1172,18 @@ async function refreshNativeAgentConfigs(
   const agentStatusByName = manifest
     ? new Map(manifest.agents.map((agent) => [agent.name, agent.status]))
     : null;
+  const skillStatusByName = manifest
+    ? new Map(manifest.skills.map((skill) => [skill.name, skill.status]))
+    : null;
   const isInstallableStatus = (status: string | undefined): boolean =>
     status === "active" || status === "internal";
   const staleCandidateNativeAgentNames = new Set(
-    manifest?.agents.map((agent) => agent.name) ?? [],
+    [
+      ...(manifest?.agents.map((agent) => agent.name) ?? []),
+      ...(manifest?.skills.map((skill) => skill.name) ?? []),
+    ],
   );
+  const reservedNativeAgentNames = new Set(["default", "worker", "explorer"]);
 
   for (const [name, agent] of Object.entries(AGENT_DEFINITIONS)) {
     staleCandidateNativeAgentNames.add(name);
@@ -1210,14 +1215,68 @@ async function refreshNativeAgentConfigs(
     );
   }
 
+  if (existsSync(skillsDir)) {
+    const installedSkills = await readdir(skillsDir, { withFileTypes: true });
+    for (const entry of installedSkills) {
+      if (!entry.isDirectory()) continue;
+
+      const skillName = entry.name;
+      staleCandidateNativeAgentNames.add(skillName);
+      if (reservedNativeAgentNames.has(skillName)) {
+        summary.skipped += 1;
+        if (options.verbose) {
+          console.log(`  skipped native agent ${skillName}.toml (reserved built-in agent name)`);
+        }
+        continue;
+      }
+
+      const status = skillStatusByName?.get(skillName);
+      if (skillStatusByName && !isInstallableStatus(status)) {
+        summary.skipped += 1;
+        if (options.verbose) {
+          const label = status ?? "unlisted";
+          console.log(`  skipped native skill agent ${skillName}.toml (status: ${label})`);
+        }
+        continue;
+      }
+
+      const skillMdPath = join(skillsDir, skillName, "SKILL.md");
+      if (!existsSync(skillMdPath)) continue;
+
+      const skillContent = await readFile(skillMdPath, "utf-8");
+      let skillDescription = `OMX skill agent for ${skillName}`;
+      try {
+        skillDescription = parseSkillFrontmatter(skillContent, skillMdPath).description;
+      } catch {
+        // Keep generating the skill-backed agent even if a locally modified
+        // installed skill file no longer has valid frontmatter.
+      }
+      const toml = generateSkillAgentToml(skillName, skillDescription, skillContent);
+      const dst = join(agentsDir, `${skillName}.toml`);
+      await syncManagedContent(
+        toml,
+        dst,
+        summary,
+        backupContext,
+        options,
+        `native skill agent ${skillName}.toml`,
+      );
+    }
+  }
+
   if (options.force && manifest && existsSync(agentsDir)) {
     const installedFiles = await readdir(agentsDir);
     for (const file of installedFiles) {
       if (!file.endsWith('.toml')) continue;
       const agentName = file.slice(0, -5);
-      const status = agentStatusByName?.get(agentName);
-      if (isInstallableStatus(status)) continue;
-      if (!staleCandidateNativeAgentNames.has(agentName) && status === undefined) continue;
+      const agentStatus = agentStatusByName?.get(agentName);
+      const skillStatus = skillStatusByName?.get(agentName);
+      if (isInstallableStatus(agentStatus) || isInstallableStatus(skillStatus)) continue;
+      if (
+        !staleCandidateNativeAgentNames.has(agentName) &&
+        agentStatus === undefined &&
+        skillStatus === undefined
+      ) continue;
 
       const staleAgentPath = join(agentsDir, file);
       if (!existsSync(staleAgentPath)) continue;
@@ -1228,7 +1287,7 @@ async function refreshNativeAgentConfigs(
       summary.removed += 1;
       if (options.verbose) {
         const prefix = options.dryRun ? 'would remove stale native agent' : 'removed stale native agent';
-        const label = status ?? 'unlisted';
+        const label = agentStatus ?? skillStatus ?? 'unlisted';
         console.log(`  ${prefix} ${file} (status: ${label})`);
       }
     }
@@ -1343,7 +1402,6 @@ export async function installSkills(
 async function updateManagedConfig(
   configPath: string,
   pkgRoot: string,
-  agentsConfigDir: string,
   sharedMcpRegistry: UnifiedMcpRegistryLoadResult,
   summary: SetupCategorySummary,
   backupContext: SetupBackupContext,
@@ -1370,7 +1428,6 @@ async function updateManagedConfig(
   }
 
   const finalConfig = buildMergedConfig(existing, pkgRoot, {
-    agentsConfigDir,
     modelOverride,
     sharedMcpServers: sharedMcpRegistry.servers,
     sharedMcpRegistrySource: sharedMcpRegistry.sourcePath,

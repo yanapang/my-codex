@@ -61,7 +61,8 @@ describe('worker bootstrap', () => {
     assert.match(overlay, /omx team api transition-task-status/);
     assert.match(overlay, /omx team api release-task-claim/);
     assert.doesNotMatch(overlay, /On completion: write \{"status": "completed"/);
-    assert.match(overlay, /Do NOT spawn sub-agents/);
+    assert.match(overlay, /You may spawn Codex native subagents when parallel execution improves throughput/);
+    assert.match(overlay, /Use subagents only for independent, bounded subtasks/);
     assert.match(overlay, /do not pass workingDirectory unless the lead explicitly tells you to/);
     assert.doesNotMatch(overlay, /tasks\/\{id\}\.json/);
   });

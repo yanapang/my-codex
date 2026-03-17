@@ -275,14 +275,11 @@ describe("config generator idempotency (#384)", () => {
       assertSingleOmxBlock(toml);
       assert.match(toml, /^\[user\.custom\]$/m, "user section preserved");
       assert.match(toml, /^name = "kept"$/m, "user key preserved");
-
-      // Verify agents appear only inside the OMX block
-      const omxBlockStart = toml.indexOf("# oh-my-codex (OMX) Configuration");
-      const agentIdx = toml.indexOf("[agents.executor]");
-      assert.ok(
-        agentIdx > omxBlockStart,
-        "agents.executor should be inside OMX block",
-      );
+      assert.match(toml, /^\[agents\]$/m, "global agents settings added");
+      assert.match(toml, /^max_threads = 6$/m, "global agents max_threads seeded");
+      assert.match(toml, /^max_depth = 2$/m, "global agents max_depth seeded");
+      assert.doesNotMatch(toml, /^\[agents\.executor\]$/m, "legacy OMX agent entry removed");
+      assert.doesNotMatch(toml, /^\[agents\.explore\]$/m, "legacy OMX agent entry removed");
     } finally {
       await rm(wd, { recursive: true, force: true });
     }
@@ -485,18 +482,17 @@ describe("config generator idempotency (#384)", () => {
     }
   });
 
-  it("writes only installable catalog agents into the OMX agent block", async () => {
+  it("writes only the global [agents] defaults into config", async () => {
     const wd = await mkdtemp(join(tmpdir(), "omx-idem-"));
     try {
       const configPath = join(wd, "config.toml");
       await mergeConfig(configPath, wd);
       const toml = await readFile(configPath, "utf-8");
 
-      assert.match(toml, /^\[agents\.executor\]$/m, "active agent kept");
-      assert.match(toml, /^\[agents\."code-simplifier"\]$/m, "internal agent kept");
-      assert.doesNotMatch(toml, /^\[agents\."style-reviewer"\]$/m, "merged agent omitted");
-      assert.doesNotMatch(toml, /^\[agents\."quality-reviewer"\]$/m, "merged agent omitted");
-      assert.doesNotMatch(toml, /^\[agents\."product-manager"\]$/m, "merged product agent omitted");
+      assert.match(toml, /^\[agents\]$/m, "global [agents] section present");
+      assert.match(toml, /^max_threads = 6$/m, "max_threads default written");
+      assert.match(toml, /^max_depth = 2$/m, "max_depth default written");
+      assert.doesNotMatch(toml, /^\[agents\.[^\]]+\]$/m, "legacy per-agent config_file entries omitted");
     } finally {
       await rm(wd, { recursive: true, force: true });
     }
