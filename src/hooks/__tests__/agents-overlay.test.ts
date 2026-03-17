@@ -325,6 +325,26 @@ Some instructions here.
     assert.equal(restored.trim(), originalContent.trim());
   });
 
+  it('stripOverlay preserves a top-of-file autonomy directive header', async () => {
+    const agentsMd = join(tempDir, 'AGENTS-autonomy.md');
+    const autonomyContent = `<!-- AUTONOMY DIRECTIVE — DO NOT REMOVE -->
+YOU ARE AN AUTONOMOUS CODING AGENT. EXECUTE TASKS TO COMPLETION WITHOUT ASKING FOR PERMISSION.
+DO NOT STOP TO ASK "SHOULD I PROCEED?" — PROCEED. DO NOT WAIT FOR CONFIRMATION ON OBVIOUS NEXT STEPS.
+IF BLOCKED, TRY AN ALTERNATIVE APPROACH. ONLY ASK WHEN TRULY AMBIGUOUS OR DESTRUCTIVE.
+<!-- END AUTONOMY DIRECTIVE -->
+
+# oh-my-codex - Intelligent Multi-Agent Orchestration
+`;
+    await writeFile(agentsMd, autonomyContent);
+
+    const overlay = await generateOverlay(tempDir, 'autonomy-header');
+    await applyOverlay(agentsMd, overlay, tempDir);
+    await stripOverlay(agentsMd, tempDir);
+
+    const restored = await readFile(agentsMd, 'utf-8');
+    assert.equal(restored, autonomyContent);
+  });
+
   it('applyOverlay is idempotent (apply twice, no duplication)', async () => {
     const agentsMd = join(tempDir, 'AGENTS-idem.md');
     await writeFile(agentsMd, originalContent);
