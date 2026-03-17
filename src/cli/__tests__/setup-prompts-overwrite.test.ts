@@ -17,7 +17,7 @@ describe('omx setup prompt/native-agent overwrite behavior', () => {
       await setup({ scope: 'project' });
 
       const promptsDir = join(wd, '.codex', 'prompts');
-      const nativeAgentsDir = join(wd, '.omx', 'agents');
+      const nativeAgentsDir = join(wd, '.codex', 'agents');
       const installedPrompts = new Set(await readdir(promptsDir));
       const installedNativeAgents = new Set(await readdir(nativeAgentsDir));
 
@@ -38,6 +38,8 @@ describe('omx setup prompt/native-agent overwrite behavior', () => {
       assert.equal(installedNativeAgents.has('executor.toml'), true);
       assert.equal(installedNativeAgents.has('team-executor.toml'), true);
       assert.equal(installedNativeAgents.has('code-reviewer.toml'), true);
+      assert.equal(installedNativeAgents.has('code-review.toml'), true);
+      assert.equal(installedNativeAgents.has('plan.toml'), true);
       assert.equal(installedNativeAgents.has('style-reviewer.toml'), false);
       assert.equal(installedNativeAgents.has('quality-reviewer.toml'), false);
       assert.equal(installedNativeAgents.has('api-reviewer.toml'), false);
@@ -91,7 +93,7 @@ describe('omx setup prompt/native-agent overwrite behavior', () => {
 
       const staleAgents = ['style-reviewer.toml', 'quality-reviewer.toml'];
       for (const staleAgent of staleAgents) {
-        const stalePath = join(wd, '.omx', 'agents', staleAgent);
+        const stalePath = join(wd, '.codex', 'agents', staleAgent);
         await writeFile(stalePath, '# stale native agent\n');
         assert.equal(existsSync(stalePath), true);
       }
@@ -99,9 +101,9 @@ describe('omx setup prompt/native-agent overwrite behavior', () => {
       await setup({ scope: 'project', force: true });
 
       for (const staleAgent of staleAgents) {
-        assert.equal(existsSync(join(wd, '.omx', 'agents', staleAgent)), false);
+        assert.equal(existsSync(join(wd, '.codex', 'agents', staleAgent)), false);
       }
-      assert.equal(existsSync(join(wd, '.omx', 'agents', 'executor.toml')), true);
+      assert.equal(existsSync(join(wd, '.codex', 'agents', 'executor.toml')), true);
     } finally {
       process.chdir(previousCwd);
       await rm(wd, { recursive: true, force: true });

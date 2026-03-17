@@ -20,6 +20,7 @@ import { askCommand } from './ask.js';
 import { exploreCommand } from './explore.js';
 import { sparkshellCommand } from './sparkshell.js';
 import { agentsInitCommand } from './agents-init.js';
+import { agentsCommand } from './agents.js';
 import { sessionCommand } from './session-search.js';
 import { autoresearchCommand } from './autoresearch.js';
 import {
@@ -105,6 +106,7 @@ Usage:
   omx session   Search prior local session transcripts and history artifacts
   omx agents-init [path]
                 Bootstrap lightweight AGENTS.md files for a repo/subtree
+  omx agents    Manage Codex native agent TOML files
   omx deepinit [path]
                 Alias for agents-init (lightweight AGENTS bootstrap only)
   omx team      Spawn parallel worker panes in tmux and bootstrap inbox/task state
@@ -176,11 +178,12 @@ const ALLOWED_SHELLS = new Set([
 const WINDOWS_DETACHED_BOOTSTRAP_DELAY_MS = 2500;
 const CODEX_VERSION_FLAGS = new Set(['--version', '-V']);
 
-type CliCommand = 'launch' | 'exec' | 'setup' | 'agents-init' | 'deepinit' | 'uninstall' | 'doctor' | 'ask' | 'explore' | 'sparkshell' | 'team' | 'ralphthon' | 'session' | 'resume' | 'version' | 'tmux-hook' | 'hooks' | 'hud' | 'status' | 'cancel' | 'help' | 'reasoning' | string;
+type CliCommand = 'launch' | 'exec' | 'setup' | 'agents' | 'agents-init' | 'deepinit' | 'uninstall' | 'doctor' | 'ask' | 'explore' | 'sparkshell' | 'team' | 'ralphthon' | 'session' | 'resume' | 'version' | 'tmux-hook' | 'hooks' | 'hud' | 'status' | 'cancel' | 'help' | 'reasoning' | string;
 
 const NESTED_HELP_COMMANDS = new Set<CliCommand>([
   'ask',
   'autoresearch',
+  'agents',
   'agents-init',
   'deepinit',
   'exec',
@@ -487,7 +490,7 @@ export function buildHudPaneCleanupTargets(existingPaneIds: string[], createdPan
 
 export async function main(args: string[]): Promise<void> {
   const knownCommands = new Set([
-    'launch', 'exec', 'setup', 'agents-init', 'deepinit', 'uninstall', 'doctor', 'ask', 'autoresearch', 'explore', 'sparkshell', 'team', 'ralph', 'ralphthon', 'session', 'resume', 'version', 'tmux-hook', 'hooks', 'hud', 'status', 'cancel', 'help', '--help', '-h',
+    'launch', 'exec', 'setup', 'agents', 'agents-init', 'deepinit', 'uninstall', 'doctor', 'ask', 'autoresearch', 'explore', 'sparkshell', 'team', 'ralph', 'ralphthon', 'session', 'resume', 'version', 'tmux-hook', 'hooks', 'hud', 'status', 'cancel', 'help', '--help', '-h',
   ]);
   const firstArg = args[0];
   const { command, launchArgs } = resolveCliInvocation(args);
@@ -520,6 +523,9 @@ export async function main(args: string[]): Promise<void> {
           scope: resolveSetupScopeArg(args.slice(1)),
           skillTarget: resolveSetupSkillTargetArg(args.slice(1)),
         });
+        break;
+      case 'agents':
+        await agentsCommand(args.slice(1));
         break;
       case 'agents-init':
         await agentsInitCommand(args.slice(1));

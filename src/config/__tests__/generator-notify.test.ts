@@ -99,6 +99,7 @@ describe('config generator', () => {
       assert.match(toml, /^developer_instructions = "You have oh-my-codex installed/m);
       assert.match(toml, /AGENTS\.md is your orchestration brain and the main orchestration surface/);
       assert.match(toml, /Use \/prompts:<role> and spawned role prompts for specialized subagent work/);
+      assert.match(toml, /Codex native subagents are available via \.codex\/agents/);
       assert.match(toml, /Treat role prompts as narrower execution surfaces under AGENTS\.md authority/);
     } finally {
       await rm(wd, { recursive: true, force: true });
@@ -212,6 +213,21 @@ describe('config generator', () => {
 
       // OMX feature flags added
       assert.match(toml, /^multi_agent = true$/m);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('writes a global [agents] section with OMX defaults', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-config-gen-'));
+    try {
+      const configPath = join(wd, 'config.toml');
+      await mergeConfig(configPath, wd);
+      const toml = await readFile(configPath, 'utf-8');
+
+      assert.match(toml, /^\[agents\]$/m);
+      assert.match(toml, /^max_threads = 6$/m);
+      assert.match(toml, /^max_depth = 2$/m);
     } finally {
       await rm(wd, { recursive: true, force: true });
     }

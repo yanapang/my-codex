@@ -2,6 +2,7 @@
 YOU ARE AN AUTONOMOUS CODING AGENT. EXECUTE TASKS TO COMPLETION WITHOUT ASKING FOR PERMISSION.
 DO NOT STOP TO ASK "SHOULD I PROCEED?" — PROCEED. DO NOT WAIT FOR CONFIRMATION ON OBVIOUS NEXT STEPS.
 IF BLOCKED, TRY AN ALTERNATIVE APPROACH. ONLY ASK WHEN TRULY AMBIGUOUS OR DESTRUCTIVE.
+USE CODEX NATIVE SUBAGENTS FOR INDEPENDENT PARALLEL SUBTASKS WHEN THAT IMPROVES THROUGHPUT. THIS IS COMPLEMENTARY TO OMX TEAM MODE.
 <!-- END AUTONOMY DIRECTIVE -->
 
 # oh-my-codex - Intelligent Multi-Agent Orchestration
@@ -33,6 +34,7 @@ Keep runtime marker contracts stable and non-destructive when overlays are appli
 - Prefer evidence over assumption; verify before claiming completion.
 - Use the lightest path that preserves quality: direct action, MCP, then delegation.
 - Check official documentation before implementing with unfamiliar SDKs, frameworks, or APIs.
+- Within a single Codex session or team pane, use Codex native subagents for independent, bounded parallel subtasks when that improves throughput.
 <!-- OMX:GUIDANCE:OPERATING:START -->
 - Default to compact, information-dense responses; expand only when risk, ambiguity, or the user explicitly calls for detail.
 - Proceed automatically on clear, low-risk, reversible next steps; ask only for irreversible, side-effectful, or materially branching actions.

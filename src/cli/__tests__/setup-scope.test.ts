@@ -130,7 +130,7 @@ describe('omx setup scope behavior', () => {
       const localPrompts = join(wd, '.codex', 'prompts');
       const localSkills = join(wd, '.agents', 'skills');
       const localConfig = join(wd, '.codex', 'config.toml');
-      const localAgents = join(wd, '.omx', 'agents');
+      const localAgents = join(wd, '.codex', 'agents');
       const scopeFile = join(wd, '.omx', 'setup-scope.json');
       const agentsMdPath = join(wd, 'AGENTS.md');
 
@@ -146,7 +146,9 @@ describe('omx setup scope behavior', () => {
       assert.equal(existsSync(agentsMdPath), true);
 
       const configToml = await readFile(localConfig, 'utf-8');
-      assert.match(configToml, /\.omx\/agents\/executor\.toml/);
+      assert.match(configToml, /^\[agents\]$/m);
+      assert.match(configToml, /^max_threads = 6$/m);
+      assert.match(configToml, /^max_depth = 2$/m);
       const agentsMd = await readFile(agentsMdPath, 'utf-8');
       assert.match(agentsMd, /\.\/\.codex\/prompts/);
       assert.match(agentsMd, /\.\/\.agents\/skills/);
@@ -173,7 +175,7 @@ describe('omx setup scope behavior', () => {
       assert.equal(existsSync(join(home, '.codex', 'prompts')), true);
       assert.equal(existsSync(join(home, '.codex', 'skills')), true);
       assert.equal(existsSync(join(home, '.agents', 'skills')), false);
-      assert.equal(existsSync(join(home, '.omx', 'agents')), true);
+      assert.equal(existsSync(join(home, '.codex', 'agents')), true);
       assert.equal(existsSync(join(home, '.codex', 'AGENTS.md')), true);
       assert.equal(existsSync(join(wd, '.omx', 'setup-scope.json')), true);
       const persistedScope = JSON.parse(await readFile(join(wd, '.omx', 'setup-scope.json'), 'utf-8')) as { scope: string };
@@ -193,7 +195,7 @@ describe('omx setup scope behavior', () => {
       const home = join(wd, 'home');
       await mkdir(join(home, '.codex', 'prompts'), { recursive: true });
       await mkdir(join(home, '.codex', 'skills', 'sample-skill'), { recursive: true });
-      await mkdir(join(home, '.omx', 'agents'), { recursive: true });
+      await mkdir(join(home, '.codex', 'agents'), { recursive: true });
       await mkdir(join(wd, '.omx', 'state'), { recursive: true });
       await writeFile(join(wd, '.omx', 'setup-scope.json'), JSON.stringify({ scope: 'user' }));
       await writeFile(join(home, '.codex', 'AGENTS.md'), '# user agents\n');
@@ -240,7 +242,7 @@ describe('omx setup scope behavior', () => {
       await mkdir(join(home, '.codex', 'prompts'), { recursive: true });
       await mkdir(join(home, '.codex', 'skills', 'sample-skill'), { recursive: true });
       await mkdir(join(home, '.agents', 'skills', 'legacy-skill'), { recursive: true });
-      await mkdir(join(home, '.omx', 'agents'), { recursive: true });
+      await mkdir(join(home, '.codex', 'agents'), { recursive: true });
       await mkdir(join(wd, '.omx', 'state'), { recursive: true });
       await writeFile(
         join(wd, '.omx', 'setup-scope.json'),
