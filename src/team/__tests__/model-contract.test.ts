@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   collectInheritableTeamWorkerArgs,
   isLowComplexityAgentType,
+  resolveAgentDefaultModel,
   resolveAgentReasoningEffort,
   resolveTeamWorkerLaunchArgs,
   TEAM_LOW_COMPLEXITY_DEFAULT_MODEL,
@@ -108,6 +109,14 @@ describe('team model contract', () => {
     assert.equal(resolveAgentReasoningEffort('executor'), 'high');
     assert.equal(resolveAgentReasoningEffort('architect'), 'high');
     assert.equal(resolveAgentReasoningEffort('does-not-exist'), undefined);
+  });
+
+  it('maps worker roles to explicit default model lanes', () => {
+    assert.equal(resolveAgentDefaultModel('explore'), expectedLowComplexityModel());
+    assert.equal(resolveAgentDefaultModel('writer'), 'gpt-5.4-mini');
+    assert.equal(resolveAgentDefaultModel('executor'), 'gpt-5.4-mini');
+    assert.equal(resolveAgentDefaultModel('architect'), 'gpt-5.4');
+    assert.equal(resolveAgentDefaultModel('does-not-exist'), undefined);
   });
 });
 

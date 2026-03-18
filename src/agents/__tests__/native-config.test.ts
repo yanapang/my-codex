@@ -87,4 +87,30 @@ describe("agents/native-config", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("preserves a custom active root model for standard agents when no OMX standard override is set", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omx-native-config-root-model-"));
+    const codexHome = join(root, ".codex");
+    const promptsDir = join(root, "prompts");
+    const outDir = join(codexHome, "agents");
+    const previousCodexHome = process.env.CODEX_HOME;
+
+    try {
+      delete process.env.OMX_DEFAULT_STANDARD_MODEL;
+      process.env.CODEX_HOME = codexHome;
+      await mkdir(promptsDir, { recursive: true });
+      await mkdir(codexHome, { recursive: true });
+      await writeFile(join(codexHome, "config.toml"), 'model = "claude-opus-4"\n');
+      await writeFile(join(promptsDir, "executor.md"), "executor prompt");
+
+      await installNativeAgentConfigs(root, { agentsDir: outDir });
+      const executorToml = await readFile(join(outDir, "executor.toml"), "utf8");
+      assert.match(executorToml, /model = "claude-opus-4"/);
+    } finally {
+      if (typeof previousCodexHome === "string") process.env.CODEX_HOME = previousCodexHome;
+      else delete process.env.CODEX_HOME;
+      process.env.OMX_DEFAULT_STANDARD_MODEL = "gpt-5.4-mini";
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
