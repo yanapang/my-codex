@@ -205,12 +205,12 @@ describe('runtime', () => {
     }
   });
 
-  it('resolveWorkerLaunchArgsFromEnv does not inject low-complexity default for standard agent types', () => {
+  it('resolveWorkerLaunchArgsFromEnv injects the standard default model for standard agent types', () => {
     const args = resolveWorkerLaunchArgsFromEnv(
       { OMX_TEAM_WORKER_LAUNCH_ARGS: '--no-alt-screen' },
       'executor',
     );
-    assert.deepEqual(args, ['--no-alt-screen']);
+    assert.deepEqual(args, ['--no-alt-screen', '--model', 'gpt-5.4-mini']);
   });
 
   it('resolveWorkerLaunchArgsFromEnv treats *-low aliases as low complexity', () => {
@@ -276,8 +276,8 @@ describe('runtime', () => {
         'high',
         'codex',
       );
-      assert.deepEqual(lowArgs, ['--no-alt-screen', '-c', 'model_reasoning_effort="low"']);
-      assert.deepEqual(highArgs, ['--no-alt-screen', '-c', 'model_reasoning_effort="high"']);
+      assert.deepEqual(lowArgs, ['--no-alt-screen', '-c', 'model_reasoning_effort="low"', '--model', 'gpt-5.4-mini']);
+      assert.deepEqual(highArgs, ['--no-alt-screen', '-c', 'model_reasoning_effort="high"', '--model', 'gpt-5.4-mini']);
     } finally {
       console.log = originalLog;
     }
@@ -398,7 +398,7 @@ describe('runtime', () => {
         'low',
         'gemini',
       );
-      assert.deepEqual(codexArgs, ['--no-alt-screen', '-c', 'model_reasoning_effort="high"']);
+      assert.deepEqual(codexArgs, ['--no-alt-screen', '-c', 'model_reasoning_effort="high"', '--model', 'gpt-5.4-mini']);
       assert.deepEqual(claudeArgs, ['--no-alt-screen', '-c', 'model_reasoning_effort="low"', '--model', 'claude-3-7-sonnet']);
       assert.deepEqual(geminiArgs, ['-c', 'model_reasoning_effort="low"', '--model', 'gemini-2.0-pro']);
     } finally {
@@ -913,8 +913,10 @@ process.on('SIGTERM', () => process.exit(0));
       const worker2Joined = worker2Args!.join(' ');
       assert.match(worker1Joined, /model_reasoning_effort="medium"/);
       assert.match(worker1Joined, /model_instructions_file=.*worker-1\/AGENTS\.md/);
-      assert.match(worker2Joined, /model_reasoning_effort="low"/);
+      assert.match(worker1Joined, /--model gpt-5\.4/);
+      assert.match(worker2Joined, /model_reasoning_effort="high"/);
       assert.match(worker2Joined, /model_instructions_file=.*worker-2\/AGENTS\.md/);
+      assert.match(worker2Joined, /--model gpt-5\.4-mini/);
 
       await shutdownTeam(runtime.teamName, cwd, { force: true });
       runtime = null;

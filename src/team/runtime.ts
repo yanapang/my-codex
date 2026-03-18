@@ -97,12 +97,11 @@ import { loadRolePrompt } from './role-router.js';
 import { codexPromptsDir } from '../utils/paths.js';
 import { type TeamPhase, type TerminalPhase } from './orchestrator.js';
 import {
-  isLowComplexityAgentType,
   resolveTeamWorkerLaunchArgs,
   TEAM_LOW_COMPLEXITY_DEFAULT_MODEL,
-  resolveTeamLowComplexityDefaultModel,
   parseTeamWorkerLaunchArgs,
   splitWorkerLaunchArgs,
+  resolveAgentDefaultModel,
   resolveAgentReasoningEffort,
   type TeamReasoningEffort,
 } from './model-contract.js';
@@ -1233,9 +1232,7 @@ export function resolveWorkerLaunchArgsFromEnv(
   const inheritedArgs = (typeof inheritedLeaderModel === 'string' && inheritedLeaderModel.trim() !== '')
     ? ['--model', inheritedLeaderModel.trim()]
     : [];
-  const fallbackModel = isLowComplexityAgentType(agentType)
-    ? resolveTeamLowComplexityDefaultModel(env.CODEX_HOME)
-    : undefined;
+  const fallbackModel = resolveAgentDefaultModel(agentType, env.CODEX_HOME);
 
   // Detect if an explicit reasoning override exists before resolving (for log source labelling)
   const preEnvArgs = splitWorkerLaunchArgs(env.OMX_TEAM_WORKER_LAUNCH_ARGS);
@@ -1389,9 +1386,7 @@ export async function startTeam(
   let config: TeamConfig | null = null;
   const sharedWorkerLaunchArgs = resolveTeamWorkerLaunchArgs({
     existingRaw: process.env.OMX_TEAM_WORKER_LAUNCH_ARGS,
-    fallbackModel: isLowComplexityAgentType(agentType)
-      ? resolveTeamLowComplexityDefaultModel(process.env.CODEX_HOME)
-      : undefined,
+    fallbackModel: resolveAgentDefaultModel(agentType, process.env.CODEX_HOME),
   });
   const workerCliPlan = resolveTeamWorkerCliPlan(workerCount, sharedWorkerLaunchArgs, process.env);
   const workerReadyTimeoutMs = resolveWorkerReadyTimeoutMs(process.env);
@@ -1489,7 +1484,7 @@ export async function startTeam(
       const preferredReasoning = resolveAgentReasoningEffort(workerRole) ?? resolveAgentReasoningEffort(agentType);
       const workerLaunchArgs = resolveWorkerLaunchArgsFromEnv(
         process.env,
-        agentType,
+        workerRole,
         undefined,
         preferredReasoning,
         workerCliPlan[i - 1],
