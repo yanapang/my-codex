@@ -11,7 +11,6 @@ const LOW_COMPLEXITY_AGENT_TYPES = new Set([
   'explore',
   'explorer',
   'style-reviewer',
-  'writer',
 ]);
 
 // Canonical default only; effective low-complexity resolution flows through resolveTeamLowComplexityDefaultModel().

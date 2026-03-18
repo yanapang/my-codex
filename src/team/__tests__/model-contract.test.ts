@@ -97,7 +97,7 @@ describe('team model contract', () => {
 
   it('detects low-complexity agent types', () => {
     assert.equal(isLowComplexityAgentType('explore'), true);
-    assert.equal(isLowComplexityAgentType('writer'), true);
+    assert.equal(isLowComplexityAgentType('writer'), false);
     assert.equal(isLowComplexityAgentType('style-reviewer'), true);
     assert.equal(isLowComplexityAgentType('executor'), false);
     assert.equal(isLowComplexityAgentType('executor-low'), true);
@@ -105,7 +105,7 @@ describe('team model contract', () => {
 
   it('maps worker roles to default reasoning effort tiers', () => {
     assert.equal(resolveAgentReasoningEffort('explore'), 'low');
-    assert.equal(resolveAgentReasoningEffort('executor'), 'medium');
+    assert.equal(resolveAgentReasoningEffort('executor'), 'high');
     assert.equal(resolveAgentReasoningEffort('architect'), 'high');
     assert.equal(resolveAgentReasoningEffort('does-not-exist'), undefined);
   });

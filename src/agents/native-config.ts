@@ -7,6 +7,11 @@ import { existsSync } from "fs";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { join } from "path";
 import { AGENT_DEFINITIONS, AgentDefinition } from "./definitions.js";
+import {
+  getMainDefaultModel,
+  getSparkDefaultModel,
+  getStandardDefaultModel,
+} from "../config/models.js";
 import { codexAgentsDir } from "../utils/paths.js";
 
 const POSTURE_OVERLAYS: Record<AgentDefinition["posture"], string> = {
@@ -82,6 +87,18 @@ export interface GeneratedNativeAgentConfig {
   developerInstructions?: string;
   model?: string;
   reasoningEffort?: "low" | "medium" | "high" | "xhigh";
+}
+
+function resolveAgentModel(agent: AgentDefinition): string {
+  switch (agent.modelClass) {
+    case "frontier":
+      return getMainDefaultModel();
+    case "fast":
+      return getSparkDefaultModel();
+    case "standard":
+    default:
+      return getStandardDefaultModel();
+  }
 }
 
 function buildPromptInstructions(
@@ -167,6 +184,7 @@ export function generateAgentToml(
     name: agent.name,
     description: agent.description,
     developerInstructions: buildPromptInstructions(agent, promptContent),
+    model: resolveAgentModel(agent),
     reasoningEffort: agent.reasoningEffort,
   });
 }
