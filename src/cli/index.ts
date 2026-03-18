@@ -2274,6 +2274,10 @@ async function startNotifyFallbackWatcher(cwd: string): Promise<void> {
       cwd,
       detached: true,
       stdio: "ignore",
+      env: {
+        ...process.env,
+        OMX_HUD_AUTHORITY: "0",
+      },
     },
   );
   child.unref();
@@ -2434,6 +2438,10 @@ async function flushNotifyFallbackOnce(cwd: string): Promise<void> {
       cwd,
       stdio: "ignore",
       timeout: 3000,
+      env: {
+        ...process.env,
+        OMX_HUD_AUTHORITY: "0",
+      },
     },
   );
 }
