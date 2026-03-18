@@ -637,7 +637,10 @@ describe("project launch scope helpers", () => {
 
 describe("resolveCodexLaunchPolicy", () => {
   it("uses detached tmux on macOS when outside tmux and tmux is available", () => {
-    assert.equal(resolveCodexLaunchPolicy({}, "darwin", true), "detached-tmux");
+    assert.equal(
+      resolveCodexLaunchPolicy({}, "darwin", true, false, true, true),
+      "detached-tmux",
+    );
   });
 
   it("uses tmux-aware launch path when already inside tmux", () => {
@@ -664,7 +667,10 @@ describe("resolveCodexLaunchPolicy", () => {
   });
 
   it("uses detached tmux on non-macOS hosts when outside tmux and tmux is available", () => {
-    assert.equal(resolveCodexLaunchPolicy({}, "linux", true), "detached-tmux");
+    assert.equal(
+      resolveCodexLaunchPolicy({}, "linux", true, false, true, true),
+      "detached-tmux",
+    );
   });
 
   it("launches directly on native Windows even when tmux is available", () => {
@@ -673,9 +679,24 @@ describe("resolveCodexLaunchPolicy", () => {
 
   it("does not force direct launch for MSYS or Git Bash on win32", () => {
     assert.equal(
-      resolveCodexLaunchPolicy({ MSYSTEM: "MINGW64" }, "win32", true, false),
+      resolveCodexLaunchPolicy(
+        { MSYSTEM: "MINGW64" },
+        "win32",
+        true,
+        false,
+        true,
+        true,
+      ),
       "detached-tmux",
     );
+  });
+
+  it("launches directly when stdin is not a tty outside tmux", () => {
+    assert.equal(resolveCodexLaunchPolicy({}, "linux", true, false, false, true), "direct");
+  });
+
+  it("launches directly when stdout is not a tty outside tmux", () => {
+    assert.equal(resolveCodexLaunchPolicy({}, "linux", true, false, true, false), "direct");
   });
 
   it("launches directly when tmux is unavailable outside tmux", () => {
