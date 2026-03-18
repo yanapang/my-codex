@@ -15,7 +15,6 @@ import { hooksCommand } from "./hooks.js";
 import { hudCommand } from "../hud/index.js";
 import { teamCommand } from "./team.js";
 import { ralphCommand } from "./ralph.js";
-import { ralphthonCommand } from "./ralphthon.js";
 import { askCommand } from "./ask.js";
 import { cleanupCommand } from "./cleanup.js";
 import { exploreCommand } from "./explore.js";
@@ -48,7 +47,6 @@ import {
   sessionModelInstructionsPath,
   writeSessionModelInstructionsFile,
 } from "../hooks/agents-overlay.js";
-import { readModeState, updateModeState } from "../modes/base.js";
 import {
   readSessionState,
   writeSessionStart,
@@ -119,7 +117,6 @@ Usage:
                 Alias for agents-init (lightweight AGENTS bootstrap only)
   omx team      Spawn parallel worker panes in tmux and bootstrap inbox/task state
   omx ralph     Launch Codex with ralph persistence mode active
-  omx ralphthon Launch Codex with autonomous hackathon lifecycle mode active
   omx autoresearch Launch thin-supervisor autoresearch with keep/discard/reset parity
   omx version   Show version information
   omx tmux-hook Manage tmux prompt injection workaround (init|status|validate|test)
@@ -176,8 +173,6 @@ const OMX_RALPH_APPEND_INSTRUCTIONS_FILE_ENV =
   "OMX_RALPH_APPEND_INSTRUCTIONS_FILE";
 const OMX_AUTORESEARCH_APPEND_INSTRUCTIONS_FILE_ENV =
   "OMX_AUTORESEARCH_APPEND_INSTRUCTIONS_FILE";
-const OMX_RALPHTHON_APPEND_INSTRUCTIONS_FILE_ENV =
-  "OMX_RALPHTHON_APPEND_INSTRUCTIONS_FILE";
 const REASONING_MODES = ["low", "medium", "high", "xhigh"] as const;
 type ReasoningMode = (typeof REASONING_MODES)[number];
 const REASONING_MODE_SET = new Set<string>(REASONING_MODES);
@@ -214,7 +209,6 @@ type CliCommand =
   | "explore"
   | "sparkshell"
   | "team"
-  | "ralphthon"
   | "session"
   | "resume"
   | "version"
@@ -238,8 +232,6 @@ const NESTED_HELP_COMMANDS = new Set<CliCommand>([
   "hooks",
   "hud",
   "ralph",
-  "ralphthon",
-  "ralphthon",
   "resume",
   "session",
   "sparkshell",
@@ -568,7 +560,6 @@ export async function main(args: string[]): Promise<void> {
     "sparkshell",
     "team",
     "ralph",
-    "ralphthon",
     "session",
     "resume",
     "version",
@@ -661,9 +652,6 @@ export async function main(args: string[]): Promise<void> {
         break;
       case "ralph":
         await ralphCommand(args.slice(1));
-        break;
-      case "ralphthon":
-        await ralphthonCommand(args.slice(1));
         break;
       case "version":
         version();
@@ -1399,44 +1387,9 @@ export function buildDetachedSessionBootstrapSteps(
   ];
 }
 
-async function updateActiveRalphthonLaunchTarget(
-  cwd: string,
-  patch: {
-    leader_pane_id?: string | null;
-    tmux_pane_id?: string | null;
-    tmux_session?: string | null;
-  },
-): Promise<void> {
-  const state = await readModeState("ralphthon", cwd).catch(() => null);
-  if (!state || state.active !== true) return;
-
-  const next: Record<string, unknown> = {};
-  if (
-    typeof patch.leader_pane_id === "string" &&
-    patch.leader_pane_id.trim().startsWith("%")
-  ) {
-    next.leader_pane_id = patch.leader_pane_id.trim();
-    next.tmux_pane_id = patch.leader_pane_id.trim();
-  } else if (
-    typeof patch.tmux_pane_id === "string" &&
-    patch.tmux_pane_id.trim().startsWith("%")
-  ) {
-    next.tmux_pane_id = patch.tmux_pane_id.trim();
-  }
-  if (
-    typeof patch.tmux_session === "string" &&
-    patch.tmux_session.trim() !== ""
-  ) {
-    next.tmux_session = patch.tmux_session.trim();
-  }
-  if (Object.keys(next).length === 0) return;
-  await updateModeState("ralphthon", next, cwd).catch(() => {});
-}
-
 async function readLaunchAppendInstructions(): Promise<string> {
   const appendixCandidates = [
     process.env[OMX_RALPH_APPEND_INSTRUCTIONS_FILE_ENV]?.trim(),
-    process.env[OMX_RALPHTHON_APPEND_INSTRUCTIONS_FILE_ENV]?.trim(),
     process.env[OMX_AUTORESEARCH_APPEND_INSTRUCTIONS_FILE_ENV]?.trim(),
   ].filter(
     (value): value is string => typeof value === "string" && value.length > 0,
@@ -1754,11 +1707,6 @@ function runCodex(
           execFileSync("tmux", displayArgs, { encoding: "utf-8" }).trim() ||
           undefined;
       } catch {}
-      void updateActiveRalphthonLaunchTarget(cwd, {
-        leader_pane_id: activePaneId,
-        tmux_pane_id: activePaneId,
-        tmux_session: tmuxSessionName ?? null,
-      });
     }
 
     try {
@@ -1809,11 +1757,6 @@ function runCodex(
         if (step.name === "new-session") {
           createdDetachedSession = true;
           detachedLeaderPaneId = parsePaneIdFromTmuxOutput(output || "");
-          void updateActiveRalphthonLaunchTarget(cwd, {
-            leader_pane_id: detachedLeaderPaneId,
-            tmux_pane_id: detachedLeaderPaneId,
-            tmux_session: sessionName,
-          });
         }
         if (step.name === "split-and-capture-hud-pane") {
           const hudPaneId = parsePaneIdFromTmuxOutput(output || "");
