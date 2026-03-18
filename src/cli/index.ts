@@ -360,10 +360,12 @@ export type CodexLaunchPolicy = "inside-tmux" | "detached-tmux" | "direct";
 
 export function resolveCodexLaunchPolicy(
   env: NodeJS.ProcessEnv = process.env,
-  _platform: NodeJS.Platform = process.platform,
+  platform: NodeJS.Platform = process.platform,
   tmuxAvailable: boolean = isTmuxAvailable(),
+  nativeWindows: boolean = isNativeWindows(),
 ): CodexLaunchPolicy {
   if (env.TMUX) return "inside-tmux";
+  if (nativeWindows) return "direct";
   return tmuxAvailable ? "detached-tmux" : "direct";
 }
 
@@ -1672,7 +1674,12 @@ function runCodex(
     ? { ...codexEnv, [OMX_NOTIFY_TEMP_CONTRACT_ENV]: notifyTempContractRaw }
     : codexEnv;
 
-  const launchPolicy = resolveCodexLaunchPolicy(process.env);
+  const launchPolicy = resolveCodexLaunchPolicy(
+    process.env,
+    process.platform,
+    undefined,
+    nativeWindows,
+  );
 
   if (isCodexVersionRequest(launchArgs)) {
     runCodexBlocking(cwd, launchArgs, codexEnvWithNotify);
