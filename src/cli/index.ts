@@ -2206,6 +2206,7 @@ async function emitNativeHookEvent(
   });
   await dispatchHookEvent(payload, {
     cwd,
+    enabled: true,
   });
 }
 
