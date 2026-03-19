@@ -52,19 +52,11 @@ export async function evaluatePaneInjectionReadiness(paneTarget, {
   }
 
   let paneCurrentCommand = '';
+  let paneRunningShell = false;
   try {
     const result = await runProcess('tmux', buildPaneCurrentCommandArgv(target), 1000);
     paneCurrentCommand = safeString(result.stdout).trim();
-    if (requireRunningAgent && isPaneRunningShell(paneCurrentCommand)) {
-      return {
-        ok: false,
-        sent: false,
-        reason: 'pane_running_shell',
-        paneTarget: target,
-        paneCurrentCommand,
-        paneCapture: '',
-      };
-    }
+    paneRunningShell = requireRunningAgent && isPaneRunningShell(paneCurrentCommand);
   } catch {
     paneCurrentCommand = '';
   }
@@ -73,6 +65,17 @@ export async function evaluatePaneInjectionReadiness(paneTarget, {
     const capture = await runProcess('tmux', buildCapturePaneArgv(target, captureLines), 1000);
     const paneCapture = safeString(capture.stdout);
     if (paneCapture.trim() !== '') {
+      const paneShowsLiveAgent = paneLooksReady(paneCapture) || paneHasActiveTask(paneCapture);
+      if (paneRunningShell && !paneShowsLiveAgent) {
+        return {
+          ok: false,
+          sent: false,
+          reason: 'pane_running_shell',
+          paneTarget: target,
+          paneCurrentCommand,
+          paneCapture,
+        };
+      }
       if (requireIdle && paneHasActiveTask(paneCapture)) {
         return {
           ok: false,
@@ -94,6 +97,16 @@ export async function evaluatePaneInjectionReadiness(paneTarget, {
         };
       }
     }
+    if (paneRunningShell) {
+      return {
+        ok: false,
+        sent: false,
+        reason: 'pane_running_shell',
+        paneTarget: target,
+        paneCurrentCommand,
+        paneCapture,
+      };
+    }
     return {
       ok: true,
       sent: false,
@@ -103,6 +116,16 @@ export async function evaluatePaneInjectionReadiness(paneTarget, {
       paneCapture,
     };
   } catch {
+    if (paneRunningShell) {
+      return {
+        ok: false,
+        sent: false,
+        reason: 'pane_running_shell',
+        paneTarget: target,
+        paneCurrentCommand,
+        paneCapture: '',
+      };
+    }
     return {
       ok: true,
       sent: false,

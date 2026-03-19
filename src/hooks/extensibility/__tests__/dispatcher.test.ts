@@ -11,8 +11,8 @@ describe('isHookPluginFeatureEnabled', () => {
     assert.equal(isHookPluginFeatureEnabled({ OMX_HOOK_PLUGINS: '1' }), true);
   });
 
-  it('returns false when env var is missing', () => {
-    assert.equal(isHookPluginFeatureEnabled({}), false);
+  it('returns true when env var is missing', () => {
+    assert.equal(isHookPluginFeatureEnabled({}), true);
   });
 
   it('returns false for "0"', () => {
@@ -41,13 +41,13 @@ describe('dispatchHookEvent', () => {
     }
   });
 
-  it('returns enabled summary with zero plugins when hooks dir is empty', async () => {
+  it('returns enabled summary with zero plugins for native events even when env is unset', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-dispatch-'));
     try {
       const event = buildHookEvent('session-start');
       const result = await dispatchHookEvent(event, {
         cwd,
-        env: { OMX_HOOK_PLUGINS: '1' },
+        env: {},
       });
 
       assert.equal(result.enabled, true);
@@ -166,11 +166,11 @@ export async function onHookEvent() {}
       const event = buildHookEvent('needs-input');
       const result = await dispatchHookEvent(event, {
         cwd,
-        enabled: false,
       });
 
       assert.equal(result.source, 'derived');
       assert.equal(result.event, 'needs-input');
+      assert.equal(result.enabled, true);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

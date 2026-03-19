@@ -368,7 +368,7 @@ async function main() {
       turn_id: turnIdForHooks,
       mode: modeForHooks,
     });
-    await dispatchHookEvent(event, { cwd });
+    await dispatchHookEvent(event, { cwd, enabled: true });
 
     for (const signal of deriveAssistantSignalEvents(outputPreview)) {
       const derivedEvent = buildDerivedHookEvent(signal.event, buildOperationalContext({
@@ -389,7 +389,7 @@ async function main() {
         confidence: signal.confidence,
         parser_reason: signal.parser_reason,
       });
-      await dispatchHookEvent(derivedEvent, { cwd });
+      await dispatchHookEvent(derivedEvent, { cwd, enabled: true });
     }
   } catch {
     // Non-fatal: extensibility modules may not be built yet
@@ -435,7 +435,7 @@ async function main() {
             turn_id: safeString(payload['turn-id'] || payload.turn_id || ''),
             mode: safeString(payload.mode || ''),
           });
-          await dispatchHookEvent(event, { cwd });
+          await dispatchHookEvent(event, { cwd, enabled: true });
         } catch {
           // Non-fatal
         }
