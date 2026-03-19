@@ -26,6 +26,15 @@ function shouldSkipForSpawnPermissions(err?: string): boolean {
   return typeof err === 'string' && /(EPERM|EACCES)/i.test(err);
 }
 
+async function createFakeTmuxBin(wd: string, script: string): Promise<string> {
+  const fakeBin = join(wd, 'bin');
+  await mkdir(fakeBin, { recursive: true });
+  const tmuxPath = join(fakeBin, 'tmux');
+  await writeFile(tmuxPath, script);
+  spawnSync('chmod', ['+x', tmuxPath], { encoding: 'utf-8' });
+  return fakeBin;
+}
+
 describe('omx doctor --team', () => {
   it('exits non-zero and prints resume_blocker when team state references missing tmux session', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-doctor-team-'));
@@ -84,7 +93,8 @@ describe('omx doctor --team', () => {
       const requestedAt = new Date(Date.now() - 60_000).toISOString();
       await writeFile(join(workerDir, 'shutdown-request.json'), JSON.stringify({ requested_at: requestedAt }));
 
-      const res = runOmx(wd, ['doctor', '--team']);
+      const fakeBin = await createFakeTmuxBin(wd, '#!/bin/sh\n# list-sessions success with no sessions\nexit 0\n');
+      const res = runOmx(wd, ['doctor', '--team'], { PATH: `${fakeBin}:${process.env.PATH || ''}` });
       if (shouldSkipForSpawnPermissions(res.error)) return;
       assert.equal(res.status, 1, res.stderr || res.stdout);
       assert.match(res.stdout, /slow_shutdown/);
@@ -112,7 +122,8 @@ describe('omx doctor --team', () => {
         alive: true,
       }));
 
-      const res = runOmx(wd, ['doctor', '--team']);
+      const fakeBin = await createFakeTmuxBin(wd, '#!/bin/sh\n# list-sessions success with no sessions\nexit 0\n');
+      const res = runOmx(wd, ['doctor', '--team'], { PATH: `${fakeBin}:${process.env.PATH || ''}` });
       if (shouldSkipForSpawnPermissions(res.error)) return;
       assert.equal(res.status, 1, res.stderr || res.stdout);
       assert.match(res.stdout, /delayed_status_lag/);
