@@ -7,9 +7,8 @@ import { existsSync } from 'fs';
 import { join, resolve as resolvePath } from 'path';
 import { asNumber, safeString, isTerminalPhase } from './utils.js';
 import { readJsonIfExists } from './state-io.js';
-import { runProcess } from './process-runner.js';
 import { logTmuxHookEvent } from './log.js';
-import { checkPaneReadyForTeamSendKeys } from './team-tmux-guard.js';
+import { checkPaneReadyForTeamSendKeys, sendPaneInput } from './team-tmux-guard.js';
 import { DEFAULT_MARKER } from '../tmux-hook-engine.js';
 const LEADER_PANE_SHELL_NO_INJECTION_REASON = 'leader_pane_shell_no_injection';
 
@@ -415,11 +414,13 @@ export async function maybeNotifyLeaderAllWorkersIdle({ cwd, stateDir, logsDir, 
   }
 
   try {
-    await runProcess('tmux', ['send-keys', '-t', tmuxTarget, '-l', message], 3000);
-    await new Promise(r => setTimeout(r, 100));
-    await runProcess('tmux', ['send-keys', '-t', tmuxTarget, 'C-m'], 3000);
-    await new Promise(r => setTimeout(r, 100));
-    await runProcess('tmux', ['send-keys', '-t', tmuxTarget, 'C-m'], 3000);
+    const sendResult = await sendPaneInput({
+      paneTarget: tmuxTarget,
+      prompt: message,
+      submitKeyPresses: 2,
+      submitDelayMs: 100,
+    });
+    if (!sendResult.ok) throw new Error(sendResult.error || sendResult.reason || 'send_failed');
 
     const nextIdleState = {
       ...idleState,
@@ -596,11 +597,13 @@ export async function maybeNotifyLeaderWorkerIdle({ cwd, stateDir, logsDir, pars
   const message = `${parts.join('. ')}. ${DEFAULT_MARKER}`;
 
   try {
-    await runProcess('tmux', ['send-keys', '-t', tmuxTarget, '-l', message], 3000);
-    await new Promise(r => setTimeout(r, 100));
-    await runProcess('tmux', ['send-keys', '-t', tmuxTarget, 'C-m'], 3000);
-    await new Promise(r => setTimeout(r, 100));
-    await runProcess('tmux', ['send-keys', '-t', tmuxTarget, 'C-m'], 3000);
+    const sendResult = await sendPaneInput({
+      paneTarget: tmuxTarget,
+      prompt: message,
+      submitKeyPresses: 2,
+      submitDelayMs: 100,
+    });
+    if (!sendResult.ok) throw new Error(sendResult.error || sendResult.reason || 'send_failed');
 
     // Update cooldown state
     try {

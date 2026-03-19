@@ -7,7 +7,6 @@ import { resolvePaneTarget } from './tmux-injection.js';
 import { evaluatePaneInjectionReadiness, sendPaneInput } from './team-tmux-guard.js';
 import {
   buildCapturePaneArgv,
-  buildSendKeysArgv,
   normalizeTmuxCapture,
   paneHasActiveTask,
   paneLooksReady,
@@ -307,16 +306,10 @@ async function injectDispatchRequest(request, config, cwd) {
     return { ok: false, reason: paneGuard.reason };
   }
 
-  const argv = buildSendKeysArgv({
-    paneTarget: resolution.paneTarget,
-    prompt: request.trigger_message,
-    dryRun: false,
-    submitKeyPresses: resolveWorkerCliForRequest(request, config) === 'claude' ? 1 : 2,
-  });
-
   const attemptCountAtStart = Number.isFinite(request.attempt_count)
     ? Math.max(0, Math.floor(request.attempt_count))
     : 0;
+  const submitKeyPresses = resolveWorkerCliForRequest(request, config) === 'claude' ? 1 : 2;
   let preCaptureHasTrigger = false;
   if (attemptCountAtStart >= 1) {
     try {
@@ -337,18 +330,16 @@ async function injectDispatchRequest(request, config, cwd) {
       await runProcess('tmux', ['send-keys', '-t', resolution.paneTarget, 'C-u'], 1000).catch(() => {});
       await new Promise((r) => setTimeout(r, 50));
     }
-    const typeResult = await sendPaneInput({
-      paneTarget: resolution.paneTarget,
-      prompt: request.trigger_message,
-      submitKeyPresses: 0,
-    });
-    if (!typeResult.ok) {
-      return { ok: false, reason: typeResult.reason };
-    }
   }
 
-  for (const submit of argv.submitArgv) {
-    await runProcess('tmux', submit, 3000);
+  const sendResult = await sendPaneInput({
+    paneTarget: resolution.paneTarget,
+    prompt: request.trigger_message,
+    submitKeyPresses,
+    typePrompt: shouldTypePrompt,
+  });
+  if (!sendResult.ok) {
+    return { ok: false, reason: sendResult.error || sendResult.reason };
   }
 
   // Post-injection verification: confirm the trigger text was consumed.
@@ -386,9 +377,12 @@ async function injectDispatchRequest(request, config, cwd) {
       // capture failed; fall through to retry C-m
     }
     // Draft still visible and no active task — retry C-m
-    for (const submit of argv.submitArgv) {
-      await runProcess('tmux', submit, 3000).catch(() => {});
-    }
+    await sendPaneInput({
+      paneTarget: resolution.paneTarget,
+      prompt: request.trigger_message,
+      submitKeyPresses,
+      typePrompt: false,
+    }).catch(() => {});
   }
 
   // Trigger text is still visible after all retry rounds.

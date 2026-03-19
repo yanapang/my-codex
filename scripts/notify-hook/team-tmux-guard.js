@@ -119,6 +119,7 @@ export async function sendPaneInput({
   prompt,
   submitKeyPresses = 2,
   submitDelayMs = 0,
+  typePrompt = true,
 }) {
   const target = safeString(paneTarget).trim();
   if (!target) {
@@ -128,14 +129,15 @@ export async function sendPaneInput({
   const normalizedSubmitKeyPresses = Number.isFinite(submitKeyPresses)
     ? Math.max(0, Math.floor(submitKeyPresses))
     : 2;
+  const literalPrompt = safeString(prompt);
   const argv = normalizedSubmitKeyPresses === 0
     ? {
-      typeArgv: ['send-keys', '-t', target, '-l', prompt],
+      typeArgv: ['send-keys', '-t', target, '-l', literalPrompt],
       submitArgv: [],
     }
     : buildSendKeysArgv({
       paneTarget: target,
-      prompt,
+      prompt: literalPrompt,
       dryRun: false,
       submitKeyPresses: normalizedSubmitKeyPresses,
     });
@@ -144,7 +146,9 @@ export async function sendPaneInput({
   }
 
   try {
-    await runProcess('tmux', argv.typeArgv, 3000);
+    if (typePrompt) {
+      await runProcess('tmux', argv.typeArgv, 3000);
+    }
     for (const submit of argv.submitArgv) {
       if (submitDelayMs > 0) {
         await new Promise((resolve) => setTimeout(resolve, submitDelayMs));
