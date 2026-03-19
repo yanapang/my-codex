@@ -12,6 +12,7 @@ import { runProcess } from './process-runner.js';
 import { logTmuxHookEvent } from './log.js';
 import { evaluatePaneInjectionReadiness, mapPaneInjectionReadinessReason, sendPaneInput } from './team-tmux-guard.js';
 import { buildCapturePaneArgv, DEFAULT_MARKER } from '../tmux-hook-engine.js';
+import { findBetterSiblingPaneTarget } from './tmux-injection.js';
 
 export const SKILL_ACTIVE_STATE_FILE = 'skill-active-state.json';
 export const DEEP_INTERVIEW_BLOCKED_APPROVAL_INPUTS = ['yes', 'y', 'proceed', 'continue', 'ok', 'sure', 'go ahead', 'next i should'];
@@ -288,7 +289,10 @@ export async function capturePane(paneId, lines = 10) {
 
 export async function resolveNudgePaneTarget(stateDir) {
   const envPane = safeString(process.env.TMUX_PANE || '');
-  if (envPane) return envPane;
+  if (envPane) {
+    const upgraded = await findBetterSiblingPaneTarget(envPane);
+    return safeString(upgraded || envPane);
+  }
 
   try {
     const scopedDirs = await getScopedStateDirsForCurrentSession(stateDir);
@@ -300,7 +304,9 @@ export async function resolveNudgePaneTarget(stateDir) {
         try {
           const state = JSON.parse(await readFile(path, 'utf-8'));
           if (state && state.active && state.tmux_pane_id) {
-            return safeString(state.tmux_pane_id);
+            const paneId = safeString(state.tmux_pane_id);
+            const upgraded = paneId ? await findBetterSiblingPaneTarget(paneId) : '';
+            return safeString(upgraded || paneId);
           }
         } catch {
           // skip malformed state

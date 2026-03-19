@@ -320,7 +320,7 @@ exit 0
     });
   });
 
-  it('injects when tmux reports sh but the captured pane is a live Codex prompt', async () => {
+  it('upgrades the wrapper shell pane to the sibling live Codex pane before injecting', async () => {
     await withTempWorkingDir(async (cwd) => {
       const omxDir = join(cwd, '.omx');
       const stateDir = join(omxDir, 'state');
@@ -343,9 +343,9 @@ set -eu
 echo "$@" >> "${tmuxLogPath}"
 cmd="$1"
 shift || true
-if [[ "$cmd" == "display-message" ]]; then
-  target=""
-  format=""
+  if [[ "$cmd" == "display-message" ]]; then
+    target=""
+    format=""
   while (($#)); do
     case "$1" in
       -p) shift ;;
@@ -355,6 +355,26 @@ if [[ "$cmd" == "display-message" ]]; then
   done
   if [[ "$format" == "#{pane_current_command}" && "$target" == "%99" ]]; then
     echo "sh"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_current_command}" && "$target" == "%100" ]]; then
+    echo "node"
+    exit 0
+  fi
+  if [[ "$format" == "#S" && "$target" == "%99" ]]; then
+    echo "devsess"
+    exit 0
+  fi
+  if [[ "$format" == "#S" && "$target" == "%100" ]]; then
+    echo "devsess"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_current_path}" && "$target" == "%99" ]]; then
+    echo "${cwd}"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_current_path}" && "$target" == "%100" ]]; then
+    echo "${cwd}"
     exit 0
   fi
   exit 0
@@ -367,6 +387,17 @@ if [[ "$cmd" == "send-keys" ]]; then
   exit 0
 fi
 if [[ "$cmd" == "list-panes" ]]; then
+  target=""
+  while (($#)); do
+    case "$1" in
+      -t) target="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [[ "$target" == "devsess" ]]; then
+    printf "%%99\tsh\t0\t${cwd}\\n%%100\tnode\t1\t${cwd}\\n"
+    exit 0
+  fi
   echo "%1 12345"
   exit 0
 fi
@@ -381,9 +412,10 @@ exit 0
       assert.equal(result.status, 0, `hook failed: ${result.stderr || result.stdout}`);
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
-      assert.match(tmuxLog, /display-message -p -t %99 #\{pane_current_command\}/);
-      assert.match(tmuxLog, /capture-pane -t %99 -p -S -80/);
-      assert.match(tmuxLog, /send-keys -t %99 -l yes, proceed \[OMX_TMUX_INJECT\]/);
+      assert.match(tmuxLog, /display-message -p(?: -t %99)? #S/);
+      assert.match(tmuxLog, /list-panes -t devsess -F #\{pane_id\}\t#\{pane_current_command\}\t#\{pane_active\}\t#\{pane_current_path\}/);
+      assert.match(tmuxLog, /capture-pane -t %100 -p -S -80/);
+      assert.match(tmuxLog, /send-keys -t %100 -l yes, proceed \[OMX_TMUX_INJECT\]/);
 
       const logPath = join(logsDir, `tmux-hook-${new Date().toISOString().slice(0, 10)}.jsonl`);
       const entries = (await readFile(logPath, 'utf-8')).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));

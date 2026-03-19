@@ -36,6 +36,40 @@ export async function resolveSessionToPane(sessionName) {
   return paneId || null;
 }
 
+export async function findBetterSiblingPaneTarget(paneId) {
+  const target = safeString(paneId).trim();
+  if (!target) return null;
+  try {
+    const sessionResult = await runProcess('tmux', ['display-message', '-p', '-t', target, '#S'], 1000);
+    const sessionName = safeString(sessionResult.stdout).trim();
+    if (!sessionName) return null;
+    const list = await runProcess('tmux', ['list-panes', '-t', sessionName, '-F', '#{pane_id}	#{pane_current_command}	#{pane_active}	#{pane_current_path}'], 2000);
+    const rows = list.stdout.split('
+').map((line) => line.trim()).filter(Boolean).map((line) => {
+      const [paneId, currentCommand, activeRaw, paneCwd] = line.split('	');
+      return {
+        paneId: safeString(paneId),
+        currentCommand: safeString(currentCommand).toLowerCase(),
+        active: activeRaw === '1',
+        paneCwd: safeString(paneCwd),
+      };
+    }).filter((row) => row.paneId);
+    const current = rows.find((row) => row.paneId == target) || null;
+    const expectedCwd = current?.paneCwd ? resolvePath(current.paneCwd) : '';
+    const better = rows.find((row) => row.paneId !== target
+      && row.currentCommand === 'node'
+      && (!expectedCwd || !row.paneCwd || resolvePath(row.paneCwd) === expectedCwd)
+      && row.active);
+    if (better?.paneId) return better.paneId;
+    const fallback = rows.find((row) => row.paneId !== target
+      && row.currentCommand === 'node'
+      && (!expectedCwd || !row.paneCwd || resolvePath(row.paneCwd) === expectedCwd));
+    return fallback?.paneId || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function resolvePaneByCwd(expectedCwd) {
   if (!expectedCwd) return null;
   const result = await runProcess('tmux', ['list-panes', '-a', '-F', '#{pane_id}\t#{pane_current_path}\t#{pane_active}\t#{session_name}']);
@@ -116,8 +150,12 @@ export async function resolvePaneTarget(target, fallbackPane, expectedCwd, modeP
   if (fallbackPane) {
     try {
       const currentPane = await runProcess('tmux', ['display-message', '-p', '-t', fallbackPane, '#{pane_id}']);
-      const paneId = safeString(currentPane.stdout).trim();
+      let paneId = safeString(currentPane.stdout).trim();
       if (paneId) {
+        const healedPaneId = await findBetterSiblingPaneTarget(paneId);
+        if (healedPaneId) {
+          paneId = healedPaneId;
+        }
         if (expectedCwd) {
           const paneCwdResult = await runProcess('tmux', ['display-message', '-p', '-t', paneId, '#{pane_current_path}']);
           const paneCwd = safeString(paneCwdResult.stdout).trim();
@@ -135,7 +173,7 @@ export async function resolvePaneTarget(target, fallbackPane, expectedCwd, modeP
         const sessionName = safeString(currentSession.stdout).trim();
         return {
           paneTarget: paneId,
-          reason: 'fallback_current_pane',
+          reason: paneId === fallbackPane ? 'fallback_current_pane' : 'fallback_current_pane_sibling_upgrade',
           matched_session: sessionName || null,
         };
       }
