@@ -2,9 +2,7 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-use crate::types::{
-    MuxAdapter, MuxError, MuxOperation, MuxOutcome, MuxTarget, SubmitPolicy,
-};
+use crate::types::{MuxAdapter, MuxError, MuxOperation, MuxOutcome, MuxTarget, SubmitPolicy};
 
 /// Run a tmux command with the given arguments. Returns stdout on success.
 fn run_tmux(args: &[&str]) -> Result<String, MuxError> {
@@ -54,12 +52,7 @@ pub(crate) fn build_send_keys_args<'a>(target: &'a str, text: &'a str) -> Vec<&'
 
 /// Build the argument list for `tmux send-keys` enter press.
 pub(crate) fn build_enter_key_args(target: &str) -> Vec<String> {
-    vec![
-        "send-keys".into(),
-        "-t".into(),
-        target.into(),
-        "C-m".into(),
-    ]
+    vec!["send-keys".into(), "-t".into(), target.into(), "C-m".into()]
 }
 
 /// Build the argument list for `tmux capture-pane`.
@@ -103,9 +96,7 @@ impl TmuxAdapter {
                 resolved_handle: handle,
             })
         } else {
-            Err(MuxError::InvalidTarget(format!(
-                "pane not found: {handle}"
-            )))
+            Err(MuxError::InvalidTarget(format!("pane not found: {handle}")))
         }
     }
 
@@ -215,8 +206,7 @@ mod tests {
 
     #[test]
     fn resolve_target_handle_rejects_detached() {
-        let err =
-            resolve_target_handle(&MuxTarget::Detached).expect_err("should reject detached");
+        let err = resolve_target_handle(&MuxTarget::Detached).expect_err("should reject detached");
         assert!(matches!(err, MuxError::InvalidTarget(_)));
     }
 
@@ -237,16 +227,16 @@ mod tests {
     #[test]
     fn build_send_keys_args_constructs_correct_args() {
         let args = build_send_keys_args("sess:0.1", "hello world");
-        assert_eq!(args, vec!["send-keys", "-t", "sess:0.1", "-l", "hello world"]);
+        assert_eq!(
+            args,
+            vec!["send-keys", "-t", "sess:0.1", "-l", "hello world"]
+        );
     }
 
     #[test]
     fn build_enter_key_args_constructs_correct_args() {
         let args = build_enter_key_args("sess:0.1");
-        assert_eq!(
-            args,
-            vec!["send-keys", "-t", "sess:0.1", "C-m"]
-        );
+        assert_eq!(args, vec!["send-keys", "-t", "sess:0.1", "C-m"]);
     }
 
     #[test]

@@ -32,6 +32,7 @@ import {
   buildDetachedSessionRollbackSteps,
   resolveNotifyTempContract,
   buildNotifyTempStartupMessages,
+  buildNotifyFallbackWatcherEnv,
 } from "../index.js";
 import { HUD_TMUX_HEIGHT_LINES } from "../../hud/constants.js";
 import {
@@ -230,6 +231,27 @@ describe("resolveNotifyTempContract", () => {
     assert.equal(parsed.contract.active, true);
     assert.equal(parsed.contract.source, "env");
     assert.deepEqual(parsed.passthroughArgs, ["--model", "gpt-5"]);
+  });
+});
+
+describe("buildNotifyFallbackWatcherEnv", () => {
+  it("enables watcher authority and propagates CODEX_HOME override when requested", () => {
+    const env = buildNotifyFallbackWatcherEnv(
+      { HOME: "/tmp/home", OMX_HUD_AUTHORITY: "0" },
+      { codexHomeOverride: "/tmp/codex-home", enableAuthority: true },
+    );
+    assert.equal(env.OMX_HUD_AUTHORITY, "1");
+    assert.equal(env.CODEX_HOME, "/tmp/codex-home");
+    assert.equal(env.HOME, "/tmp/home");
+  });
+
+  it("disables watcher authority explicitly when not requested", () => {
+    const env = buildNotifyFallbackWatcherEnv(
+      { HOME: "/tmp/home", OMX_HUD_AUTHORITY: "1" },
+      { enableAuthority: false },
+    );
+    assert.equal(env.OMX_HUD_AUTHORITY, "0");
+    assert.equal(env.HOME, "/tmp/home");
   });
 });
 
@@ -637,7 +659,10 @@ describe("project launch scope helpers", () => {
 
 describe("resolveCodexLaunchPolicy", () => {
   it("uses detached tmux on macOS when outside tmux and tmux is available", () => {
-    assert.equal(resolveCodexLaunchPolicy({}, "darwin", true), "detached-tmux");
+    assert.equal(
+      resolveCodexLaunchPolicy({}, "darwin", true, false, true, true),
+      "detached-tmux",
+    );
   });
 
   it("uses tmux-aware launch path when already inside tmux", () => {
@@ -651,12 +676,57 @@ describe("resolveCodexLaunchPolicy", () => {
     );
   });
 
+  it("uses tmux-aware launch path when already inside tmux on native Windows", () => {
+    assert.equal(
+      resolveCodexLaunchPolicy(
+        { TMUX: "psmux-session" },
+        "win32",
+        true,
+        true,
+      ),
+      "inside-tmux",
+    );
+  });
+
   it("uses detached tmux on non-macOS hosts when outside tmux and tmux is available", () => {
-    assert.equal(resolveCodexLaunchPolicy({}, "linux", true), "detached-tmux");
+    assert.equal(
+      resolveCodexLaunchPolicy({}, "linux", true, false, true, true),
+      "detached-tmux",
+    );
+  });
+
+  it("launches directly on native Windows even when tmux is available", () => {
+    assert.equal(resolveCodexLaunchPolicy({}, "win32", true, true), "direct");
+  });
+
+  it("does not force direct launch for MSYS or Git Bash on win32", () => {
+    assert.equal(
+      resolveCodexLaunchPolicy(
+        { MSYSTEM: "MINGW64" },
+        "win32",
+        true,
+        false,
+        true,
+        true,
+      ),
+      "detached-tmux",
+    );
+  });
+
+  it("launches directly when stdin is not a tty outside tmux", () => {
+    assert.equal(resolveCodexLaunchPolicy({}, "linux", true, false, false, true), "direct");
+  });
+
+  it("launches directly when stdout is not a tty outside tmux", () => {
+    assert.equal(resolveCodexLaunchPolicy({}, "linux", true, false, true, false), "direct");
   });
 
   it("launches directly when tmux is unavailable outside tmux", () => {
     assert.equal(resolveCodexLaunchPolicy({}, "linux", false), "direct");
+  });
+
+  it("launches directly on native Windows when tmux is unavailable", () => {
+    assert.equal(resolveCodexLaunchPolicy({}, "win32", false, true), "direct");
   });
 });
 

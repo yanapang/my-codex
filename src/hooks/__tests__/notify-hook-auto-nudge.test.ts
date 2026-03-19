@@ -320,6 +320,111 @@ exit 0
     });
   });
 
+  it('upgrades the wrapper shell pane to the sibling live Codex pane before injecting', async () => {
+    await withTempWorkingDir(async (cwd) => {
+      const omxDir = join(cwd, '.omx');
+      const stateDir = join(omxDir, 'state');
+      const logsDir = join(omxDir, 'logs');
+      const codexHome = join(cwd, 'codex-home');
+      const fakeBinDir = join(cwd, 'fake-bin');
+      const tmuxLogPath = join(cwd, 'tmux.log');
+
+      await mkdir(logsDir, { recursive: true });
+      await mkdir(stateDir, { recursive: true });
+      await mkdir(codexHome, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+
+      await writeJson(join(codexHome, '.omx-config.json'), {
+        autoNudge: { enabled: true, delaySec: 0 },
+      });
+
+      const fakeTmux = `#!/usr/bin/env bash
+set -eu
+echo "$@" >> "${tmuxLogPath}"
+cmd="$1"
+shift || true
+  if [[ "$cmd" == "display-message" ]]; then
+    target=""
+    format=""
+  while (($#)); do
+    case "$1" in
+      -p) shift ;;
+      -t) target="$2"; shift 2 ;;
+      *) format="$1"; shift ;;
+    esac
+  done
+  if [[ "$format" == "#{pane_current_command}" && "$target" == "%99" ]]; then
+    echo "sh"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_current_command}" && "$target" == "%100" ]]; then
+    echo "node"
+    exit 0
+  fi
+  if [[ "$format" == "#S" && "$target" == "%99" ]]; then
+    echo "devsess"
+    exit 0
+  fi
+  if [[ "$format" == "#S" && "$target" == "%100" ]]; then
+    echo "devsess"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_current_path}" && "$target" == "%99" ]]; then
+    echo "${cwd}"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_current_path}" && "$target" == "%100" ]]; then
+    echo "${cwd}"
+    exit 0
+  fi
+  exit 0
+fi
+if [[ "$cmd" == "capture-pane" ]]; then
+  printf "› say \\"if you want\\"\\n\\n• if you want\\n\\n› Implement {feature}\\n\\n  gpt-5.4 high · dev · 98%% left\\n"
+  exit 0
+fi
+if [[ "$cmd" == "send-keys" ]]; then
+  exit 0
+fi
+if [[ "$cmd" == "list-panes" ]]; then
+  target=""
+  while (($#)); do
+    case "$1" in
+      -t) target="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [[ "$target" == "devsess" ]]; then
+    printf "%%99\tsh\t0\t${cwd}\\n%%100\tnode\t1\t${cwd}\\n"
+    exit 0
+  fi
+  echo "%1 12345"
+  exit 0
+fi
+exit 0
+`;
+      await writeFile(join(fakeBinDir, 'tmux'), fakeTmux);
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+
+      const result = runNotifyHook(cwd, fakeBinDir, codexHome, {
+        'last-assistant-message': 'if you want',
+      });
+      assert.equal(result.status, 0, `hook failed: ${result.stderr || result.stdout}`);
+
+      const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
+      assert.match(tmuxLog, /display-message -p(?: -t %99)? #S/);
+      assert.match(tmuxLog, /list-panes -t devsess -F #\{pane_id\}\t#\{pane_current_command\}\t#\{pane_active\}\t#\{pane_current_path\}/);
+      assert.match(tmuxLog, /capture-pane -t %100 -p -S -80/);
+      assert.match(tmuxLog, /send-keys -t %100 -l yes, proceed \[OMX_TMUX_INJECT\]/);
+
+      const logPath = join(logsDir, `tmux-hook-${new Date().toISOString().slice(0, 10)}.jsonl`);
+      const entries = (await readFile(logPath, 'utf-8')).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+      const skipped = entries.find((entry: { type?: string; reason?: string }) =>
+        entry.type === 'auto_nudge_skipped' && entry.reason === 'agent_not_running');
+      assert.equal(skipped, undefined, 'live Codex shell wrapper should no longer be misclassified as agent_not_running');
+    });
+  });
+
   it('logs scroll_active and avoids send-keys when auto-nudge target pane is in copy-mode', async () => {
     await withTempWorkingDir(async (cwd) => {
       const omxDir = join(cwd, '.omx');

@@ -362,8 +362,13 @@ export function resolveCodexLaunchPolicy(
   env: NodeJS.ProcessEnv = process.env,
   _platform: NodeJS.Platform = process.platform,
   tmuxAvailable: boolean = isTmuxAvailable(),
+  nativeWindows: boolean = isNativeWindows(),
+  stdinIsTTY: boolean = Boolean(process.stdin.isTTY),
+  stdoutIsTTY: boolean = Boolean(process.stdout.isTTY),
 ): CodexLaunchPolicy {
   if (env.TMUX) return "inside-tmux";
+  if (nativeWindows) return "direct";
+  if (!stdinIsTTY || !stdoutIsTTY) return "direct";
   return tmuxAvailable ? "detached-tmux" : "direct";
 }
 
@@ -808,6 +813,13 @@ export async function launchWithHud(args: string[]): Promise<void> {
     process.env,
   );
   const codexHomeOverride = resolveCodexHomeForLaunch(launchCwd, process.env);
+  const launchPolicy = resolveCodexLaunchPolicy(
+    process.env,
+    process.platform,
+    undefined,
+    isNativeWindows(),
+  );
+  const enableNotifyFallbackAuthority = launchPolicy === "direct";
   const workerSparkModel = resolveWorkerSparkModel(
     notifyTempResult.passthroughArgs,
     codexHomeOverride,
@@ -861,7 +873,7 @@ export async function launchWithHud(args: string[]): Promise<void> {
 
   // ── Phase 1: preLaunch ──────────────────────────────────────────────────
   try {
-    await preLaunch(cwd, sessionId, notifyTempResult.contract);
+    await preLaunch(cwd, sessionId, notifyTempResult.contract, codexHomeOverride, enableNotifyFallbackAuthority);
   } catch (err) {
     // preLaunch errors must NOT prevent Codex from starting
     console.error(
@@ -884,7 +896,7 @@ export async function launchWithHud(args: string[]): Promise<void> {
     );
   } finally {
     // ── Phase 3: postLaunch ─────────────────────────────────────────────
-    await postLaunch(cwd, sessionId);
+    await postLaunch(cwd, sessionId, codexHomeOverride, enableNotifyFallbackAuthority);
   }
 }
 
@@ -940,7 +952,7 @@ export async function execWithOverlay(args: string[]): Promise<void> {
   }
 
   try {
-    await preLaunch(cwd, sessionId, notifyTempResult.contract);
+    await preLaunch(cwd, sessionId, notifyTempResult.contract, codexHomeOverride, true);
   } catch (err) {
     console.error(
       `[omx] preLaunch warning: ${err instanceof Error ? err.message : err}`,
@@ -968,7 +980,7 @@ export async function execWithOverlay(args: string[]): Promise<void> {
       : codexEnvBase;
     runCodexBlocking(cwd, codexArgs, codexEnv);
   } finally {
-    await postLaunch(cwd, sessionId);
+    await postLaunch(cwd, sessionId, codexHomeOverride, true);
   }
 }
 
@@ -1535,6 +1547,20 @@ export function buildNotifyTempStartupMessages(
   return { infoLines, warningLines };
 }
 
+export function buildNotifyFallbackWatcherEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  options: {
+    codexHomeOverride?: string;
+    enableAuthority?: boolean;
+  } = {},
+): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    ...(options.codexHomeOverride ? { CODEX_HOME: options.codexHomeOverride } : {}),
+    OMX_HUD_AUTHORITY: options.enableAuthority ? "1" : "0",
+  };
+}
+
 /**
  * preLaunch: Prepare environment before Codex starts.
  * 1. Generate runtime overlay + write session-scoped model instructions file
@@ -1548,6 +1574,8 @@ async function preLaunch(
   cwd: string,
   sessionId: string,
   notifyTempContract?: NotifyTempContract,
+  codexHomeOverride?: string,
+  enableNotifyFallbackAuthority: boolean = false,
 ): Promise<void> {
   // 1. Generate runtime overlay + write session-scoped model instructions file
   const orchestrationMode = await resolveSessionOrchestrationMode(
@@ -1570,7 +1598,7 @@ ${launchAppendix}`
 
   // 3. Start notify fallback watcher (best effort)
   try {
-    await startNotifyFallbackWatcher(cwd);
+    await startNotifyFallbackWatcher(cwd, { codexHomeOverride, enableAuthority: enableNotifyFallbackAuthority });
   } catch (err) {
     process.stderr.write(`[cli/index] operation failed: ${err}\n`);
     // Non-fatal
@@ -1672,7 +1700,12 @@ function runCodex(
     ? { ...codexEnv, [OMX_NOTIFY_TEMP_CONTRACT_ENV]: notifyTempContractRaw }
     : codexEnv;
 
-  const launchPolicy = resolveCodexLaunchPolicy(process.env);
+  const launchPolicy = resolveCodexLaunchPolicy(
+    process.env,
+    process.platform,
+    undefined,
+    nativeWindows,
+  );
 
   if (isCodexVersionRequest(launchArgs)) {
     runCodexBlocking(cwd, launchArgs, codexEnvWithNotify);
@@ -2013,7 +2046,12 @@ function scheduleDetachedWindowsCodexLaunch(
  * postLaunch: Clean up after Codex exits.
  * Each step is independently fault-tolerant (try/catch per step).
  */
-async function postLaunch(cwd: string, sessionId: string): Promise<void> {
+async function postLaunch(
+  cwd: string,
+  sessionId: string,
+  codexHomeOverride?: string,
+  enableNotifyFallbackAuthority: boolean = false,
+): Promise<void> {
   // Capture session start time before cleanup (writeSessionEnd deletes session.json)
   let sessionStartedAt: string | undefined;
   try {
@@ -2026,7 +2064,7 @@ async function postLaunch(cwd: string, sessionId: string): Promise<void> {
 
   // 0. Flush fallback watcher once to reduce race with fast codex exit.
   try {
-    await flushNotifyFallbackOnce(cwd);
+    await flushNotifyFallbackOnce(cwd, { codexHomeOverride, enableAuthority: enableNotifyFallbackAuthority });
   } catch (err) {
     process.stderr.write(`[cli/index] operation failed: ${err}\n`);
     // Non-fatal
@@ -2168,6 +2206,7 @@ async function emitNativeHookEvent(
   });
   await dispatchHookEvent(payload, {
     cwd,
+    enabled: true,
   });
 }
 
@@ -2206,7 +2245,10 @@ function tryKillPid(pid: number, signal: NodeJS.Signals = "SIGTERM"): boolean {
   }
 }
 
-async function startNotifyFallbackWatcher(cwd: string): Promise<void> {
+async function startNotifyFallbackWatcher(
+  cwd: string,
+  options: { codexHomeOverride?: string; enableAuthority?: boolean } = {},
+): Promise<void> {
   if (process.env.OMX_NOTIFY_FALLBACK === "0") return;
 
   const { mkdir, writeFile, readFile } = await import("fs/promises");
@@ -2267,6 +2309,10 @@ async function startNotifyFallbackWatcher(cwd: string): Promise<void> {
       cwd,
       detached: true,
       stdio: "ignore",
+      env: buildNotifyFallbackWatcherEnv(process.env, {
+        codexHomeOverride: options.codexHomeOverride,
+        enableAuthority: options.enableAuthority === true,
+      }),
     },
   );
   child.unref();
@@ -2414,7 +2460,10 @@ async function stopHookDerivedWatcher(cwd: string): Promise<void> {
   });
 }
 
-async function flushNotifyFallbackOnce(cwd: string): Promise<void> {
+async function flushNotifyFallbackOnce(
+  cwd: string,
+  options: { codexHomeOverride?: string; enableAuthority?: boolean } = {},
+): Promise<void> {
   const { spawnSync } = await import("child_process");
   const pkgRoot = getPackageRoot();
   const watcherScript = join(pkgRoot, "scripts", "notify-fallback-watcher.js");
@@ -2427,6 +2476,10 @@ async function flushNotifyFallbackOnce(cwd: string): Promise<void> {
       cwd,
       stdio: "ignore",
       timeout: 3000,
+      env: buildNotifyFallbackWatcherEnv(process.env, {
+        codexHomeOverride: options.codexHomeOverride,
+        enableAuthority: options.enableAuthority === true,
+      }),
     },
   );
 }

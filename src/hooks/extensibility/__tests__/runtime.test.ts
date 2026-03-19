@@ -7,7 +7,7 @@ import { dispatchHookEventRuntime } from '../runtime.js';
 import { buildHookEvent } from '../events.js';
 
 describe('dispatchHookEventRuntime', () => {
-  it('returns disabled when plugins env var is not set', async () => {
+  it('dispatches native events even when plugins env var is not set', async () => {
     const originalEnv = process.env.OMX_HOOK_PLUGINS;
     try {
       delete process.env.OMX_HOOK_PLUGINS;
@@ -17,9 +17,9 @@ describe('dispatchHookEventRuntime', () => {
         const event = buildHookEvent('session-start');
         const result = await dispatchHookEventRuntime({ cwd, event });
 
-        assert.equal(result.dispatched, false);
-        assert.equal(result.reason, 'plugins_disabled');
-        assert.equal(result.result.enabled, false);
+        assert.equal(result.dispatched, true);
+        assert.equal(result.reason, 'ok');
+        assert.equal(result.result.enabled, true);
         assert.equal(result.result.plugin_count, 0);
       } finally {
         await rm(cwd, { recursive: true, force: true });
@@ -106,6 +106,7 @@ describe('dispatchHookEventRuntime', () => {
 
         assert.equal(result.result.event, 'needs-input');
         assert.equal(result.result.source, 'derived');
+        assert.equal(result.result.enabled, true);
       } finally {
         await rm(cwd, { recursive: true, force: true });
       }

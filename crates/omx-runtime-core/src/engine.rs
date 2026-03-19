@@ -7,7 +7,9 @@ use crate::authority::{AuthorityError, AuthorityLease};
 use crate::dispatch::{DispatchError, DispatchLog};
 use crate::mailbox::{MailboxError, MailboxLog};
 use crate::replay::ReplayState;
-use crate::{ReadinessSnapshot, RuntimeCommand, RuntimeEvent, RuntimeSnapshot, RUNTIME_SCHEMA_VERSION};
+use crate::{
+    ReadinessSnapshot, RuntimeCommand, RuntimeEvent, RuntimeSnapshot, RUNTIME_SCHEMA_VERSION,
+};
 
 #[derive(Debug)]
 pub enum EngineError {
@@ -105,8 +107,7 @@ impl RuntimeEngine {
                 lease_id,
                 leased_until,
             } => {
-                self.authority
-                    .acquire(&owner, &lease_id, &leased_until)?;
+                self.authority.acquire(&owner, &lease_id, &leased_until)?;
                 RuntimeEvent::AuthorityAcquired {
                     owner,
                     lease_id,
@@ -118,17 +119,24 @@ impl RuntimeEngine {
                 lease_id,
                 leased_until,
             } => {
-                self.authority
-                    .renew(&owner, &lease_id, &leased_until)?;
+                self.authority.renew(&owner, &lease_id, &leased_until)?;
                 RuntimeEvent::AuthorityRenewed {
                     owner,
                     lease_id,
                     leased_until,
                 }
             }
-            RuntimeCommand::QueueDispatch { request_id, target, metadata } => {
+            RuntimeCommand::QueueDispatch {
+                request_id,
+                target,
+                metadata,
+            } => {
                 self.dispatch.queue(&request_id, &target, metadata.clone());
-                RuntimeEvent::DispatchQueued { request_id, target, metadata }
+                RuntimeEvent::DispatchQueued {
+                    request_id,
+                    target,
+                    metadata,
+                }
             }
             RuntimeCommand::MarkNotified {
                 request_id,
@@ -159,7 +167,8 @@ impl RuntimeEngine {
                 to_worker,
                 body,
             } => {
-                self.mailbox.create(&message_id, &from_worker, &to_worker, &body);
+                self.mailbox
+                    .create(&message_id, &from_worker, &to_worker, &body);
                 RuntimeEvent::MailboxMessageCreated {
                     message_id,
                     from_worker,
@@ -208,24 +217,21 @@ impl RuntimeEngine {
             .map(|r| r.request_id.as_str())
             .collect();
 
-        self.event_log.retain(|event| {
-            match event {
-                RuntimeEvent::DispatchQueued { request_id, .. }
-                | RuntimeEvent::DispatchNotified { request_id, .. }
-                | RuntimeEvent::DispatchDelivered { request_id }
-                | RuntimeEvent::DispatchFailed { request_id, .. } => {
-                    !terminal_ids.contains(request_id.as_str())
-                }
-                _ => true,
+        self.event_log.retain(|event| match event {
+            RuntimeEvent::DispatchQueued { request_id, .. }
+            | RuntimeEvent::DispatchNotified { request_id, .. }
+            | RuntimeEvent::DispatchDelivered { request_id }
+            | RuntimeEvent::DispatchFailed { request_id, .. } => {
+                !terminal_ids.contains(request_id.as_str())
             }
+            _ => true,
         });
     }
 
     pub fn persist(&self) -> Result<(), EngineError> {
-        let dir = self
-            .state_dir
-            .as_ref()
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no state_dir configured"))?;
+        let dir = self.state_dir.as_ref().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "no state_dir configured")
+        })?;
         std::fs::create_dir_all(dir)?;
 
         let lock_file = std::fs::File::create(dir.join("engine.lock"))?;
@@ -247,12 +253,9 @@ impl RuntimeEngine {
     /// Write compatibility view files for legacy TS readers (team/doctor/HUD).
     /// Writes individual section files alongside the main snapshot.
     pub fn write_compatibility_view(&self) -> Result<(), EngineError> {
-        let dir = self
-            .state_dir
-            .as_ref()
-            .ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::NotFound, "no state_dir configured")
-            })?;
+        let dir = self.state_dir.as_ref().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "no state_dir configured")
+        })?;
         std::fs::create_dir_all(dir)?;
 
         let snapshot = self.snapshot();
@@ -285,8 +288,8 @@ impl RuntimeEngine {
         let dir = state_dir.into();
 
         let lock_path = dir.join("engine.lock");
-        let lock_file = std::fs::File::open(&lock_path)
-            .or_else(|_| std::fs::File::create(&lock_path))?;
+        let lock_file =
+            std::fs::File::open(&lock_path).or_else(|_| std::fs::File::create(&lock_path))?;
         lock_file.lock_shared()?;
 
         let events_json = std::fs::read_to_string(dir.join("events.json"))?;
@@ -327,7 +330,11 @@ fn replay_event(engine: &mut RuntimeEngine, event: &RuntimeEvent) {
         } => {
             let _ = engine.authority.renew(owner, lease_id, leased_until);
         }
-        RuntimeEvent::DispatchQueued { request_id, target, metadata } => {
+        RuntimeEvent::DispatchQueued {
+            request_id,
+            target,
+            metadata,
+        } => {
             engine.dispatch.queue(request_id, target, metadata.clone());
         }
         RuntimeEvent::DispatchNotified {
@@ -351,7 +358,9 @@ fn replay_event(engine: &mut RuntimeEngine, event: &RuntimeEvent) {
             from_worker,
             to_worker,
         } => {
-            engine.mailbox.create(message_id, from_worker, to_worker, "");
+            engine
+                .mailbox
+                .create(message_id, from_worker, to_worker, "");
         }
         RuntimeEvent::MailboxNotified { message_id } => {
             let _ = engine.mailbox.mark_notified(message_id);
@@ -372,19 +381,13 @@ pub fn derive_readiness(
     if !authority.is_held() {
         reasons.push("authority lease not acquired".to_string());
     } else if authority.is_stale() {
-        let stale_detail = authority
-            .to_snapshot()
-            .stale_reason
-            .unwrap_or_default();
+        let stale_detail = authority.to_snapshot().stale_reason.unwrap_or_default();
         reasons.push(format!("authority lease is stale: {stale_detail}"));
     }
 
     let snap = replay.to_snapshot();
     if snap.pending_events > 0 {
-        reasons.push(format!(
-            "replay has {} pending events",
-            snap.pending_events
-        ));
+        reasons.push(format!("replay has {} pending events", snap.pending_events));
     }
 
     if reasons.is_empty() {
@@ -457,10 +460,7 @@ mod tests {
         let engine = RuntimeEngine::new();
         let snap = engine.snapshot();
         assert!(!snap.ready());
-        assert_eq!(
-            snap.readiness.reasons,
-            vec!["authority lease not acquired"]
-        );
+        assert_eq!(snap.readiness.reasons, vec!["authority lease not acquired"]);
     }
 
     #[test]
@@ -478,12 +478,8 @@ mod tests {
     #[test]
     fn event_log_accumulates() {
         let mut engine = RuntimeEngine::new();
-        engine
-            .process(RuntimeCommand::CaptureSnapshot)
-            .unwrap();
-        engine
-            .process(RuntimeCommand::CaptureSnapshot)
-            .unwrap();
+        engine.process(RuntimeCommand::CaptureSnapshot).unwrap();
+        engine.process(RuntimeCommand::CaptureSnapshot).unwrap();
         assert_eq!(engine.event_log().len(), 2);
     }
 
@@ -522,7 +518,9 @@ mod tests {
     #[test]
     fn derive_readiness_stale_authority() {
         let mut authority = AuthorityLease::new();
-        authority.acquire("w1", "l1", "2026-03-19T02:00:00Z").unwrap();
+        authority
+            .acquire("w1", "l1", "2026-03-19T02:00:00Z")
+            .unwrap();
         authority.mark_stale("expired");
         let dispatch = DispatchLog::new();
         let replay = ReplayState::new();
@@ -562,12 +560,11 @@ mod tests {
                 leased_until: "2026-03-19T02:00:00Z".into(),
             })
             .unwrap();
-        let err = engine
-            .process(RuntimeCommand::AcquireAuthority {
-                owner: "w2".into(),
-                lease_id: "l2".into(),
-                leased_until: "2026-03-19T03:00:00Z".into(),
-            });
+        let err = engine.process(RuntimeCommand::AcquireAuthority {
+            owner: "w2".into(),
+            lease_id: "l2".into(),
+            leased_until: "2026-03-19T03:00:00Z".into(),
+        });
         assert!(err.is_err());
     }
 
@@ -698,22 +695,30 @@ mod tests {
             })
             .unwrap();
 
-        engine.process(RuntimeCommand::MarkNotified {
-            request_id: "req-delivered".into(),
-            channel: "tmux".into(),
-        }).unwrap();
-        engine.process(RuntimeCommand::MarkDelivered {
-            request_id: "req-delivered".into(),
-        }).unwrap();
+        engine
+            .process(RuntimeCommand::MarkNotified {
+                request_id: "req-delivered".into(),
+                channel: "tmux".into(),
+            })
+            .unwrap();
+        engine
+            .process(RuntimeCommand::MarkDelivered {
+                request_id: "req-delivered".into(),
+            })
+            .unwrap();
 
-        engine.process(RuntimeCommand::MarkNotified {
-            request_id: "req-failed".into(),
-            channel: "tmux".into(),
-        }).unwrap();
-        engine.process(RuntimeCommand::MarkFailed {
-            request_id: "req-failed".into(),
-            reason: "timeout".into(),
-        }).unwrap();
+        engine
+            .process(RuntimeCommand::MarkNotified {
+                request_id: "req-failed".into(),
+                channel: "tmux".into(),
+            })
+            .unwrap();
+        engine
+            .process(RuntimeCommand::MarkFailed {
+                request_id: "req-failed".into(),
+                reason: "timeout".into(),
+            })
+            .unwrap();
 
         assert_eq!(engine.event_log().len(), 7);
 

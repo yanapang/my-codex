@@ -39,8 +39,14 @@ pub struct DispatchRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DispatchError {
-    NotFound { request_id: String },
-    InvalidTransition { request_id: String, from: DispatchStatus, to: DispatchStatus },
+    NotFound {
+        request_id: String,
+    },
+    InvalidTransition {
+        request_id: String,
+        from: DispatchStatus,
+        to: DispatchStatus,
+    },
 }
 
 impl fmt::Display for DispatchError {
@@ -49,7 +55,11 @@ impl fmt::Display for DispatchError {
             Self::NotFound { request_id } => {
                 write!(f, "dispatch record not found: {request_id}")
             }
-            Self::InvalidTransition { request_id, from, to } => {
+            Self::InvalidTransition {
+                request_id,
+                from,
+                to,
+            } => {
                 write!(f, "invalid transition for {request_id}: {from} -> {to}")
             }
         }
@@ -185,9 +195,7 @@ fn now_iso() -> String {
     // Epoch date: 1970-01-01
     // Simple calculation for dates (good enough for ordering, not calendar-precise for leap years)
     let (year, month, day) = epoch_days_to_date(days);
-    format!(
-        "{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}.{millis:03}Z"
-    )
+    format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}.{millis:03}Z")
 }
 
 fn epoch_days_to_date(total_days: u64) -> (u64, u64, u64) {
@@ -204,7 +212,18 @@ fn epoch_days_to_date(total_days: u64) -> (u64, u64, u64) {
     }
     let leap = is_leap(year);
     let month_days: [u64; 12] = [
-        31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
     ];
     let mut month = 1u64;
     for &md in &month_days {
@@ -263,7 +282,8 @@ mod tests {
         // Matches TS behavior: pending -> failed allowed for target resolution failures
         let mut log = DispatchLog::new();
         log.queue("req-1", "worker-1", None);
-        log.mark_failed("req-1", "target_resolution_failed").unwrap();
+        log.mark_failed("req-1", "target_resolution_failed")
+            .unwrap();
         assert_eq!(log.records()[0].status, DispatchStatus::Failed);
     }
 

@@ -93,8 +93,7 @@ fn exec_subcommand_processes_json_command() {
 
 #[test]
 fn exec_acquire_authority_returns_event() {
-    let cmd_json =
-        r#"{"command":"AcquireAuthority","owner":"w1","lease_id":"l1","leased_until":"2026-03-19T02:00:00Z"}"#;
+    let cmd_json = r#"{"command":"AcquireAuthority","owner":"w1","lease_id":"l1","leased_until":"2026-03-19T02:00:00Z"}"#;
     let output = Command::new(env!("CARGO_BIN_EXE_omx-runtime"))
         .args(["exec", cmd_json])
         .output()
@@ -152,8 +151,7 @@ fn exec_with_state_dir_persists() {
     let dir = std::env::temp_dir().join("omx-runtime-test-exec-persist");
     let _ = std::fs::remove_dir_all(&dir);
 
-    let cmd_json =
-        r#"{"command":"AcquireAuthority","owner":"w1","lease_id":"l1","leased_until":"2026-03-19T02:00:00Z"}"#;
+    let cmd_json = r#"{"command":"AcquireAuthority","owner":"w1","lease_id":"l1","leased_until":"2026-03-19T02:00:00Z"}"#;
     let state_arg = format!("--state-dir={}", dir.display());
 
     let output = Command::new(env!("CARGO_BIN_EXE_omx-runtime"))
@@ -191,8 +189,7 @@ fn snapshot_from_state_dir_reads_persisted_state() {
         .output()
         .expect("init");
 
-    let cmd_json =
-        r#"{"command":"AcquireAuthority","owner":"w1","lease_id":"l1","leased_until":"2026-03-19T02:00:00Z"}"#;
+    let cmd_json = r#"{"command":"AcquireAuthority","owner":"w1","lease_id":"l1","leased_until":"2026-03-19T02:00:00Z"}"#;
     let state_arg = format!("--state-dir={}", dir.display());
     Command::new(env!("CARGO_BIN_EXE_omx-runtime"))
         .args(["exec", cmd_json, &state_arg])

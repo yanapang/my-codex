@@ -1,8 +1,8 @@
-mod types;
 mod tmux;
+mod types;
 
-pub use types::*;
 pub use tmux::TmuxAdapter;
+pub use types::*;
 
 pub fn canonical_contract_summary() -> String {
     format!(

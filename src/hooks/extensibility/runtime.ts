@@ -3,7 +3,9 @@ import { isHookPluginsEnabled } from './loader.js';
 import type { HookRuntimeDispatchInput, HookRuntimeDispatchResult } from './types.js';
 
 export async function dispatchHookEventRuntime(input: HookRuntimeDispatchInput): Promise<HookRuntimeDispatchResult> {
-  const enabled = isHookPluginsEnabled(process.env);
+  const enabled = input.event.source === 'native' || input.event.source === 'derived'
+    ? true
+    : isHookPluginsEnabled(process.env);
   if (!enabled) {
     return {
       dispatched: false,
@@ -22,6 +24,7 @@ export async function dispatchHookEventRuntime(input: HookRuntimeDispatchInput):
   const result = await dispatchHookEvent(input.event, {
     cwd: input.cwd,
     allowTeamWorkerSideEffects: input.allowTeamWorkerSideEffects,
+    enabled,
   });
 
   return {
