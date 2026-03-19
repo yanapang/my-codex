@@ -796,7 +796,7 @@ describe('notify-fallback watcher', () => {
     }
   });
 
-  it('stops after parent loss when HUD authority disables fallback Ralph steering', async () => {
+  it('keeps fallback Ralph steering alive after parent loss even when HUD authority is unavailable, then stops once Ralph is terminal', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-parent-ralph-active-'));
     const tempHome = await mkdtemp(join(tmpdir(), 'omx-fallback-parent-ralph-home-'));
     const fakeBinDir = join(wd, 'fake-bin');
@@ -847,17 +847,31 @@ describe('notify-fallback watcher', () => {
         {
           cwd: wd,
           stdio: 'ignore',
-          env: { ...process.env, HOME: tempHome, PATH: `${fakeBinDir}:${process.env.PATH || ''}` },
+          env: { ...process.env, HOME: tempHome, PATH: `${fakeBinDir}:${process.env.PATH || ''}`, OMX_HUD_AUTHORITY: '0' },
         }
       );
+
+      await waitFor(async () => {
+        const tmuxLog = await readFile(tmuxLogPath, 'utf-8').catch(() => '');
+        return /send-keys -t %42 -l Ralph loop active continue \[OMX_TMUX_INJECT\]/.test(tmuxLog);
+      }, 4000, 50);
+
+      assert.ok(isPidAlive(child.pid), 'expected watcher to stay alive while Ralph remains active');
+
+      await writeFile(ralphStatePath, JSON.stringify({
+        active: false,
+        current_phase: 'complete',
+        completed_at: new Date().toISOString(),
+        tmux_pane_id: '%42',
+      }, null, 2));
 
       await waitForExit(child, 4000);
       assert.equal(child.exitCode, 0);
 
-      const tmuxLog = await readFile(tmuxLogPath, 'utf-8').catch(() => '');
-      assert.doesNotMatch(tmuxLog, /Ralph loop active continue/);
-
       const logEntries = (await readFile(logPath, 'utf-8')).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+      assert.ok(logEntries.some((entry: { type?: string; reason?: string }) => (
+        entry.type === 'watcher_parent_guard' && entry.reason === 'parent_gone_deferred_for_active_ralph'
+      )));
       assert.ok(logEntries.some((entry: { type?: string; reason?: string }) => (
         entry.type === 'watcher_stop' && entry.reason === 'parent_gone'
       )));
@@ -870,4 +884,443 @@ describe('notify-fallback watcher', () => {
       await rm(tempHome, { recursive: true, force: true });
     }
   });
+
+  it('keeps team fallback dispatch alive after parent loss without HUD authority, then stops once team is terminal', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-parent-team-active-'));
+    const tempHome = await mkdtemp(join(tmpdir(), 'omx-fallback-parent-team-home-'));
+    const fakeBinDir = join(wd, 'fake-bin');
+    const tmuxLogPath = join(wd, 'tmux.log');
+    const captureFile = join(wd, 'capture.txt');
+    const stateDir = join(wd, '.omx', 'state');
+    const teamStatePath = join(stateDir, 'team-state.json');
+    const watcherScript = new URL('../../../scripts/notify-fallback-watcher.js', import.meta.url).pathname;
+    const notifyHook = new URL('../../../scripts/notify-hook.js', import.meta.url).pathname;
+    const logPath = join(wd, '.omx', 'logs', `notify-fallback-${new Date().toISOString().split('T')[0]}.jsonl`);
+    let child: ReturnType<typeof spawn> | undefined;
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+      await writeFile(captureFile, 'ready\n› ');
+
+      await initTeamState('dispatch-team', 'task', 'executor', 1, wd);
+      const queued = await enqueueDispatchRequest('dispatch-team', {
+        kind: 'inbox',
+        to_worker: 'worker-1',
+        worker_index: 1,
+        pane_id: '%42',
+        trigger_message: 'dispatch ping',
+      }, wd);
+      await writeFile(teamStatePath, JSON.stringify({
+        active: true,
+        team_name: 'dispatch-team',
+        current_phase: 'team-exec',
+      }, null, 2));
+
+      const shortLivedParent = spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 10)'], {
+        stdio: 'ignore',
+      });
+      assert.ok(shortLivedParent.pid, 'expected short-lived parent pid');
+      const parentPid = shortLivedParent.pid as number;
+      await once(shortLivedParent, 'exit');
+
+      child = spawn(
+        process.execPath,
+        [
+          watcherScript,
+          '--cwd',
+          wd,
+          '--notify-script',
+          notifyHook,
+          '--poll-ms',
+          '50',
+          '--dispatch-max-per-tick',
+          '1',
+          '--parent-pid',
+          String(parentPid),
+          '--max-lifetime-ms',
+          '5000',
+        ],
+        {
+          cwd: wd,
+          stdio: 'ignore',
+          env: {
+            ...process.env,
+            HOME: tempHome,
+            PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+            OMX_HUD_AUTHORITY: '0',
+            OMX_TEST_CAPTURE_FILE: captureFile,
+          },
+        }
+      );
+
+      await waitFor(async () => {
+        const request = await readDispatchRequest('dispatch-team', queued.request.request_id, wd);
+        return Boolean(request && request.status !== 'pending');
+      }, 4000, 50);
+
+      assert.ok(isPidAlive(child.pid), 'expected watcher to stay alive while team remains active');
+
+      await writeFile(teamStatePath, JSON.stringify({
+        active: false,
+        team_name: 'dispatch-team',
+        current_phase: 'complete',
+        completed_at: new Date().toISOString(),
+      }, null, 2));
+
+      await waitForExit(child, 4000);
+      assert.equal(child.exitCode, 0);
+
+      const logEntries = (await readFile(logPath, 'utf-8')).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+      assert.ok(logEntries.some((entry: { type?: string; reason?: string }) => (
+        entry.type === 'watcher_parent_guard' && entry.reason === 'parent_gone_deferred_for_active_team'
+      )));
+      assert.ok(logEntries.some((entry: { type?: string; processed?: number }) => (
+        entry.type === 'dispatch_drain_tick' && entry.processed === 1
+      )));
+      assert.ok(logEntries.some((entry: { type?: string; reason?: string }) => (
+        entry.type === 'watcher_stop' && entry.reason === 'parent_gone'
+      )));
+    } finally {
+      if (child && isPidAlive(child.pid)) {
+        child.kill('SIGTERM');
+        await waitForExit(child, 4000).catch(() => {});
+      }
+      await rm(wd, { recursive: true, force: true });
+      await rm(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps rollout fallback tracking alive briefly after parent loss so recent task_complete events still notify', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-parent-rollout-'));
+    const tempHome = await mkdtemp(join(tmpdir(), 'omx-fallback-parent-rollout-home-'));
+    const sid = randomUUID();
+    const sessionDir = todaySessionDir(tempHome);
+    const rolloutPath = join(sessionDir, `rollout-parent-rollout-${sid}.jsonl`);
+    const watcherScript = new URL('../../../scripts/notify-fallback-watcher.js', import.meta.url).pathname;
+    const notifyHook = new URL('../../../scripts/notify-hook.js', import.meta.url).pathname;
+    const watcherStatePath = join(wd, '.omx', 'state', 'notify-fallback-state.json');
+    const logPath = join(wd, '.omx', 'logs', `notify-fallback-${new Date().toISOString().split('T')[0]}.jsonl`);
+    const turnLog = join(wd, '.omx', 'logs', `turns-${new Date().toISOString().split('T')[0]}.jsonl`);
+    let child: ReturnType<typeof spawn> | undefined;
+
+    try {
+      await mkdir(join(wd, '.omx', 'logs'), { recursive: true });
+      await mkdir(join(wd, '.omx', 'state'), { recursive: true });
+      await mkdir(sessionDir, { recursive: true });
+
+      const threadId = `thread-${sid}`;
+      await writeFile(
+        rolloutPath,
+        `${JSON.stringify({
+          timestamp: new Date().toISOString(),
+          type: 'session_meta',
+          payload: { id: threadId, cwd: wd },
+        })}\n`
+      );
+
+      const shortLivedParent = spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 10)'], {
+        stdio: 'ignore',
+      });
+      assert.ok(shortLivedParent.pid, 'expected short-lived parent pid');
+      const parentPid = shortLivedParent.pid as number;
+      await once(shortLivedParent, 'exit');
+
+      child = spawn(
+        process.execPath,
+        [
+          watcherScript,
+          '--cwd',
+          wd,
+          '--notify-script',
+          notifyHook,
+          '--poll-ms',
+          '50',
+          '--parent-pid',
+          String(parentPid),
+          '--max-lifetime-ms',
+          '5000',
+        ],
+        {
+          cwd: wd,
+          stdio: 'ignore',
+          env: { ...process.env, HOME: tempHome, OMX_HUD_AUTHORITY: '0' },
+        }
+      );
+
+      await waitFor(async () => {
+        try {
+          const state = JSON.parse(await readFile(watcherStatePath, 'utf-8'));
+          return state.tracked_files === 1;
+        } catch {
+          return false;
+        }
+      }, 4000, 50);
+
+      const turnId = `turn-parent-rollout-${sid}`;
+      await appendLine(rolloutPath, {
+        timestamp: new Date(Date.now() + 500).toISOString(),
+        type: 'event_msg',
+        payload: {
+          type: 'task_complete',
+          turn_id: turnId,
+          last_agent_message: 'fresh message after parent exit',
+        },
+      });
+
+      await waitFor(async () => {
+        const turnLines = await readLines(turnLog);
+        return turnLines.length === 1 && new RegExp(turnId).test(turnLines[0] ?? '');
+      }, 4000, 50);
+
+      assert.ok(isPidAlive(child.pid), 'expected watcher to survive parent loss long enough to forward rollout events');
+
+      const logEntries = (await readFile(logPath, 'utf-8')).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+      assert.ok(logEntries.some((entry: { type?: string; reason?: string }) => (
+        entry.type === 'watcher_parent_guard' && entry.reason === 'parent_gone_deferred_for_rollout_tracking'
+      )));
+    } finally {
+      if (child && isPidAlive(child.pid)) {
+        child.kill('SIGTERM');
+        await waitForExit(child, 4000).catch(() => {});
+      }
+      await rm(wd, { recursive: true, force: true });
+      await rm(tempHome, { recursive: true, force: true });
+      await rm(rolloutPath, { force: true });
+    }
+  });
+
+  it('devils-advocate: keeps draining bounded team dispatch across multiple ticks after parent loss without HUD authority', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-parent-team-multitick-'));
+    const tempHome = await mkdtemp(join(tmpdir(), 'omx-fallback-parent-team-multitick-home-'));
+    const fakeBinDir = join(wd, 'fake-bin');
+    const tmuxLogPath = join(wd, 'tmux.log');
+    const captureFile = join(wd, 'capture.txt');
+    const stateDir = join(wd, '.omx', 'state');
+    const teamStatePath = join(stateDir, 'team-state.json');
+    const watcherScript = new URL('../../../scripts/notify-fallback-watcher.js', import.meta.url).pathname;
+    const notifyHook = new URL('../../../scripts/notify-hook.js', import.meta.url).pathname;
+    const logPath = join(wd, '.omx', 'logs', `notify-fallback-${new Date().toISOString().split('T')[0]}.jsonl`);
+    let child: ReturnType<typeof spawn> | undefined;
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+      await writeFile(captureFile, 'ready\n› ');
+
+      await initTeamState('dispatch-team', 'task', 'executor', 1, wd);
+      const first = await enqueueDispatchRequest('dispatch-team', {
+        kind: 'inbox',
+        to_worker: 'worker-1',
+        worker_index: 1,
+        pane_id: '%42',
+        trigger_message: 'dispatch ping 1',
+      }, wd);
+      const second = await enqueueDispatchRequest('dispatch-team', {
+        kind: 'inbox',
+        to_worker: 'worker-1',
+        worker_index: 1,
+        pane_id: '%42',
+        trigger_message: 'dispatch ping 2',
+      }, wd);
+      await writeFile(teamStatePath, JSON.stringify({
+        active: true,
+        team_name: 'dispatch-team',
+        current_phase: 'team-exec',
+      }, null, 2));
+
+      const shortLivedParent = spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 10)'], {
+        stdio: 'ignore',
+      });
+      assert.ok(shortLivedParent.pid, 'expected short-lived parent pid');
+      const parentPid = shortLivedParent.pid as number;
+      await once(shortLivedParent, 'exit');
+
+      child = spawn(
+        process.execPath,
+        [
+          watcherScript,
+          '--cwd',
+          wd,
+          '--notify-script',
+          notifyHook,
+          '--poll-ms',
+          '50',
+          '--dispatch-max-per-tick',
+          '1',
+          '--parent-pid',
+          String(parentPid),
+          '--max-lifetime-ms',
+          '5000',
+        ],
+        {
+          cwd: wd,
+          stdio: 'ignore',
+          env: {
+            ...process.env,
+            HOME: tempHome,
+            PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+            OMX_HUD_AUTHORITY: '0',
+            OMX_TEST_CAPTURE_FILE: captureFile,
+          },
+        }
+      );
+
+      await waitFor(async () => {
+        const firstReq = await readDispatchRequest('dispatch-team', first.request.request_id, wd);
+        const secondReq = await readDispatchRequest('dispatch-team', second.request.request_id, wd);
+        return Boolean(firstReq && firstReq.status !== 'pending' && secondReq && secondReq.status !== 'pending');
+      }, 5000, 50);
+
+      assert.ok(isPidAlive(child.pid), 'expected watcher to survive parent loss across multiple team dispatch ticks');
+      const tmuxLog = await readFile(tmuxLogPath, 'utf8');
+      assert.match(tmuxLog, /send-keys -t %42 -l dispatch ping 1/);
+      assert.match(tmuxLog, /send-keys -t %42 -l dispatch ping 2/);
+
+      const logEntries = (await readFile(logPath, 'utf-8')).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+      const processedTicks = logEntries.filter((entry: { type?: string; processed?: number }) => entry.type === 'dispatch_drain_tick' && entry.processed === 1);
+      assert.ok(processedTicks.length >= 2, `expected at least 2 processed dispatch ticks, got ${processedTicks.length}`);
+
+      await writeFile(teamStatePath, JSON.stringify({
+        active: false,
+        team_name: 'dispatch-team',
+        current_phase: 'complete',
+        completed_at: new Date().toISOString(),
+      }, null, 2));
+
+      await waitForExit(child, 4000);
+      assert.equal(child.exitCode, 0);
+    } finally {
+      if (child && isPidAlive(child.pid)) {
+        child.kill('SIGTERM');
+        await waitForExit(child, 4000).catch(() => {});
+      }
+      await rm(wd, { recursive: true, force: true });
+      await rm(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it('devils-advocate: keeps fallback auto-nudge injection alive after parent loss for rollout stall messages', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-parent-rollout-nudge-'));
+    const tempHome = await mkdtemp(join(tmpdir(), 'omx-fallback-parent-rollout-nudge-home-'));
+    const codexHome = join(wd, 'codex-home');
+    const fakeBinDir = join(wd, 'fake-bin');
+    const tmuxLogPath = join(wd, 'tmux.log');
+    const sid = randomUUID();
+    const now = new Date();
+    const sessionDir = join(
+      codexHome,
+      'sessions',
+      String(now.getUTCFullYear()),
+      String(now.getUTCMonth() + 1).padStart(2, '0'),
+      String(now.getUTCDate()).padStart(2, '0')
+    );
+    const rolloutPath = join(sessionDir, `rollout-parent-rollout-nudge-${sid}.jsonl`);
+    const watcherScript = new URL('../../../scripts/notify-fallback-watcher.js', import.meta.url).pathname;
+    const notifyHook = new URL('../../../scripts/notify-hook.js', import.meta.url).pathname;
+    const watcherStatePath = join(wd, '.omx', 'state', 'notify-fallback-state.json');
+    let child: ReturnType<typeof spawn> | undefined;
+
+    try {
+      await mkdir(join(wd, '.omx', 'logs'), { recursive: true });
+      await mkdir(join(wd, '.omx', 'state'), { recursive: true });
+      await mkdir(codexHome, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+      await mkdir(sessionDir, { recursive: true });
+      await writeFile(join(codexHome, '.omx-config.json'), JSON.stringify({
+        autoNudge: { enabled: true, delaySec: 0 },
+      }, null, 2));
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+
+      const threadId = `thread-${sid}`;
+      await writeFile(
+        rolloutPath,
+        `${JSON.stringify({
+          timestamp: new Date().toISOString(),
+          type: 'session_meta',
+          payload: { id: threadId, cwd: wd },
+        })}\n`
+      );
+
+      const shortLivedParent = spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 10)'], {
+        stdio: 'ignore',
+      });
+      assert.ok(shortLivedParent.pid, 'expected short-lived parent pid');
+      const parentPid = shortLivedParent.pid as number;
+      await once(shortLivedParent, 'exit');
+
+      child = spawn(
+        process.execPath,
+        [
+          watcherScript,
+          '--cwd',
+          wd,
+          '--notify-script',
+          notifyHook,
+          '--poll-ms',
+          '50',
+          '--parent-pid',
+          String(parentPid),
+          '--max-lifetime-ms',
+          '5000',
+        ],
+        {
+          cwd: wd,
+          stdio: 'ignore',
+          env: {
+            ...process.env,
+            HOME: tempHome,
+            CODEX_HOME: codexHome,
+            PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+            TMUX_PANE: '%99',
+            TMUX: '1',
+            OMX_TEAM_WORKER: '',
+            OMX_TEAM_LEADER_NUDGE_MS: '9999999',
+            OMX_TEAM_LEADER_STALE_MS: '9999999',
+            OMX_HUD_AUTHORITY: '0',
+          },
+        }
+      );
+
+      await waitFor(async () => {
+        try {
+          const state = JSON.parse(await readFile(watcherStatePath, 'utf-8'));
+          return state.tracked_files === 1;
+        } catch {
+          return false;
+        }
+      }, 4000, 50);
+
+      await appendLine(rolloutPath, {
+        timestamp: new Date(Date.now() + 500).toISOString(),
+        type: 'event_msg',
+        payload: {
+          type: 'task_complete',
+          turn_id: `turn-parent-rollout-nudge-${sid}`,
+          last_agent_message: 'If you want me to keep going, let me know.',
+        },
+      });
+
+      await waitFor(async () => {
+        const tmuxLog = await readFile(tmuxLogPath, 'utf-8').catch(() => '');
+        return /send-keys -t %99 -l yes, proceed \[OMX_TMUX_INJECT\]/.test(tmuxLog);
+      }, 4000, 50);
+
+      assert.ok(isPidAlive(child.pid), 'expected watcher to survive parent loss long enough to auto-nudge from rollout fallback');
+    } finally {
+      if (child && isPidAlive(child.pid)) {
+        child.kill('SIGTERM');
+        await waitForExit(child, 4000).catch(() => {});
+      }
+      await rm(wd, { recursive: true, force: true });
+      await rm(tempHome, { recursive: true, force: true });
+      await rm(rolloutPath, { force: true });
+    }
+  });
+
 });

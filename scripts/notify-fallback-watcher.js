@@ -214,6 +214,63 @@ async function resolveActiveRalphState() {
   return resolveActiveModeState('ralph');
 }
 
+async function resolveActiveTeamState() {
+  return resolveActiveModeState('team');
+}
+
+async function resolveRolloutTrackingEvidence(nowMs = Date.now()) {
+  for (const [path, meta] of fileState.entries()) {
+    const fileInfo = await stat(path).catch(() => null);
+    if (!fileInfo || (nowMs - fileInfo.mtimeMs) > fileWindowMs) continue;
+    return {
+      active: true,
+      reason: 'tracked_rollout',
+      path,
+      threadId: safeString(meta?.threadId),
+    };
+  }
+
+  const discovered = await discoverRolloutFiles();
+  if (discovered.length > 0) {
+    const path = discovered[0];
+    const line = await readFirstLine(path).catch(() => '');
+    return {
+      active: true,
+      reason: 'recent_rollout',
+      path,
+      threadId: shouldTrackSessionMeta(line) || '',
+    };
+  }
+
+  return {
+    active: false,
+    reason: 'none',
+    path: '',
+    threadId: '',
+  };
+}
+
+async function resolveAuthorityGate() {
+  if (authorityEnabled) {
+    return { enabled: true, reason: 'hud_authority_enabled' };
+  }
+  if (!parentIsGone()) {
+    return { enabled: false, reason: HUD_AUTHORITY_REASON };
+  }
+
+  const activeRalph = await resolveActiveRalphState();
+  if (activeRalph.active) {
+    return { enabled: true, reason: 'parent_gone_fail_open_active_ralph' };
+  }
+
+  const activeTeam = await resolveActiveTeamState();
+  if (activeTeam.active) {
+    return { enabled: true, reason: 'parent_gone_fail_open_active_team' };
+  }
+
+  return { enabled: false, reason: HUD_AUTHORITY_REASON };
+}
+
 async function emitRalphContinueSteer(paneId, message) {
   const markedText = `${message} ${DEFAULT_MARKER}`;
   await new Promise((resolve) => {
@@ -247,8 +304,9 @@ async function runRalphContinueSteerTick() {
     pane_current_command: '',
   };
 
-  if (!authorityEnabled) {
-    lastRalphContinueSteer.last_reason = HUD_AUTHORITY_REASON;
+  const authorityGate = await resolveAuthorityGate();
+  if (!authorityGate.enabled) {
+    lastRalphContinueSteer.last_reason = authorityGate.reason;
     return;
   }
 
@@ -433,12 +491,40 @@ async function enforceLifecycleGuards() {
   if (runOnce) return false;
   if (parentIsGone()) {
     const activeRalph = await resolveActiveRalphState();
-    if (activeRalph.active && authorityEnabled) {
-      const currentPhase = safeString(activeRalph.state?.current_phase);
-      const nextParentGuard = {
+    const activeTeam = await resolveActiveTeamState();
+
+    let deferredGuard = null;
+    if (activeRalph.active) {
+      deferredGuard = {
         reason: 'parent_gone_deferred_for_active_ralph',
         state_path: activeRalph.path,
-        current_phase: currentPhase,
+        current_phase: safeString(activeRalph.state?.current_phase),
+        thread_id: null,
+      };
+    } else if (activeTeam.active) {
+      deferredGuard = {
+        reason: 'parent_gone_deferred_for_active_team',
+        state_path: activeTeam.path,
+        current_phase: safeString(activeTeam.state?.current_phase),
+        thread_id: null,
+      };
+    } else if (!authorityOnly) {
+      const rolloutEvidence = await resolveRolloutTrackingEvidence();
+      if (rolloutEvidence.active) {
+        deferredGuard = {
+          reason: 'parent_gone_deferred_for_rollout_tracking',
+          state_path: rolloutEvidence.path,
+          current_phase: rolloutEvidence.reason,
+          thread_id: rolloutEvidence.threadId || null,
+        };
+      }
+    }
+
+    if (deferredGuard) {
+      const nextParentGuard = {
+        reason: deferredGuard.reason,
+        state_path: deferredGuard.state_path,
+        current_phase: deferredGuard.current_phase,
       };
       if (
         lastParentGuard.reason !== nextParentGuard.reason
@@ -447,14 +533,16 @@ async function enforceLifecycleGuards() {
       ) {
         await eventLog({
           type: 'watcher_parent_guard',
-          reason: nextParentGuard.reason,
-          state_path: nextParentGuard.state_path,
-          current_phase: currentPhase || null,
+          reason: deferredGuard.reason,
+          state_path: deferredGuard.state_path,
+          current_phase: deferredGuard.current_phase || null,
+          thread_id: deferredGuard.thread_id,
         });
         lastParentGuard = nextParentGuard;
       }
       return false;
     }
+
     lastParentGuard = { reason: '', state_path: '', current_phase: '' };
     await requestShutdown('parent_gone');
     return true;
@@ -467,10 +555,10 @@ async function enforceLifecycleGuards() {
 }
 
 function sessionDirs() {
+  const codexHome = safeString(process.env.CODEX_HOME).trim() || join(homedir(), '.codex');
   const now = new Date();
   const today = join(
-    homedir(),
-    '.codex',
+    codexHome,
     'sessions',
     String(now.getUTCFullYear()),
     String(now.getUTCMonth() + 1).padStart(2, '0'),
@@ -478,8 +566,7 @@ function sessionDirs() {
   );
   const yesterdayDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
   const yesterday = join(
-    homedir(),
-    '.codex',
+    codexHome,
     'sessions',
     String(yesterdayDate.getUTCFullYear()),
     String(yesterdayDate.getUTCMonth() + 1).padStart(2, '0'),
@@ -624,7 +711,8 @@ async function runLeaderNudgeTick() {
   const leaderOnly = safeString(process.env.OMX_TEAM_WORKER || '').trim() === '';
   const staleThresholdMs = resolveLeaderStalenessThresholdMs();
 
-  if (!authorityEnabled) {
+  const authorityGate = await resolveAuthorityGate();
+  if (!authorityGate.enabled) {
     leaderNudgeRuns += 1;
     lastLeaderNudge = {
       enabled: false,
@@ -632,13 +720,13 @@ async function runLeaderNudgeTick() {
       stale_threshold_ms: staleThresholdMs,
       precomputed_leader_stale: null,
       last_tick_at: startedIso,
-      last_error: HUD_AUTHORITY_REASON,
+      last_error: authorityGate.reason,
     };
     await eventLog({
       type: 'leader_nudge_tick',
       leader_only: leaderOnly,
       run_count: leaderNudgeRuns,
-      reason: HUD_AUTHORITY_REASON,
+      reason: authorityGate.reason,
       stale_threshold_ms: staleThresholdMs,
     });
     return;
@@ -707,12 +795,13 @@ async function runLeaderNudgeTick() {
 
 async function runDispatchDrainTick() {
   const startedIso = new Date().toISOString();
-  if (!authorityEnabled) {
+  const authorityGate = await resolveAuthorityGate();
+  if (!authorityGate.enabled) {
     dispatchDrainRuns += 1;
     lastDispatchDrain = {
       leader_only: safeString(process.env.OMX_TEAM_WORKER || '').trim() === '',
       last_tick_at: startedIso,
-      last_result: { processed: 0, reason: HUD_AUTHORITY_REASON },
+      last_result: { processed: 0, reason: authorityGate.reason },
       last_error: null,
     };
     await eventLog({
@@ -721,7 +810,7 @@ async function runDispatchDrainTick() {
       dispatch_max_per_tick: dispatchTickMax,
       run_count: dispatchDrainRuns,
       processed: 0,
-      reason: HUD_AUTHORITY_REASON,
+      reason: authorityGate.reason,
     });
     return;
   }
