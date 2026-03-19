@@ -959,7 +959,7 @@ mod tests {
             ALLOWED_DIRECT_COMMANDS
                 .iter()
                 .copied()
-                .filter(|command| *command != "grep"),
+                .filter(|command| *command != "grep" && *command != "rg"),
         );
         let (_root, host_bin) = create_host_bin_with_commands(&commands);
 
