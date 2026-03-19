@@ -857,7 +857,7 @@ export function generateLeaderMailboxTriggerMessage(
     "leader-fixed.json",
   );
   if (teamStateRoot !== ".omx/state") {
-    return `Read ${mailboxPath}; new msg from ${fromWorker}. Reply next step.`;
+    return `Read ${mailboxPath}; new msg from ${fromWorker}. Review it; decide next step.`;
   }
-  return `Read ${mailboxPath}; ${fromWorker} sent a new message. Reply with the next concrete step.`;
+  return `Read ${mailboxPath}; ${fromWorker} sent a new message. Review it and decide the next concrete step.`;
 }

@@ -509,7 +509,7 @@ describe("worker bootstrap", () => {
     assert.ok(message.length < 200);
   });
 
-  it("generateLeaderMailboxTriggerMessage tells the leader to read the mailbox and reply", () => {
+  it("generateLeaderMailboxTriggerMessage tells the leader to read the mailbox and decide the next step", () => {
     const message = generateLeaderMailboxTriggerMessage(
       "team-mail",
       "worker-2",
@@ -519,7 +519,8 @@ describe("worker bootstrap", () => {
       /Read .*\.omx\/state\/team\/team-mail\/mailbox\/leader-fixed\.json/,
     );
     assert.match(message, /worker-2 sent a new message/);
-    assert.match(message, /Reply with the next concrete step/);
+    assert.match(message, /Review it and decide the next concrete step/);
+    assert.doesNotMatch(message, /\bReply\b/i);
   });
 
   it("generateLeaderMailboxTriggerMessage uses provided state-root reference for worktree leaders", () => {
@@ -533,7 +534,8 @@ describe("worker bootstrap", () => {
       /read .*\$OMX_TEAM_STATE_ROOT\/team\/team-mail\/mailbox\/leader-fixed\.json/i,
     );
     assert.match(message, /new msg from worker-2/i);
-    assert.match(message, /reply next step/i);
+    assert.match(message, /review it; decide next step/i);
+    assert.doesNotMatch(message, /\breply\b/i);
     assert.ok(message.length < 200);
   });
 

@@ -257,7 +257,7 @@ describe('notify-hook team dispatch consumer', () => {
         kind: 'mailbox',
         to_worker: 'leader-fixed',
         message_id: msg.message_id,
-        trigger_message: 'Read .omx/state/team/alpha/mailbox/leader-fixed.json; worker-1 sent a new message. Reply with the next concrete step.',
+        trigger_message: 'Read .omx/state/team/alpha/mailbox/leader-fixed.json; worker-1 sent a new message. Review it and decide the next concrete step.',
       }, cwd);
 
       const modulePath = new URL('../../../dist/scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
