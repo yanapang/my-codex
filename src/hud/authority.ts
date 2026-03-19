@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getPackageRoot } from '../utils/package.js';
 
@@ -55,7 +56,16 @@ export async function runHudAuthorityTick(
   const timeoutMs = Math.max(100, options.timeoutMs ?? 5_000);
   const watcherScript = join(packageRoot, 'scripts', 'notify-fallback-watcher.js');
   const notifyScript = join(packageRoot, 'scripts', 'notify-hook.js');
+  const authorityOwnerPath = join(cwd, '.omx', 'state', 'notify-fallback-authority-owner.json');
   const runProcess = deps.runProcess ?? defaultRunProcess;
+
+  await mkdir(join(cwd, '.omx', 'state'), { recursive: true }).catch(() => {});
+  await writeFile(authorityOwnerPath, JSON.stringify({
+    owner: 'hud',
+    pid: process.pid,
+    cwd,
+    heartbeat_at: new Date().toISOString(),
+  }, null, 2)).catch(() => {});
 
   await runProcess(
     nodePath,

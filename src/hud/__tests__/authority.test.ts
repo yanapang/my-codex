@@ -1,8 +1,29 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { runHudAuthorityTick } from '../authority.js';
 
 describe('runHudAuthorityTick', () => {
+  it('writes a live HUD authority owner lease before ticking', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-hud-authority-'));
+    try {
+      await runHudAuthorityTick(
+        { cwd, nodePath: '/node', packageRoot: '/pkg' },
+        { runProcess: async () => {} },
+      );
+
+      const lease = JSON.parse(await readFile(join(cwd, '.omx', 'state', 'notify-fallback-authority-owner.json'), 'utf-8'));
+      assert.equal(lease.owner, 'hud');
+      assert.equal(lease.pid, process.pid);
+      assert.equal(lease.cwd, cwd);
+      assert.ok(typeof lease.heartbeat_at === 'string' && lease.heartbeat_at.length > 0);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('invokes fallback watcher in authority-only mode with HUD env', async () => {
     const calls: Array<{
       nodePath: string;

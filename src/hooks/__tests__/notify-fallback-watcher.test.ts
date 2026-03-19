@@ -796,6 +796,125 @@ describe('notify-fallback watcher', () => {
     }
   });
 
+  it('lets long-lived fallback watcher become authority owner when no live HUD owner exists', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-authority-owner-'));
+    const fakeBinDir = join(wd, 'fake-bin');
+    const tmuxLogPath = join(wd, 'tmux.log');
+    const captureFile = join(wd, 'capture.txt');
+    const authorityOwnerPath = join(wd, '.omx', 'state', 'notify-fallback-authority-owner.json');
+    try {
+      await mkdir(fakeBinDir, { recursive: true });
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+      await writeFile(captureFile, 'ready\n› ');
+
+      await initTeamState('dispatch-team', 'task', 'executor', 1, wd);
+      const queued = await enqueueDispatchRequest('dispatch-team', {
+        kind: 'inbox',
+        to_worker: 'worker-1',
+        worker_index: 1,
+        pane_id: '%42',
+        trigger_message: 'dispatch ping',
+      }, wd);
+
+      const watcherScript = new URL('../../../scripts/notify-fallback-watcher.js', import.meta.url).pathname;
+      const notifyHook = new URL('../../../scripts/notify-hook.js', import.meta.url).pathname;
+      const child = spawn(
+        process.execPath,
+        [watcherScript, '--cwd', wd, '--notify-script', notifyHook, '--poll-ms', '50', '--dispatch-max-per-tick', '1', '--max-lifetime-ms', '5000'],
+        {
+          cwd: wd,
+          stdio: 'ignore',
+          env: {
+            ...process.env,
+            PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+            OMX_TEST_CAPTURE_FILE: captureFile,
+            OMX_HUD_AUTHORITY_OWNER_STALE_MS: '1000',
+          },
+        },
+      );
+
+      try {
+        await waitFor(async () => {
+          const request = await readDispatchRequest('dispatch-team', queued.request.request_id, wd);
+          return Boolean(request && request.status !== 'pending');
+        }, 5000, 50);
+
+        const tmuxLog = await readFile(tmuxLogPath, 'utf8');
+        assert.match(tmuxLog, /send-keys -t %42 -l dispatch ping/);
+
+        const lease = JSON.parse(await readFile(authorityOwnerPath, 'utf-8'));
+        assert.equal(lease.owner, 'watcher');
+        assert.equal(lease.pid, child.pid);
+      } finally {
+        if (isPidAlive(child.pid)) {
+          child.kill('SIGTERM');
+          await waitForExit(child, 4000).catch(() => {});
+        }
+      }
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('yields long-lived fallback watcher authority when a live HUD owner exists', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-authority-yield-'));
+    const fakeBinDir = join(wd, 'fake-bin');
+    const tmuxLogPath = join(wd, 'tmux.log');
+    const captureFile = join(wd, 'capture.txt');
+    const authorityOwnerPath = join(wd, '.omx', 'state', 'notify-fallback-authority-owner.json');
+    try {
+      await mkdir(join(wd, '.omx', 'state'), { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+      await writeFile(captureFile, 'ready\n› ');
+      await writeFile(authorityOwnerPath, JSON.stringify({
+        owner: 'hud',
+        pid: process.pid,
+        heartbeat_at: new Date().toISOString(),
+      }, null, 2));
+
+      await initTeamState('dispatch-team', 'task', 'executor', 1, wd);
+      const queued = await enqueueDispatchRequest('dispatch-team', {
+        kind: 'inbox',
+        to_worker: 'worker-1',
+        worker_index: 1,
+        pane_id: '%42',
+        trigger_message: 'dispatch ping',
+      }, wd);
+
+      const watcherScript = new URL('../../../scripts/notify-fallback-watcher.js', import.meta.url).pathname;
+      const notifyHook = new URL('../../../scripts/notify-hook.js', import.meta.url).pathname;
+      const result = spawnSync(
+        process.execPath,
+        [watcherScript, '--cwd', wd, '--notify-script', notifyHook, '--poll-ms', '50', '--dispatch-max-per-tick', '1', '--max-lifetime-ms', '500'],
+        {
+          cwd: wd,
+          encoding: 'utf-8',
+          env: {
+            ...process.env,
+            PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+            OMX_TEST_CAPTURE_FILE: captureFile,
+            OMX_HUD_AUTHORITY_OWNER_STALE_MS: '5000',
+          },
+        },
+      );
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+
+      const request = await readDispatchRequest('dispatch-team', queued.request.request_id, wd);
+      assert.equal(request?.status, 'pending');
+      const tmuxLog = await readFile(tmuxLogPath, 'utf8').catch(() => '');
+      assert.doesNotMatch(tmuxLog, /send-keys -t %42 -l dispatch ping/);
+
+      const lease = JSON.parse(await readFile(authorityOwnerPath, 'utf-8'));
+      assert.equal(lease.owner, 'hud');
+      assert.equal(lease.pid, process.pid);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it('keeps fallback Ralph steering alive after parent loss even when HUD authority is unavailable, then stops once Ralph is terminal', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-parent-ralph-active-'));
     const tempHome = await mkdtemp(join(tmpdir(), 'omx-fallback-parent-ralph-home-'));
