@@ -7,5 +7,21 @@ name = "omx-explore-harness"
 version = "0.10.5"
 
 [[package]]
+name = "omx-mux"
+version = "0.10.5"
+
+[[package]]
+name = "omx-runtime"
+version = "0.10.5"
+dependencies = [
+ "omx-mux",
+ "omx-runtime-core",
+]
+
+[[package]]
+name = "omx-runtime-core"
+version = "0.10.5"
+
+[[package]]
 name = "omx-sparkshell"
 version = "0.10.5"
