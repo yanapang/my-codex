@@ -54,8 +54,8 @@ export async function runHudAuthorityTick(
   const packageRoot = options.packageRoot ?? getPackageRoot();
   const pollMs = Math.max(1, options.pollMs ?? 75);
   const timeoutMs = Math.max(100, options.timeoutMs ?? 5_000);
-  const watcherScript = join(packageRoot, 'scripts', 'notify-fallback-watcher.js');
-  const notifyScript = join(packageRoot, 'scripts', 'notify-hook.js');
+  const watcherScript = join(packageRoot, 'dist', 'scripts', 'notify-fallback-watcher.js');
+  const notifyScript = join(packageRoot, 'dist', 'scripts', 'notify-hook.js');
   const authorityOwnerPath = join(cwd, '.omx', 'state', 'notify-fallback-authority-owner.json');
   const runProcess = deps.runProcess ?? defaultRunProcess;
 
