@@ -23,6 +23,149 @@ pub const RUNTIME_EVENT_NAMES: &[&str] = &[
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkerCli {
+    Codex,
+    Claude,
+    Other(String),
+}
+
+impl WorkerCli {
+    pub fn from_label(label: impl AsRef<str>) -> Self {
+        match label.as_ref().trim().to_lowercase().as_str() {
+            "claude" => Self::Claude,
+            "codex" => Self::Codex,
+            other => Self::Other(other.to_string()),
+        }
+    }
+}
+
+pub fn submit_presses_for_worker_cli(worker_cli: &WorkerCli) -> u8 {
+    match worker_cli {
+        WorkerCli::Claude => 1,
+        WorkerCli::Codex | WorkerCli::Other(_) => 2,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DispatchTransportKind {
+    Tmux,
+}
+
+impl fmt::Display for DispatchTransportKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Tmux => write!(f, "tmux"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DispatchOutcomeReason {
+    DeliveredConfirmed,
+    DeliveredConfirmedActiveTask,
+    DeliveredUnconfirmed,
+    DeferredLeaderPaneMissing,
+    DeferredShellNotInjectable,
+    FailedMissingTarget,
+    FailedTargetResolution(String),
+    FailedPreflight(String),
+    FailedSend(String),
+}
+
+impl fmt::Display for DispatchOutcomeReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DeliveredConfirmed => write!(f, "tmux_send_keys_confirmed"),
+            Self::DeliveredConfirmedActiveTask => {
+                write!(f, "tmux_send_keys_confirmed_active_task")
+            }
+            Self::DeliveredUnconfirmed => write!(f, "tmux_send_keys_unconfirmed"),
+            Self::DeferredLeaderPaneMissing => write!(f, "leader_pane_missing_deferred"),
+            Self::DeferredShellNotInjectable => write!(f, "deferred_shell"),
+            Self::FailedMissingTarget => write!(f, "missing_tmux_target"),
+            Self::FailedTargetResolution(reason) => {
+                write!(f, "target_resolution_failed:{reason}")
+            }
+            Self::FailedPreflight(reason) => write!(f, "preflight_failed:{reason}"),
+            Self::FailedSend(reason) => write!(f, "send_failed:{reason}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QueueTransition {
+    KeepPending { reason: DispatchOutcomeReason },
+    MarkNotified { reason: DispatchOutcomeReason },
+    MarkFailed { reason: DispatchOutcomeReason },
+}
+
+impl QueueTransition {
+    pub fn status(&self) -> &'static str {
+        match self {
+            Self::KeepPending { .. } => "pending",
+            Self::MarkNotified { .. } => "notified",
+            Self::MarkFailed { .. } => "failed",
+        }
+    }
+
+    pub fn reason(&self) -> &DispatchOutcomeReason {
+        match self {
+            Self::KeepPending { reason }
+            | Self::MarkNotified { reason }
+            | Self::MarkFailed { reason } => reason,
+        }
+    }
+}
+
+pub fn classify_dispatch_outcome(
+    target_present: bool,
+    target_resolved: bool,
+    preflight_ok: bool,
+    send_ok: bool,
+    confirmed: bool,
+    active_task: bool,
+    retry_remaining: bool,
+) -> QueueTransition {
+    if !target_present {
+        return QueueTransition::MarkFailed {
+            reason: DispatchOutcomeReason::FailedMissingTarget,
+        };
+    }
+    if !target_resolved {
+        return QueueTransition::MarkFailed {
+            reason: DispatchOutcomeReason::FailedTargetResolution("unresolved_target".to_string()),
+        };
+    }
+    if !preflight_ok {
+        return QueueTransition::MarkFailed {
+            reason: DispatchOutcomeReason::FailedPreflight("pane_not_ready".to_string()),
+        };
+    }
+    if !send_ok {
+        return QueueTransition::MarkFailed {
+            reason: DispatchOutcomeReason::FailedSend("send_failed".to_string()),
+        };
+    }
+    if confirmed {
+        return QueueTransition::MarkNotified {
+            reason: if active_task {
+                DispatchOutcomeReason::DeliveredConfirmedActiveTask
+            } else {
+                DispatchOutcomeReason::DeliveredConfirmed
+            },
+        };
+    }
+    if retry_remaining {
+        return QueueTransition::KeepPending {
+            reason: DispatchOutcomeReason::DeliveredUnconfirmed,
+        };
+    }
+    QueueTransition::MarkFailed {
+        reason: DispatchOutcomeReason::DeliveredUnconfirmed,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeCommand {
     AcquireAuthority {
         owner: String,
@@ -349,10 +492,12 @@ impl fmt::Display for ReadinessSnapshot {
 
 pub fn runtime_contract_summary() -> String {
     format!(
-        "runtime-schema={version}\ncommands={commands}\nevents={events}\nsnapshot=authority, backlog, replay, readiness",
+        "runtime-schema={version}\ncommands={commands}\nevents={events}\ntransport={transport}\nqueue-transition={queue_transition}\nsnapshot=authority, backlog, replay, readiness",
         version = RUNTIME_SCHEMA_VERSION,
         commands = RUNTIME_COMMAND_NAMES.join(", "),
         events = RUNTIME_EVENT_NAMES.join(", "),
+        transport = DispatchTransportKind::Tmux,
+        queue_transition = classify_dispatch_outcome(true, true, true, true, true, false, false).status(),
     )
 }
 
@@ -397,5 +542,52 @@ mod tests {
         authority.clear_stale();
         assert!(!authority.stale);
         assert_eq!(authority.stale_reason, None);
+    }
+
+    #[test]
+    fn worker_cli_submit_policy_matches_current_dispatch_behavior() {
+        assert_eq!(submit_presses_for_worker_cli(&WorkerCli::Claude), 1);
+        assert_eq!(submit_presses_for_worker_cli(&WorkerCli::Codex), 2);
+        assert_eq!(
+            submit_presses_for_worker_cli(&WorkerCli::from_label("other")),
+            2
+        );
+    }
+
+    #[test]
+    fn dispatch_outcome_classification_distinguishes_confirmation_and_retry_paths() {
+        let confirmed = classify_dispatch_outcome(true, true, true, true, true, false, false);
+        assert!(matches!(
+            confirmed,
+            QueueTransition::MarkNotified {
+                reason: DispatchOutcomeReason::DeliveredConfirmed
+            }
+        ));
+
+        let active_task = classify_dispatch_outcome(true, true, true, true, true, true, false);
+        assert!(matches!(
+            active_task,
+            QueueTransition::MarkNotified {
+                reason: DispatchOutcomeReason::DeliveredConfirmedActiveTask
+            }
+        ));
+
+        let unconfirmed_retry =
+            classify_dispatch_outcome(true, true, true, true, false, false, true);
+        assert!(matches!(
+            unconfirmed_retry,
+            QueueTransition::KeepPending {
+                reason: DispatchOutcomeReason::DeliveredUnconfirmed
+            }
+        ));
+
+        let unconfirmed_failed =
+            classify_dispatch_outcome(true, true, true, true, false, false, false);
+        assert!(matches!(
+            unconfirmed_failed,
+            QueueTransition::MarkFailed {
+                reason: DispatchOutcomeReason::DeliveredUnconfirmed
+            }
+        ));
     }
 }

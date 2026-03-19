@@ -32,13 +32,209 @@ impl fmt::Display for MuxTarget {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubmitPolicy {
+    None,
+    Enter { presses: u8, delay_ms: u64 },
+}
+
+impl SubmitPolicy {
+    pub fn enter(presses: u8, delay_ms: u64) -> Self {
+        Self::Enter {
+            presses: presses.max(1),
+            delay_ms,
+        }
+    }
+
+    pub fn presses(&self) -> u8 {
+        match self {
+            Self::None => 0,
+            Self::Enter { presses, .. } => *presses,
+        }
+    }
+}
+
+impl fmt::Display for SubmitPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => write!(f, "none"),
+            Self::Enter { presses, delay_ms } => {
+                write!(f, "enter(presses={presses}, delay_ms={delay_ms})")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputEnvelope {
+    pub literal_text: String,
+    pub submit: SubmitPolicy,
+    pub replace_newlines_with_spaces: bool,
+}
+
+impl InputEnvelope {
+    pub fn new(literal_text: impl Into<String>, submit: SubmitPolicy) -> Self {
+        Self {
+            literal_text: literal_text.into(),
+            submit,
+            replace_newlines_with_spaces: true,
+        }
+    }
+
+    pub fn normalized_text(&self) -> String {
+        if self.replace_newlines_with_spaces {
+            self.literal_text
+                .chars()
+                .map(|ch| if ch == '\r' || ch == '\n' { ' ' } else { ch })
+                .collect()
+        } else {
+            self.literal_text.clone()
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InjectionPreflight {
+    pub skip_if_scrolling: bool,
+    pub require_running_agent: bool,
+    pub require_ready: bool,
+    pub require_idle: bool,
+    pub capture_lines: usize,
+}
+
+impl Default for InjectionPreflight {
+    fn default() -> Self {
+        Self {
+            skip_if_scrolling: true,
+            require_running_agent: true,
+            require_ready: true,
+            require_idle: true,
+            capture_lines: 80,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PaneReadinessReason {
+    Ok,
+    MissingTarget,
+    ScrollActive,
+    PaneRunningShell,
+    PaneHasActiveTask,
+    PaneNotReady,
+    TargetResolutionFailed(String),
+}
+
+impl fmt::Display for PaneReadinessReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ok => write!(f, "ok"),
+            Self::MissingTarget => write!(f, "missing_target"),
+            Self::ScrollActive => write!(f, "scroll_active"),
+            Self::PaneRunningShell => write!(f, "pane_running_shell"),
+            Self::PaneHasActiveTask => write!(f, "pane_has_active_task"),
+            Self::PaneNotReady => write!(f, "pane_not_ready"),
+            Self::TargetResolutionFailed(reason) => {
+                write!(f, "target_resolution_failed({reason})")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneReadiness {
+    pub reason: PaneReadinessReason,
+    pub pane_target: Option<String>,
+    pub pane_current_command: Option<String>,
+    pub pane_capture: Option<String>,
+}
+
+impl PaneReadiness {
+    pub fn ok(pane_target: impl Into<String>) -> Self {
+        Self {
+            reason: PaneReadinessReason::Ok,
+            pane_target: Some(pane_target.into()),
+            pane_current_command: None,
+            pane_capture: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeliveryConfirmation {
+    Confirmed,
+    ConfirmedActiveTask,
+    Unconfirmed,
+}
+
+impl fmt::Display for DeliveryConfirmation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Confirmed => write!(f, "Confirmed"),
+            Self::ConfirmedActiveTask => write!(f, "ConfirmedActiveTask"),
+            Self::Unconfirmed => write!(f, "Unconfirmed"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfirmationPolicy {
+    pub narrow_capture_lines: usize,
+    pub wide_capture_lines: usize,
+    pub verify_delay_ms: u64,
+    pub verify_rounds: u8,
+    pub allow_active_task_confirmation: bool,
+    pub require_ready_for_worker_targets: bool,
+    pub non_empty_tail_lines: usize,
+    pub retry_submit_without_retyping: bool,
+}
+
+impl Default for ConfirmationPolicy {
+    fn default() -> Self {
+        Self {
+            narrow_capture_lines: 8,
+            wide_capture_lines: 80,
+            verify_delay_ms: 250,
+            verify_rounds: 3,
+            allow_active_task_confirmation: true,
+            require_ready_for_worker_targets: true,
+            non_empty_tail_lines: 24,
+            retry_submit_without_retyping: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeliveryAttempt {
+    pub pane_target: String,
+    pub input: InputEnvelope,
+    pub typed_prompt: bool,
+    pub confirmation: DeliveryConfirmation,
+}
+
+impl DeliveryAttempt {
+    pub fn new(
+        pane_target: impl Into<String>,
+        input: InputEnvelope,
+        typed_prompt: bool,
+        confirmation: DeliveryConfirmation,
+    ) -> Self {
+        Self {
+            pane_target: pane_target.into(),
+            input,
+            typed_prompt,
+            confirmation,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MuxOperation {
     ResolveTarget {
         target: MuxTarget,
     },
     SendInput {
         target: MuxTarget,
-        literal_input: String,
+        envelope: InputEnvelope,
     },
     CaptureTail {
         target: MuxTarget,
@@ -129,9 +325,12 @@ fn describe_operation(operation: &MuxOperation) -> &'static str {
 
 pub fn canonical_contract_summary() -> String {
     format!(
-        "mux-operations={operations}\nmux-target-kinds={target_kinds}\nadapter=tmux-first placeholder",
+        "mux-operations={operations}\nmux-target-kinds={target_kinds}\nsubmit-policy={submit_policy}\nreadiness={readiness}\nconfirmation={confirmation}\nadapter=tmux-first placeholder",
         operations = MUX_OPERATION_NAMES.join(", "),
         target_kinds = MUX_TARGET_KINDS.join(", "),
+        submit_policy = SubmitPolicy::enter(2, 100),
+        readiness = PaneReadinessReason::Ok,
+        confirmation = DeliveryConfirmation::Confirmed,
     )
 }
 
@@ -167,5 +366,29 @@ mod tests {
             })
             .expect_err("expected placeholder adapter to reject execution");
         assert!(matches!(error, MuxError::Unsupported(message) if message.contains("detach")));
+    }
+
+    #[test]
+    fn input_envelope_normalizes_literal_text_for_typed_send() {
+        let envelope = InputEnvelope::new("hello\nbridge", SubmitPolicy::enter(2, 100));
+        assert_eq!(envelope.normalized_text(), "hello bridge");
+        assert_eq!(envelope.submit.presses(), 2);
+        assert_eq!(
+            format!("{}", envelope.submit),
+            "enter(presses=2, delay_ms=100)"
+        );
+    }
+
+    #[test]
+    fn confirmation_policy_defaults_match_notify_hook_expectations() {
+        let policy = ConfirmationPolicy::default();
+        assert_eq!(policy.narrow_capture_lines, 8);
+        assert_eq!(policy.wide_capture_lines, 80);
+        assert_eq!(policy.verify_delay_ms, 250);
+        assert_eq!(policy.verify_rounds, 3);
+        assert!(policy.allow_active_task_confirmation);
+        assert!(policy.require_ready_for_worker_targets);
+        assert_eq!(policy.non_empty_tail_lines, 24);
+        assert!(policy.retry_submit_without_retyping);
     }
 }
