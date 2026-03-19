@@ -62,32 +62,6 @@ function notifyExceptionReason(error: unknown): string {
   return `notify_exception:${message}`;
 }
 
-async function notifyDispatchRequest(params: {
-  notify: TeamNotifier;
-  target: TeamNotifierTarget;
-  message: string;
-  request: TeamDispatchRequest;
-  transportPreference?: TeamDispatchRequestInput['transport_preference'];
-  messageId?: string;
-  outcome?: Omit<Partial<DispatchOutcome>, 'ok' | 'transport' | 'reason' | 'request_id'>;
-}): Promise<DispatchOutcome> {
-  const notifyOutcome = await Promise.resolve(params.notify(
-    params.target,
-    params.message,
-    { request: params.request, message_id: params.messageId },
-  )).catch((error) => ({
-    ok: false,
-    transport: fallbackTransportForPreference(params.transportPreference),
-    reason: notifyExceptionReason(error),
-  } as DispatchOutcome));
-
-  return {
-    ...notifyOutcome,
-    request_id: params.request.request_id,
-    ...params.outcome,
-  };
-}
-
 async function markImmediateDispatchFailure(params: {
   teamName: string;
   request: TeamDispatchRequest;
@@ -139,51 +113,6 @@ async function markLeaderPaneMissingDeferred(params: {
   ).catch(() => {});
 }
 
-async function finalizeDispatchNotification(params: {
-  teamName: string;
-  request: TeamDispatchRequest;
-  outcome: DispatchOutcome;
-  cwd: string;
-  messageId?: string;
-  toWorker?: string;
-  deferLeaderPaneMissing?: boolean;
-}): Promise<void> {
-  const { teamName, request, outcome, cwd, messageId, toWorker, deferLeaderPaneMissing } = params;
-  if (deferLeaderPaneMissing && isLeaderPaneMissingMailboxPersistedOutcome(request, outcome)) {
-    await markLeaderPaneMissingDeferred({
-      teamName,
-      request,
-      cwd,
-      messageId,
-    });
-    return;
-  }
-
-  if (isConfirmedNotification(outcome)) {
-    if (messageId && toWorker) {
-      await markMessageNotified(teamName, toWorker, messageId, cwd);
-    }
-    await markDispatchRequestNotified(
-      teamName,
-      request.request_id,
-      {
-        ...(messageId ? { message_id: messageId } : {}),
-        last_reason: outcome.reason,
-      },
-      cwd,
-    );
-    return;
-  }
-
-  await markImmediateDispatchFailure({
-    teamName,
-    request,
-    reason: outcome.reason,
-    messageId,
-    cwd,
-  });
-}
-
 interface QueueInboxParams {
   teamName: string;
   workerName: string;
@@ -224,20 +153,32 @@ export async function queueInboxInstruction(params: QueueInboxParams): Promise<D
     };
   }
 
-  const outcome = await notifyDispatchRequest({
-    notify: params.notify,
-    target: { workerName: params.workerName, workerIndex: params.workerIndex, paneId: params.paneId },
-    message: params.triggerMessage,
-    request: queued.request,
-    transportPreference: params.transportPreference,
-  });
+  const notifyOutcome = await Promise.resolve(params.notify(
+    { workerName: params.workerName, workerIndex: params.workerIndex, paneId: params.paneId },
+    params.triggerMessage,
+    { request: queued.request },
+  )).catch((error) => ({
+    ok: false,
+    transport: fallbackTransportForPreference(params.transportPreference),
+    reason: notifyExceptionReason(error),
+  } as DispatchOutcome));
+  const outcome: DispatchOutcome = { ...notifyOutcome, request_id: queued.request.request_id };
 
-  await finalizeDispatchNotification({
-    teamName: params.teamName,
-    request: queued.request,
-    outcome,
-    cwd: params.cwd,
-  });
+  if (isConfirmedNotification(outcome)) {
+    await markDispatchRequestNotified(
+      params.teamName,
+      queued.request.request_id,
+      { last_reason: outcome.reason },
+      params.cwd,
+    );
+  } else {
+    await markImmediateDispatchFailure({
+      teamName: params.teamName,
+      request: queued.request,
+      reason: outcome.reason,
+      cwd: params.cwd,
+    });
+  }
 
   return outcome;
 }
@@ -283,25 +224,47 @@ export async function queueDirectMailboxMessage(params: QueueDirectMessageParams
     };
   }
 
-  const outcome = await notifyDispatchRequest({
-    notify: params.notify,
-    target: { workerName: params.toWorker, workerIndex: params.toWorkerIndex, paneId: params.toPaneId },
-    message: params.triggerMessage,
-    request: queued.request,
-    transportPreference: params.transportPreference,
-    messageId: message.message_id,
-    outcome: { message_id: message.message_id, to_worker: params.toWorker },
-  });
-
-  await finalizeDispatchNotification({
-    teamName: params.teamName,
-    request: queued.request,
-    outcome,
-    cwd: params.cwd,
-    messageId: message.message_id,
-    toWorker: params.toWorker,
-    deferLeaderPaneMissing: true,
-  });
+  const notifyOutcome = await Promise.resolve(params.notify(
+    { workerName: params.toWorker, workerIndex: params.toWorkerIndex, paneId: params.toPaneId },
+    params.triggerMessage,
+    { request: queued.request, message_id: message.message_id },
+  )).catch((error) => ({
+    ok: false,
+    transport: fallbackTransportForPreference(params.transportPreference),
+    reason: notifyExceptionReason(error),
+  } as DispatchOutcome));
+  const outcome: DispatchOutcome = {
+    ...notifyOutcome,
+    request_id: queued.request.request_id,
+    message_id: message.message_id,
+    to_worker: params.toWorker,
+  };
+  if (isLeaderPaneMissingMailboxPersistedOutcome(queued.request, outcome)) {
+    await markLeaderPaneMissingDeferred({
+      teamName: params.teamName,
+      request: queued.request,
+      cwd: params.cwd,
+      messageId: message.message_id,
+    });
+    return outcome;
+  }
+  if (isConfirmedNotification(outcome)) {
+    await markMessageNotified(params.teamName, params.toWorker, message.message_id, params.cwd);
+    await markDispatchRequestNotified(
+      params.teamName,
+      queued.request.request_id,
+      { message_id: message.message_id, last_reason: outcome.reason },
+      params.cwd,
+    );
+  } else {
+    await markImmediateDispatchFailure({
+      teamName: params.teamName,
+      request: queued.request,
+      reason: outcome.reason,
+      messageId: message.message_id,
+      cwd: params.cwd,
+    });
+  }
   return outcome;
 }
 
@@ -353,26 +316,41 @@ export async function queueBroadcastMailboxMessage(params: QueueBroadcastParams)
       continue;
     }
 
-    const triggerMessage = params.triggerFor(recipient.workerName);
-    const outcome = await notifyDispatchRequest({
-      notify: params.notify,
-      target: { workerName: recipient.workerName, workerIndex: recipient.workerIndex, paneId: recipient.paneId },
-      message: triggerMessage,
-      request: queued.request,
-      transportPreference: params.transportPreference,
-      messageId: message.message_id,
-      outcome: { message_id: message.message_id, to_worker: recipient.workerName },
-    });
+    const notifyOutcome = await Promise.resolve(params.notify(
+      { workerName: recipient.workerName, workerIndex: recipient.workerIndex, paneId: recipient.paneId },
+      params.triggerFor(recipient.workerName),
+      { request: queued.request, message_id: message.message_id },
+    )).catch((error) => ({
+      ok: false,
+      transport: fallbackTransportForPreference(params.transportPreference),
+      reason: notifyExceptionReason(error),
+    } as DispatchOutcome));
+
+    const outcome: DispatchOutcome = {
+      ...notifyOutcome,
+      request_id: queued.request.request_id,
+      message_id: message.message_id,
+      to_worker: recipient.workerName,
+    };
     outcomes.push(outcome);
 
-    await finalizeDispatchNotification({
-      teamName: params.teamName,
-      request: queued.request,
-      outcome,
-      cwd: params.cwd,
-      messageId: message.message_id,
-      toWorker: recipient.workerName,
-    });
+    if (isConfirmedNotification(outcome)) {
+      await markMessageNotified(params.teamName, recipient.workerName, message.message_id, params.cwd);
+      await markDispatchRequestNotified(
+        params.teamName,
+        queued.request.request_id,
+        { message_id: message.message_id, last_reason: outcome.reason },
+        params.cwd,
+      );
+    } else {
+      await markImmediateDispatchFailure({
+        teamName: params.teamName,
+        request: queued.request,
+        reason: outcome.reason,
+        messageId: message.message_id,
+        cwd: params.cwd,
+      });
+    }
   }
 
   return outcomes;
