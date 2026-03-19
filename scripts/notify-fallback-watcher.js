@@ -81,11 +81,13 @@ const logsDir = join(omxDir, 'logs');
 const stateDir = join(omxDir, 'state');
 const statePath = join(stateDir, 'notify-fallback-state.json');
 const pidFilePath = resolve(argValue('--pid-file', join(stateDir, 'notify-fallback.pid')));
+const authorityOwnerPath = join(stateDir, 'notify-fallback-authority-owner.json');
 const logPath = join(logsDir, `notify-fallback-${new Date().toISOString().split('T')[0]}.jsonl`);
 const RALPH_CONTINUE_TEXT = 'Ralph loop active continue';
 const RALPH_CONTINUE_CADENCE_MS = 60_000;
 const RALPH_TERMINAL_PHASES = new Set(['complete', 'failed', 'cancelled']);
 const HUD_AUTHORITY_REASON = 'hud_authority_required';
+const AUTHORITY_OWNER_STALE_MS = Math.max(1000, asNumber(process.env.OMX_HUD_AUTHORITY_OWNER_STALE_MS || '', 4000));
 
 const fileState = new Map();
 const seenTurnKeys = new Set();
@@ -129,6 +131,42 @@ let lastParentGuard = {
 };
 function eventLog(event) {
   return appendFile(logPath, `${JSON.stringify({ timestamp: new Date().toISOString(), ...event })}\n`).catch(() => {});
+}
+
+async function readAuthorityOwnerLease() {
+  const parsed = await readFile(authorityOwnerPath, 'utf-8')
+    .then((content) => JSON.parse(content))
+    .catch(() => null);
+  if (!parsed || typeof parsed !== 'object') return null;
+  const owner = safeString(parsed.owner);
+  const heartbeatAt = safeString(parsed.heartbeat_at);
+  const pid = Number(parsed.pid);
+  const heartbeatMs = Date.parse(heartbeatAt);
+  const fresh = Number.isFinite(heartbeatMs) && (Date.now() - heartbeatMs) <= AUTHORITY_OWNER_STALE_MS;
+  const alive = Number.isFinite(pid) && pid > 0 ? isPidAlive(pid) : false;
+  return {
+    owner,
+    pid: Number.isFinite(pid) ? pid : null,
+    heartbeat_at: heartbeatAt || null,
+    fresh,
+    alive,
+  };
+}
+
+async function writeAuthorityOwnerLease(owner) {
+  await mkdir(dirname(authorityOwnerPath), { recursive: true }).catch(() => {});
+  await writeFile(authorityOwnerPath, JSON.stringify({
+    owner,
+    pid: process.pid,
+    cwd,
+    heartbeat_at: new Date().toISOString(),
+  }, null, 2)).catch(() => {});
+}
+
+async function removeAuthorityOwnerLeaseIfOwned() {
+  const lease = await readAuthorityOwnerLease();
+  if (!lease || lease.pid !== process.pid) return;
+  await unlink(authorityOwnerPath).catch(() => {});
 }
 
 function normalizeRalphContinueSteerState(raw) {
@@ -251,9 +289,26 @@ async function resolveRolloutTrackingEvidence(nowMs = Date.now()) {
 }
 
 async function resolveAuthorityGate() {
-  if (authorityEnabled) {
+  if (authorityOnly) {
+    await writeAuthorityOwnerLease('hud');
     return { enabled: true, reason: 'hud_authority_enabled' };
   }
+
+  const authorityOwnerLease = await readAuthorityOwnerLease();
+  const hudOwnerLive = authorityOwnerLease?.owner === 'hud' && authorityOwnerLease.fresh && authorityOwnerLease.alive;
+  if (hudOwnerLive) {
+    return { enabled: false, reason: HUD_AUTHORITY_REASON };
+  }
+
+  if (!runOnce) {
+    await writeAuthorityOwnerLease('watcher');
+    return { enabled: true, reason: authorityEnabled ? 'fallback_authority_enabled' : 'fallback_authority_owner' };
+  }
+
+  if (authorityEnabled) {
+    return { enabled: true, reason: 'fallback_authority_enabled_once' };
+  }
+
   if (!parentIsGone()) {
     return { enabled: false, reason: HUD_AUTHORITY_REASON };
   }
@@ -448,19 +503,19 @@ async function writeState(extra = {}) {
     tracked_files: fileState.size,
     seen_turns: seenTurnKeys.size,
     dispatch_drain: {
-      enabled: authorityEnabled,
+      enabled: lastDispatchDrain.last_result?.reason !== HUD_AUTHORITY_REASON,
       max_per_tick: dispatchTickMax,
       run_count: dispatchDrainRuns,
       ...lastDispatchDrain,
     },
     leader_nudge: {
-      enabled: authorityEnabled,
+      enabled: lastLeaderNudge.last_error !== HUD_AUTHORITY_REASON,
       run_count: leaderNudgeRuns,
       ...lastLeaderNudge,
     },
     ralph_continue_steer: {
       ...lastRalphContinueSteer,
-      enabled: authorityEnabled,
+      enabled: lastRalphContinueSteer.last_reason !== HUD_AUTHORITY_REASON,
       cadence_ms: RALPH_CONTINUE_CADENCE_MS,
       message: RALPH_CONTINUE_TEXT,
     },
@@ -482,6 +537,7 @@ async function requestShutdown(reason, signal = null) {
       pid_file: runOnce ? null : pidFilePath,
     });
     await removePidFileIfOwned();
+    await removeAuthorityOwnerLeaseIfOwned();
     process.exit(0);
   })();
   return shutdownPromise;
