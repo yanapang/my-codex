@@ -32,6 +32,7 @@ import {
   buildDetachedSessionRollbackSteps,
   resolveNotifyTempContract,
   buildNotifyTempStartupMessages,
+  buildNotifyFallbackWatcherEnv,
 } from "../index.js";
 import { HUD_TMUX_HEIGHT_LINES } from "../../hud/constants.js";
 import {
@@ -230,6 +231,27 @@ describe("resolveNotifyTempContract", () => {
     assert.equal(parsed.contract.active, true);
     assert.equal(parsed.contract.source, "env");
     assert.deepEqual(parsed.passthroughArgs, ["--model", "gpt-5"]);
+  });
+});
+
+describe("buildNotifyFallbackWatcherEnv", () => {
+  it("enables watcher authority and propagates CODEX_HOME override when requested", () => {
+    const env = buildNotifyFallbackWatcherEnv(
+      { HOME: "/tmp/home", OMX_HUD_AUTHORITY: "0" },
+      { codexHomeOverride: "/tmp/codex-home", enableAuthority: true },
+    );
+    assert.equal(env.OMX_HUD_AUTHORITY, "1");
+    assert.equal(env.CODEX_HOME, "/tmp/codex-home");
+    assert.equal(env.HOME, "/tmp/home");
+  });
+
+  it("disables watcher authority explicitly when not requested", () => {
+    const env = buildNotifyFallbackWatcherEnv(
+      { HOME: "/tmp/home", OMX_HUD_AUTHORITY: "1" },
+      { enableAuthority: false },
+    );
+    assert.equal(env.OMX_HUD_AUTHORITY, "0");
+    assert.equal(env.HOME, "/tmp/home");
   });
 });
 
