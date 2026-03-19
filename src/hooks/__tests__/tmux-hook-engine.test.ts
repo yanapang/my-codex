@@ -13,6 +13,7 @@ import {
   buildSendKeysArgv,
   buildPaneCurrentCommandArgv,
   isPaneRunningShell,
+  resolveCodexPane,
 } from '../../scripts/tmux-hook-engine.js';
 
 describe('normalizeTmuxHookConfig', () => {
@@ -353,5 +354,69 @@ describe('paneHasActiveTask', () => {
 
   it('returns false for idle prompts', () => {
     assert.equal(paneHasActiveTask('› ready for input'), false);
+  });
+});
+
+
+describe('resolveCodexPane', () => {
+  it('ignores HUD pane even when TMUX_PANE foreground command is node', async () => {
+    const { mkdtemp, writeFile, chmod, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+
+    const fakeBinDir = await mkdtemp(join(tmpdir(), 'omx-resolve-codex-pane-'));
+    const fakeTmuxPath = join(fakeBinDir, 'tmux');
+    const previousPath = process.env.PATH;
+    const previousTmuxPane = process.env.TMUX_PANE;
+
+    try {
+      await writeFile(fakeTmuxPath, `#!/usr/bin/env bash
+set -eu
+cmd="$1"
+shift || true
+if [[ "$cmd" == "display-message" ]]; then
+  target=""
+  format=""
+  while (($#)); do
+    case "$1" in
+      -p) shift ;;
+      -t) target="$2"; shift 2 ;;
+      *) format="$1"; shift ;;
+    esac
+  done
+  if [[ "$format" == "#{pane_current_command}" && "$target" == "%2" ]]; then
+    echo "node"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_start_command}" && "$target" == "%2" ]]; then
+    echo "node /pkg/dist/cli/omx.js hud --watch"
+    exit 0
+  fi
+  if [[ "$format" == "#S" && "$target" == "%2" ]]; then
+    echo "devsess"
+    exit 0
+  fi
+  echo "bad display target: $target / $format" >&2
+  exit 1
+fi
+if [[ "$cmd" == "list-panes" ]]; then
+  printf "%%2\tnode\tnode /pkg/dist/cli/omx.js hud --watch\n%%42\tnode\tcodex --model gpt-5\n"
+  exit 0
+fi
+echo "unsupported" >&2
+exit 1
+`);
+      await chmod(fakeTmuxPath, 0o755);
+      process.env.PATH = `${fakeBinDir}:${previousPath || ''}`;
+      process.env.TMUX_PANE = '%2';
+
+      assert.equal(resolveCodexPane(), '%42');
+    } finally {
+      if (typeof previousPath === 'string') process.env.PATH = previousPath;
+      else delete process.env.PATH;
+      if (typeof previousTmuxPane === 'string') process.env.TMUX_PANE = previousTmuxPane;
+      else delete process.env.TMUX_PANE;
+      await rm(fakeBinDir, { recursive: true, force: true });
+    }
   });
 });

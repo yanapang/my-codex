@@ -231,9 +231,15 @@ async function withMailboxLock(teamDirPath, workerName, fn) {
   }
 }
 
+function resolveLeaderPaneId(config) {
+  return safeString(config?.leader_pane_id).trim();
+}
+
+
 function defaultInjectTarget(request, config) {
   if (request.to_worker === 'leader-fixed') {
-    if (config.leader_pane_id) return { type: 'pane', value: config.leader_pane_id };
+    const leaderPaneId = resolveLeaderPaneId(config);
+    if (leaderPaneId) return { type: 'pane', value: leaderPaneId };
     return null;
   }
   if (request.pane_id) return { type: 'pane', value: request.pane_id };
@@ -489,7 +495,7 @@ export async function drainPendingTeamDispatch({
           continue;
         }
 
-        if (request.to_worker === 'leader-fixed' && !safeString(config?.leader_pane_id).trim()) {
+        if (request.to_worker === 'leader-fixed' && !resolveLeaderPaneId(config)) {
           const nowIso = new Date().toISOString();
           const alreadyDeferred = safeString(request.last_reason).trim() === LEADER_PANE_MISSING_DEFERRED_REASON;
           request.updated_at = nowIso;

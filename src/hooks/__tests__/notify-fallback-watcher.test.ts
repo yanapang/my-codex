@@ -116,7 +116,7 @@ if [[ "$cmd" == "display-message" ]]; then
     exit 0
   fi
   if [[ "$fmt" == "#{pane_current_path}" ]]; then
-    pwd
+    dirname "${tmuxLogPath}"
     exit 0
   fi
   if [[ "$fmt" == "#{pane_current_command}" ]]; then

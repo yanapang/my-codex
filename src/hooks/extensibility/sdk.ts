@@ -4,6 +4,7 @@ import { createHash } from 'crypto';
 import { dirname, join } from 'path';
 import { spawnSync } from 'child_process';
 import { sleepSync } from '../../utils/sleep.js';
+import { resolveCodexPane } from '../../scripts/tmux-hook-engine.js';
 import type {
   HookEventEnvelope,
   HookPluginSdk,
@@ -102,6 +103,43 @@ function runTmux(args: string[]): { ok: true; stdout: string } | { ok: false; st
   return { ok: true, stdout: (result.stdout || '').trim() };
 }
 
+function isHudStartCommand(startCommand: string): boolean {
+  return /\bomx\b.*\bhud\b.*--watch/i.test(startCommand);
+}
+
+function resolveSessionPaneTarget(sessionName: string): HookPluginSendKeysResult {
+  const paneList = runTmux(['list-panes', '-t', sessionName, '-F', '#{pane_id}\t#{pane_active}\t#{pane_start_command}']);
+  if (!paneList.ok) {
+    return { ok: false, reason: 'target_missing', error: paneList.stderr };
+  }
+
+  const rows = paneList.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [paneId = '', activeRaw = '0', startCommand = ''] = line.split('\t');
+      return {
+        paneId,
+        active: activeRaw === '1',
+        startCommand: startCommand.trim(),
+      };
+    })
+    .filter((row) => row.paneId.startsWith('%'));
+
+  if (rows.length === 0) return { ok: false, reason: 'target_missing' };
+
+  const nonHudRows = rows.filter((row) => !isHudStartCommand(row.startCommand));
+  const canonicalRows = nonHudRows.filter((row) => /\bcodex\b/i.test(row.startCommand));
+  const resolved = canonicalRows.find((row) => row.active)
+    || canonicalRows[0]
+    || nonHudRows.find((row) => row.active)
+    || nonHudRows[0];
+
+  if (!resolved) return { ok: false, reason: 'target_missing' };
+  return { ok: true, reason: 'ok', target: resolved.paneId, paneId: resolved.paneId };
+}
+
 function resolveTmuxTarget(options: HookPluginSendKeysOptions): HookPluginSendKeysResult {
   const paneId = typeof options.paneId === 'string' ? options.paneId.trim() : '';
   if (paneId) {
@@ -112,18 +150,10 @@ function resolveTmuxTarget(options: HookPluginSendKeysOptions): HookPluginSendKe
 
   const sessionName = typeof options.sessionName === 'string' ? options.sessionName.trim() : '';
   if (sessionName) {
-    const paneList = runTmux(['list-panes', '-t', sessionName, '-F', '#{pane_id} #{pane_active}']);
-    if (!paneList.ok) {
-      return { ok: false, reason: 'target_missing', error: paneList.stderr };
-    }
-    const lines = paneList.stdout.split('\n').map((line) => line.trim()).filter(Boolean);
-    const active = lines.find((line) => line.endsWith(' 1')) || lines[0];
-    if (!active) return { ok: false, reason: 'target_missing' };
-    const resolved = active.split(' ')[0];
-    return resolved ? { ok: true, reason: 'ok', target: resolved, paneId: resolved } : { ok: false, reason: 'target_missing' };
+    return resolveSessionPaneTarget(sessionName);
   }
 
-  const envPane = typeof process.env.TMUX_PANE === 'string' ? process.env.TMUX_PANE.trim() : '';
+  const envPane = String(resolveCodexPane() || '').trim();
   if (envPane) return { ok: true, reason: 'ok', target: envPane, paneId: envPane };
 
   return { ok: false, reason: 'target_missing' };

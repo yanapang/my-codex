@@ -1554,8 +1554,11 @@ export function buildNotifyFallbackWatcherEnv(
     enableAuthority?: boolean;
   } = {},
 ): NodeJS.ProcessEnv {
+  const nextEnv = { ...env };
+  delete nextEnv.TMUX;
+  delete nextEnv.TMUX_PANE;
   return {
-    ...env,
+    ...nextEnv,
     ...(options.codexHomeOverride ? { CODEX_HOME: options.codexHomeOverride } : {}),
     OMX_HUD_AUTHORITY: options.enableAuthority ? "1" : "0",
   };

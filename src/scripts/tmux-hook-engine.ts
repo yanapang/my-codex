@@ -182,13 +182,17 @@ export function isPaneRunningShell(paneCurrentCommand: any): boolean {
 // Codex agent commands — do NOT include 'claude' (that's Claude Code CLI, a different tool)
 const AGENT_COMMANDS = new Set(['node', 'codex', 'npx']);
 
+function isHudStartCommand(startCommand: string): boolean {
+  return /\bomx\b.*\bhud\b.*--watch/i.test(startCommand);
+}
+
 /**
  * Canonical codex pane resolver. Finds the tmux pane running a codex/claude agent.
  *
  * Resolution order:
- * 1. TMUX_PANE env var — but only if the pane is running an agent (not a shell)
- * 2. Scan all panes in the same tmux session for one running an agent command
- * 3. Fall back to TMUX_PANE even if it's a shell (best effort)
+ * 1. TMUX_PANE env var — but only if the pane looks like a real agent pane, not HUD
+ * 2. Scan all panes in the same tmux session for one started with codex
+ * 3. Fail closed instead of guessing a shell or HUD pane
  *
  * All callers (auto-nudge, ralph steer, team dispatch, tmux injection) should
  * use this instead of raw `process.env.TMUX_PANE`.
@@ -197,43 +201,42 @@ export function resolveCodexPane(): string {
   const envPane = (process.env.TMUX_PANE || '').trim();
   if (!envPane) return '';
 
-  // Check if TMUX_PANE is actually running an agent
   try {
     const cmd = execFileSync('tmux', ['display-message', '-t', envPane, '-p', '#{pane_current_command}'], {
       encoding: 'utf-8', timeout: 2000,
     }).trim().toLowerCase();
+    const startCmd = execFileSync('tmux', ['display-message', '-t', envPane, '-p', '#{pane_start_command}'], {
+      encoding: 'utf-8', timeout: 2000,
+    }).trim().toLowerCase();
     const base = cmd.split('/').pop()?.replace(/^-/, '') || '';
-    if (AGENT_COMMANDS.has(base)) {
-      return envPane; // TMUX_PANE is running a codex agent — use it
+    if (AGENT_COMMANDS.has(base) && !isHudStartCommand(startCmd)) {
+      return envPane;
     }
     if (!SHELL_COMMANDS.has(base)) {
-      // Not a shell and not a known agent (e.g. 'claude' = Claude Code CLI)
-      // Fall through to session scan to find the actual codex pane
+      // Not a shell and not a known agent (e.g. claude CLI) — fall through to
+      // session scan so we can still reject HUD or locate a codex pane.
     }
   } catch {
-    return envPane; // Can't check — use it as-is
+    // Fall through to session scan instead of guessing.
   }
 
-  // TMUX_PANE is a shell — find the actual agent pane in the same session
   try {
-    const sessionName = execFileSync('tmux', ['display-message', '-t', envPane, '-p', '#{session_name}'], {
+    const sessionName = execFileSync('tmux', ['display-message', '-t', envPane, '-p', '#S'], {
       encoding: 'utf-8', timeout: 2000,
     }).trim();
-    if (!sessionName) return envPane;
+    if (!sessionName) return '';
 
     const panes = execFileSync('tmux', [
       'list-panes', '-s', '-t', sessionName,
       '-F', '#{pane_id}\t#{pane_current_command}\t#{pane_start_command}',
     ], { encoding: 'utf-8', timeout: 2000 }).trim().split('\n');
 
-    // Find the pane that was STARTED with codex (not the HUD or shell)
     for (const line of panes) {
       const parts = line.split('\t');
       const paneId = parts[0];
       const startCmd = (parts[2] || '').toLowerCase();
       if (!paneId) continue;
-      // The codex pane has 'codex' in its start command
-      if (startCmd.includes('codex') && !startCmd.includes('hud')) {
+      if (startCmd.includes('codex') && !isHudStartCommand(startCmd)) {
         return paneId;
       }
     }
@@ -241,7 +244,6 @@ export function resolveCodexPane(): string {
     // Fall through
   }
 
-  // No agent pane found in the session — don't fall back to a shell pane
   return '';
 }
 
