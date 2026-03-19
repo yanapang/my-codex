@@ -150,6 +150,12 @@ exit 0
 }
 
 describe('notify-fallback watcher', () => {
+  it('tmux injection helper remains syntax-valid for HUD authority ticks', () => {
+    const script = new URL('../../../scripts/notify-hook/tmux-injection.js', import.meta.url).pathname;
+    const result = spawnSync(process.execPath, ['--check', script], { encoding: 'utf-8' });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  });
+
   it('one-shot mode forwards only recent task_complete events', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-once-'));
     const tempHome = await mkdtemp(join(tmpdir(), 'omx-fallback-home-'));

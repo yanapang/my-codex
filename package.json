@@ -23,7 +23,7 @@
     "ask:gemini": "./scripts/ask-gemini.sh",
     "test:explore": "cargo test -p omx-explore-harness && node --test dist/cli/__tests__/explore.test.js dist/hooks/__tests__/explore-routing.test.js dist/hooks/__tests__/explore-sparkshell-guidance-contract.test.js",
     "test:node": "node --test $(find dist -name '*.test.js')",
-    "test": "npm run build && npm run test:node && node scripts/generate-catalog-docs.js --check",
+    "test": "npm run build && npm run check:scripts-syntax && npm run test:node && node scripts/generate-catalog-docs.js --check",
     "coverage:team-critical": "npm run build && c8 --all --src dist/team --src dist/state --include 'dist/team/**/*.js' --include 'dist/state/**/*.js' --exclude '**/__tests__/**' --reporter=text-summary --reporter=lcov --reporter=json-summary --report-dir coverage/team --check-coverage --lines=78 --functions=90 --branches=70 --statements=78 node --test $(find dist/team/__tests__ dist/state/__tests__ -name '*.test.js')",
     "coverage:ts:full": "npm run build && c8 --all --src dist --exclude '**/__tests__/**' --exclude 'dist/bin/**' --exclude 'dist/**/*.d.ts' --reporter=text-summary --reporter=lcov --reporter=json-summary --report-dir coverage/ts-full node --test $(find dist -name '*.test.js')",
     "test:compat:node": "npm run build && node --test dist/compat/__tests__/*.test.js",
@@ -31,7 +31,8 @@
     "build:sparkshell": "node scripts/build-sparkshell.mjs",
     "smoke:packed-install": "node scripts/smoke-packed-install.mjs",
     "test:sparkshell": "node scripts/test-sparkshell.mjs",
-    "postpack": "npm run clean:native-package-assets"
+    "postpack": "npm run clean:native-package-assets",
+    "check:scripts-syntax": "node scripts/check-runtime-syntax.mjs"
   },
   "engines": {
     "node": ">=20"

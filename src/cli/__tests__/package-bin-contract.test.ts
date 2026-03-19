@@ -37,10 +37,12 @@ describe('package bin contract', () => {
     assert.equal(pkg.scripts?.['build:explore'], 'cargo build -p omx-explore-harness');
     assert.equal(pkg.scripts?.['build:explore:release'], 'node scripts/build-explore-harness.js');
     assert.equal(pkg.scripts?.['build:full'], 'npm run build && npm run build:explore:release && npm run build:sparkshell');
+    assert.equal(pkg.scripts?.['check:scripts-syntax'], 'node scripts/check-runtime-syntax.mjs');
     assert.equal(pkg.scripts?.['clean:native-package-assets'], 'node scripts/cleanup-explore-harness.js');
     assert.equal(pkg.scripts?.prepack, 'npm run build && npm run clean:native-package-assets');
     assert.equal(pkg.scripts?.postpack, 'npm run clean:native-package-assets');
     assert.equal(pkg.scripts?.['test:explore'], 'cargo test -p omx-explore-harness && node --test dist/cli/__tests__/explore.test.js dist/hooks/__tests__/explore-routing.test.js dist/hooks/__tests__/explore-sparkshell-guidance-contract.test.js');
+    assert.equal(pkg.scripts?.test, 'npm run build && npm run check:scripts-syntax && npm run test:node && node scripts/generate-catalog-docs.js --check');
     assert.equal(pkg.files?.includes('bin/omx.js'), true, 'expected package files allowlist to include only bin/omx.js');
     assert.equal(pkg.files?.includes('bin/'), false, 'did not expect broad bin/ allowlist in package files');
     assert.ok(pkg.files?.includes('Cargo.toml'));

@@ -44,16 +44,20 @@ export async function findBetterSiblingPaneTarget(paneId) {
     const sessionName = safeString(sessionResult.stdout).trim();
     if (!sessionName) return null;
     const list = await runProcess('tmux', ['list-panes', '-t', sessionName, '-F', '#{pane_id}	#{pane_current_command}	#{pane_active}	#{pane_current_path}'], 2000);
-    const rows = list.stdout.split('
-').map((line) => line.trim()).filter(Boolean).map((line) => {
-      const [paneId, currentCommand, activeRaw, paneCwd] = line.split('	');
-      return {
-        paneId: safeString(paneId),
-        currentCommand: safeString(currentCommand).toLowerCase(),
-        active: activeRaw === '1',
-        paneCwd: safeString(paneCwd),
-      };
-    }).filter((row) => row.paneId);
+    const rows = list.stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const [paneId, currentCommand, activeRaw, paneCwd] = line.split('\t');
+        return {
+          paneId: safeString(paneId),
+          currentCommand: safeString(currentCommand).toLowerCase(),
+          active: activeRaw === '1',
+          paneCwd: safeString(paneCwd),
+        };
+      })
+      .filter((row) => row.paneId);
     const current = rows.find((row) => row.paneId == target) || null;
     const expectedCwd = current?.paneCwd ? resolvePath(current.paneCwd) : '';
     const better = rows.find((row) => row.paneId !== target
