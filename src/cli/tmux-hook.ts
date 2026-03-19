@@ -41,6 +41,12 @@ interface InitConfigResult {
   detectedSession?: string;
 }
 
+interface InitTmuxHookConfigOptions {
+  silent?: boolean;
+  cwd?: string;
+  detectTarget?: boolean;
+}
+
 const DEFAULT_CONFIG: TmuxHookConfig = {
   enabled: true,
   target: { type: 'pane', value: '' },
@@ -306,9 +312,10 @@ function detectInitialTarget(): InitialTargetDetection | null {
   return null;
 }
 
-async function initTmuxHookConfig(opts?: { silent?: boolean; cwd?: string }): Promise<InitConfigResult> {
+async function initTmuxHookConfig(opts?: InitTmuxHookConfigOptions): Promise<InitConfigResult> {
   const cwd = opts?.cwd ?? process.cwd();
   const silent = opts?.silent ?? false;
+  const detectTarget = opts?.detectTarget ?? true;
   const configPath = tmuxHookConfigPath(cwd);
   await mkdir(omxDir(cwd), { recursive: true });
 
@@ -319,7 +326,7 @@ async function initTmuxHookConfig(opts?: { silent?: boolean; cwd?: string }): Pr
     return { configPath, created: false, usedPlaceholderTarget: false };
   }
 
-  const detected = detectInitialTarget();
+  const detected = detectTarget ? detectInitialTarget() : null;
   const initial = {
     ...DEFAULT_CONFIG,
     target: detected?.target ?? { type: 'pane' as const, value: 'replace-with-tmux-pane-id' },
@@ -350,9 +357,12 @@ async function initTmuxHookConfig(opts?: { silent?: boolean; cwd?: string }): Pr
   return result;
 }
 
-export async function ensureTmuxHookInitialized(cwd = process.cwd()): Promise<void> {
+export async function ensureTmuxHookInitialized(
+  cwd = process.cwd(),
+  options: { detectTarget?: boolean } = {},
+): Promise<void> {
   try {
-    await initTmuxHookConfig({ silent: true, cwd });
+    await initTmuxHookConfig({ silent: true, cwd, detectTarget: options.detectTarget ?? true });
   } catch {
     // Best-effort only: state tools must remain available even without tmux.
   }
