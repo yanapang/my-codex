@@ -384,16 +384,8 @@ fn prepare_allowlist_environment() -> Result<AllowlistEnvironment, String> {
         .ok_or_else(|| "failed to locate host sh for allowlist wrapper".to_string())?;
 
     for command in ALLOWED_DIRECT_COMMANDS {
-        let real = resolve_host_command(command).ok_or_else(|| {
-            format!("failed to locate host command `{command}` for allowlist wrapper")
-        })?;
         let wrapper_path = bin_dir.join(command);
-        let wrapper = format!(
-            "#!/bin/sh\nexec {} {} {} \"$@\"\n",
-            shell_quote(&self_exe.display().to_string()),
-            shell_quote(INTERNAL_DIRECT_WRAPPER_FLAG),
-            shell_quote(&format!("{command}:{}", real.display())),
-        );
+        let wrapper = build_direct_wrapper(&self_exe, command)?;
         write_executable(&wrapper_path, &wrapper)?;
     }
 
@@ -449,6 +441,30 @@ fn write_executable(path: &Path, content: &str) -> Result<(), String> {
             .map_err(|err| format!("failed to chmod wrapper {}: {err}", path.display()))?;
     }
     Ok(())
+}
+
+fn build_direct_wrapper(self_exe: &Path, command: &str) -> Result<String, String> {
+    if let Some(real) = resolve_host_command(command) {
+        return Ok(format!(
+            "#!/bin/sh\nexec {} {} {} \"$@\"\n",
+            shell_quote(&self_exe.display().to_string()),
+            shell_quote(INTERNAL_DIRECT_WRAPPER_FLAG),
+            shell_quote(&format!("{command}:{}", real.display())),
+        ));
+    }
+
+    if command != "rg" {
+        return Err(format!(
+            "failed to locate host command `{command}` for allowlist wrapper"
+        ));
+    }
+
+    Ok(format!(
+        "#!/bin/sh\nprintf '%s\\n' {} >&2\nexit 127\n",
+        shell_quote(&format!(
+            "omx explore allowlisted host command `{command}` is unavailable on this host"
+        )),
+    ))
 }
 
 fn resolve_host_command(command: &str) -> Option<PathBuf> {
@@ -773,6 +789,9 @@ mod tests {
     use super::*;
     use std::sync::{Mutex, OnceLock};
 
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
+
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
@@ -875,6 +894,93 @@ mod tests {
         let expected_node = resolve_host_command("node").expect("host node path");
         assert_eq!(launch.program, expected_node.display().to_string());
         assert_eq!(launch.leading_args, vec![script_path.display().to_string()]);
+    }
+
+    #[cfg(unix)]
+    fn create_host_bin_with_commands(commands: &[&str]) -> (TempDirGuard, PathBuf) {
+        let root = temp_allowlist_dir().expect("temp root");
+        let host_bin = root.path.join("host-bin");
+        create_dir_all(&host_bin).expect("create host bin");
+        for command in commands {
+            let resolved =
+                resolve_host_command(command).unwrap_or_else(|| panic!("host {command} path"));
+            symlink(&resolved, host_bin.join(command))
+                .unwrap_or_else(|err| panic!("symlink {command}: {err}"));
+        }
+        (root, host_bin)
+    }
+
+    #[cfg(unix)]
+    fn with_path<T>(path: &Path, f: impl FnOnce() -> T) -> T {
+        let original_path = env::var_os("PATH");
+        unsafe {
+            env::set_var("PATH", path);
+        }
+        let result = f();
+        match original_path {
+            Some(value) => unsafe { env::set_var("PATH", value) },
+            None => unsafe { env::remove_var("PATH") },
+        }
+        result
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepare_allowlist_environment_tolerates_missing_rg_by_stubbing_wrapper() {
+        let _guard = env_lock();
+        let mut commands = vec!["bash", "sh"];
+        commands.extend(
+            ALLOWED_DIRECT_COMMANDS
+                .iter()
+                .copied()
+                .filter(|command| *command != "rg"),
+        );
+        let (_root, host_bin) = create_host_bin_with_commands(&commands);
+
+        let allowlist =
+            with_path(&host_bin, prepare_allowlist_environment).expect("allowlist environment");
+        let rg_output = Command::new(allowlist.bin_dir.join("rg"))
+            .arg("needle")
+            .arg("src")
+            .output()
+            .expect("run rg stub");
+
+        assert_eq!(rg_output.status.code(), Some(127));
+        assert!(String::from_utf8_lossy(&rg_output.stderr).contains("`rg` is unavailable"));
+        assert!(allowlist.bin_dir.join("grep").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepare_allowlist_environment_still_fails_fast_when_non_rg_command_is_missing() {
+        let _guard = env_lock();
+        let mut commands = vec!["bash", "sh"];
+        commands.extend(
+            ALLOWED_DIRECT_COMMANDS
+                .iter()
+                .copied()
+                .filter(|command| *command != "grep" && *command != "rg"),
+        );
+        let (_root, host_bin) = create_host_bin_with_commands(&commands);
+
+        let error = with_path(&host_bin, prepare_allowlist_environment)
+            .expect_err("missing non-rg command should fail");
+
+        assert!(error.contains("failed to locate host command `grep`"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepare_allowlist_environment_preserves_present_command_wrapper_execution() {
+        let self_exe = env::current_exe().expect("current exe");
+        let pwd = resolve_host_command("pwd").expect("host pwd path");
+
+        let wrapper = build_direct_wrapper(&self_exe, "pwd").expect("pwd wrapper");
+
+        assert!(wrapper.contains(INTERNAL_DIRECT_WRAPPER_FLAG));
+        assert!(wrapper.contains(&self_exe.display().to_string()));
+        assert!(wrapper.contains(&format!("pwd:{}", pwd.display())));
+        assert!(!wrapper.contains("exit 127"));
     }
 
     #[test]

@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from 'fs/promises';
 import { spawnSync } from 'child_process';
 import { join } from 'path';
 import { getPackageRoot } from '../utils/package.js';
+import { resolveCodexPane } from '../scripts/tmux-hook-engine.js';
 
 type TmuxTargetType = 'session' | 'pane';
 
@@ -39,6 +40,12 @@ interface InitConfigResult {
   created: boolean;
   usedPlaceholderTarget: boolean;
   detectedSession?: string;
+}
+
+interface InitTmuxHookConfigOptions {
+  silent?: boolean;
+  cwd?: string;
+  detectTarget?: boolean;
 }
 
 const DEFAULT_CONFIG: TmuxHookConfig = {
@@ -265,11 +272,11 @@ function detectActivePaneFromList(): InitialTargetDetection | null {
 }
 
 function detectInitialTarget(): InitialTargetDetection | null {
-  const tmuxPaneEnv = process.env.TMUX_PANE;
-  if (tmuxPaneEnv) {
-    const pane = runTmux(['display-message', '-p', '-t', tmuxPaneEnv, '#{pane_id}']);
+  const canonicalPane = resolveCodexPane();
+  if (canonicalPane) {
+    const pane = runTmux(['display-message', '-p', '-t', canonicalPane, '#{pane_id}']);
     if (pane.ok && pane.stdout) {
-      const session = runTmux(['display-message', '-p', '-t', tmuxPaneEnv, '#S']);
+      const session = runTmux(['display-message', '-p', '-t', canonicalPane, '#S']);
       return {
         target: { type: 'pane', value: pane.stdout },
         sessionName: session.ok && session.stdout ? session.stdout : undefined,
@@ -306,9 +313,10 @@ function detectInitialTarget(): InitialTargetDetection | null {
   return null;
 }
 
-async function initTmuxHookConfig(opts?: { silent?: boolean; cwd?: string }): Promise<InitConfigResult> {
+async function initTmuxHookConfig(opts?: InitTmuxHookConfigOptions): Promise<InitConfigResult> {
   const cwd = opts?.cwd ?? process.cwd();
   const silent = opts?.silent ?? false;
+  const detectTarget = opts?.detectTarget ?? true;
   const configPath = tmuxHookConfigPath(cwd);
   await mkdir(omxDir(cwd), { recursive: true });
 
@@ -319,7 +327,7 @@ async function initTmuxHookConfig(opts?: { silent?: boolean; cwd?: string }): Pr
     return { configPath, created: false, usedPlaceholderTarget: false };
   }
 
-  const detected = detectInitialTarget();
+  const detected = detectTarget ? detectInitialTarget() : null;
   const initial = {
     ...DEFAULT_CONFIG,
     target: detected?.target ?? { type: 'pane' as const, value: 'replace-with-tmux-pane-id' },
@@ -350,9 +358,12 @@ async function initTmuxHookConfig(opts?: { silent?: boolean; cwd?: string }): Pr
   return result;
 }
 
-export async function ensureTmuxHookInitialized(cwd = process.cwd()): Promise<void> {
+export async function ensureTmuxHookInitialized(
+  cwd = process.cwd(),
+  options: { detectTarget?: boolean } = {},
+): Promise<void> {
   try {
-    await initTmuxHookConfig({ silent: true, cwd });
+    await initTmuxHookConfig({ silent: true, cwd, detectTarget: options.detectTarget ?? true });
   } catch {
     // Best-effort only: state tools must remain available even without tmux.
   }

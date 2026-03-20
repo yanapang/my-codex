@@ -37,22 +37,23 @@ describe('native release workflow', () => {
     assert.match(workflow, /Publish Native Assets/);
     assert.match(workflow, /Smoke Verify Native Assets/);
     assert.match(workflow, /Smoke Test Packed Global Install/);
-    assert.match(workflow, /Older Linux Runtime Proof/);
-    assert.match(workflow, /node:20-bullseye/);
-    assert.match(workflow, /docker run --rm/);
     assert.match(workflow, /Publish npm Package/);
-    assert.match(workflow, /needs:\s*\[older-linux-runtime-proof\]/);
+    assert.match(workflow, /needs:\s*\[smoke-packed-install\]/);
     assert.match(workflow, /npm publish --access public --provenance/);
+    assert.doesNotMatch(workflow, /Older Linux Runtime Proof/);
+    assert.doesNotMatch(workflow, /node:20-bullseye/);
+    assert.doesNotMatch(workflow, /docker run --rm/);
     assert.doesNotMatch(workflow, /scripts\/check-version-sync\.mjs/);
     assert.doesNotMatch(workflow, /scripts\/generate-native-release-manifest\.mjs/);
     assert.doesNotMatch(workflow, /scripts\/verify-native-release-assets\.mjs/);
     assert.doesNotMatch(workflow, /scripts\/smoke-packed-install\.mjs/);
+    assert.doesNotMatch(workflow, /--release-assets-dir/);
+    assert.doesNotMatch(workflow, /--require-no-fallback/);
 
     assert.match(workflow, /verify-version-sync:[\s\S]*Verify version sync against workspace crates[\s\S]*node --input-type=module/);
     assert.match(workflow, /publish-native-assets:[\s\S]*npm run build[\s\S]*node dist\/scripts\/generate-native-release-manifest\.js/);
     assert.match(workflow, /smoke-verify-native:[\s\S]*npm run build[\s\S]*node dist\/scripts\/verify-native-release-assets\.js/);
-    assert.match(workflow, /smoke-packed-install:[\s\S]*npm run build[\s\S]*npm run smoke:packed-install -- --release-assets-dir release-assets/);
-    assert.match(workflow, /older-linux-runtime-proof:[\s\S]*npm ci && npm run build && node dist\/scripts\/smoke-packed-install\.js --release-assets-dir \.\/release-assets --require-no-fallback/);
+    assert.match(workflow, /smoke-packed-install:[\s\S]*npm run build[\s\S]*Smoke test packed install boot \+ core commands[\s\S]*npm run smoke:packed-install/);
     assert.match(workflow, /publish-npm:[\s\S]*Verify version sync against workspace crates[\s\S]*npm pack --dry-run/);
   });
 

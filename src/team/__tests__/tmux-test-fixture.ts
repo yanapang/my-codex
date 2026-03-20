@@ -1,12 +1,14 @@
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 export interface TempTmuxSessionFixture {
   sessionName: string;
+  serverName: string;
   windowTarget: string;
   leaderPaneId: string;
+  socketPath: string;
   env: {
     TMUX: string;
     TMUX_PANE: string;
@@ -14,9 +16,25 @@ export interface TempTmuxSessionFixture {
   sessionExists: () => boolean;
 }
 
-function runTmux(args: string[], options: { ignoreTmuxEnv?: boolean } = {}): string {
-  const env = options.ignoreTmuxEnv ? { ...process.env, TMUX: undefined, TMUX_PANE: undefined } : process.env;
-  return execFileSync('tmux', args, { encoding: 'utf-8', env }).trim();
+function runTmux(
+  args: string[],
+  options: { ignoreTmuxEnv?: boolean; env?: NodeJS.ProcessEnv; serverName?: string } = {},
+): string {
+  const env = options.env
+    ?? (options.ignoreTmuxEnv ? { ...process.env, TMUX: undefined, TMUX_PANE: undefined } : process.env);
+  const argv = options.serverName ? ['-L', options.serverName, ...args] : args;
+  const result = spawnSync('tmux', argv, {
+    encoding: 'utf-8',
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error((result.stderr || '').trim() || `tmux exited ${result.status}`);
+  }
+  return (result.stdout || '').trim();
 }
 
 export function isRealTmuxAvailable(): boolean {
@@ -28,17 +46,20 @@ export function isRealTmuxAvailable(): boolean {
   }
 }
 
-export function tmuxSessionExists(sessionName: string): boolean {
+export function tmuxSessionExists(sessionName: string, serverName?: string): boolean {
   try {
-    runTmux(['has-session', '-t', sessionName], { ignoreTmuxEnv: true });
+    runTmux(['has-session', '-t', sessionName], {
+      ignoreTmuxEnv: true,
+      serverName,
+    });
     return true;
   } catch {
     return false;
   }
 }
 
-function uniqueSessionName(): string {
-  return `omx-test-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+function uniqueTmuxIdentifier(prefix: string): string {
+  return `${prefix}-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 export async function withTempTmuxSession<T>(fn: (fixture: TempTmuxSessionFixture) => Promise<T> | T): Promise<T> {
@@ -47,7 +68,9 @@ export async function withTempTmuxSession<T>(fn: (fixture: TempTmuxSessionFixtur
   }
 
   const fixtureCwd = await mkdtemp(join(tmpdir(), 'omx-tmux-fixture-'));
-  const sessionName = uniqueSessionName();
+  const sessionName = uniqueTmuxIdentifier('omx-test');
+  const serverName = uniqueTmuxIdentifier('omx-fixture');
+  const tmuxOptions = { ignoreTmuxEnv: true, serverName } as const;
   const created = runTmux([
     'new-session',
     '-d',
@@ -59,17 +82,17 @@ export async function withTempTmuxSession<T>(fn: (fixture: TempTmuxSessionFixtur
     '-c',
     fixtureCwd,
     'sleep 300',
-  ], { ignoreTmuxEnv: true });
+  ], tmuxOptions);
   const [windowTarget = '', leaderPaneId = ''] = created.split(/\s+/, 2);
   if (windowTarget === '' || leaderPaneId === '') {
     try {
-      runTmux(['kill-session', '-t', sessionName], { ignoreTmuxEnv: true });
+      runTmux(['kill-server'], tmuxOptions);
     } catch {}
     await rm(fixtureCwd, { recursive: true, force: true });
     throw new Error(`failed to create temporary tmux fixture: ${created}`);
   }
 
-  const socketPath = runTmux(['display-message', '-p', '-t', leaderPaneId, '#{socket_path}'], { ignoreTmuxEnv: true });
+  const socketPath = runTmux(['display-message', '-p', '-t', leaderPaneId, '#{socket_path}'], tmuxOptions);
   const previousTmux = process.env.TMUX;
   const previousTmuxPane = process.env.TMUX_PANE;
   process.env.TMUX = `${socketPath},${process.pid},0`;
@@ -77,20 +100,22 @@ export async function withTempTmuxSession<T>(fn: (fixture: TempTmuxSessionFixtur
 
   const fixture: TempTmuxSessionFixture = {
     sessionName,
+    serverName,
     windowTarget,
     leaderPaneId,
+    socketPath,
     env: {
       TMUX: process.env.TMUX,
       TMUX_PANE: leaderPaneId,
     },
-    sessionExists: () => tmuxSessionExists(sessionName),
+    sessionExists: () => tmuxSessionExists(sessionName, serverName),
   };
 
   try {
     return await fn(fixture);
   } finally {
     try {
-      runTmux(['kill-session', '-t', sessionName], { ignoreTmuxEnv: true });
+      runTmux(['kill-server'], tmuxOptions);
     } catch {}
     if (typeof previousTmux === 'string') process.env.TMUX = previousTmux;
     else delete process.env.TMUX;

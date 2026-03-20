@@ -23,75 +23,132 @@ import {
   pickActiveMode,
   evaluateInjectionGuards,
   buildSendKeysArgv,
+  resolveCodexPane,
 } from '../tmux-hook-engine.js';
 
-export async function resolveSessionToPane(sessionName: any): Promise<string | null> {
-  const result = await runProcess('tmux', ['list-panes', '-t', sessionName, '-F', '#{pane_id} #{pane_active}']);
-  const lines = result.stdout
-    .split('\n')
-    .map((line: string) => line.trim())
-    .filter(Boolean);
-  if (lines.length === 0) return null;
-  const active = lines.find((line: string) => line.endsWith(' 1')) || lines[0];
-  const paneId = active.split(' ')[0];
-  return paneId || null;
+function isHudPaneStartCommand(startCommand: any): boolean {
+  return /\bomx\b.*\bhud\b.*--watch/i.test(safeString(startCommand));
 }
 
-export async function resolvePaneByCwd(expectedCwd: any): Promise<any> {
+async function resolvePaneCwdMismatch(paneId: string, expectedCwd: any): Promise<any | null> {
   if (!expectedCwd) return null;
-  const result = await runProcess('tmux', ['list-panes', '-a', '-F', '#{pane_id}\t#{pane_current_path}\t#{pane_active}\t#{session_name}']);
-  const lines = result.stdout
+  try {
+    const paneCwdResult = await runProcess('tmux', ['display-message', '-p', '-t', paneId, '#{pane_current_path}']);
+    const paneCwd = safeString(paneCwdResult.stdout).trim();
+    if (paneCwd && resolvePath(paneCwd) !== resolvePath(expectedCwd)) {
+      return {
+        paneTarget: null,
+        reason: 'pane_cwd_mismatch',
+        pane_cwd: paneCwd,
+        expected_cwd: expectedCwd,
+      };
+    }
+  } catch {
+    // Best effort only — if tmux cannot report cwd, keep the explicit pane target.
+  }
+  return null;
+}
+
+async function finalizeResolvedPane(paneId: string, reason: string, expectedCwd: any): Promise<any> {
+  const cwdMismatch = await resolvePaneCwdMismatch(paneId, expectedCwd);
+  if (cwdMismatch) return cwdMismatch;
+  let sessionName = '';
+  try {
+    const currentSession = await runProcess('tmux', ['display-message', '-p', '-t', paneId, '#S']);
+    sessionName = safeString(currentSession.stdout).trim();
+  } catch {
+    sessionName = '';
+  }
+  return {
+    paneTarget: paneId,
+    reason,
+    matched_session: sessionName || null,
+  };
+}
+
+async function resolveCanonicalPaneFromPaneTarget(paneTarget: any, expectedCwd: any): Promise<any> {
+  const paneResult = await runProcess('tmux', ['display-message', '-p', '-t', paneTarget, '#{pane_id}']);
+  const paneId = safeString(paneResult.stdout).trim();
+  if (!paneId) return { paneTarget: null, reason: 'target_not_found' };
+
+  let startCommand = '';
+  try {
+    const startResult = await runProcess('tmux', ['display-message', '-p', '-t', paneId, '#{pane_start_command}']);
+    startCommand = safeString(startResult.stdout).trim();
+  } catch {
+    startCommand = '';
+  }
+  if (!startCommand || !isHudPaneStartCommand(startCommand)) {
+    return finalizeResolvedPane(paneId, 'ok', expectedCwd);
+  }
+
+  let sessionName = '';
+  try {
+    const sessionResult = await runProcess('tmux', ['display-message', '-p', '-t', paneId, '#S']);
+    sessionName = safeString(sessionResult.stdout).trim();
+  } catch {
+    sessionName = '';
+  }
+  if (!sessionName) return { paneTarget: null, reason: 'target_is_hud_pane' };
+
+  const healedPaneId = await resolveSessionToPane(sessionName);
+  if (!healedPaneId) return { paneTarget: null, reason: 'target_is_hud_pane' };
+  return finalizeResolvedPane(healedPaneId, 'healed_hud_pane_target', expectedCwd);
+}
+
+export async function resolveSessionToPane(sessionName: any): Promise<string | null> {
+  const result = await runProcess('tmux', ['list-panes', '-t', sessionName, '-F', '#{pane_id}\t#{pane_active}\t#{pane_current_command}\t#{pane_start_command}']);
+  const rows = result.stdout
     .split('\n')
     .map((line: string) => line.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((line: string) => {
+      const parts = line.includes('\t')
+        ? line.split('\t')
+        : line.split(/\s+/, 4);
+      const [paneId = '', activeRaw = '0', currentCommand = '', startCommand = ''] = parts;
+      return {
+        paneId,
+        active: activeRaw === '1',
+        currentCommand: safeString(currentCommand).trim().toLowerCase(),
+        startCommand: safeString(startCommand).trim(),
+      };
+    })
+    .filter((row: any) => row.paneId.startsWith('%'));
+  if (rows.length === 0) return null;
 
-  const expected = resolvePath(expectedCwd);
-  const candidates: any[] = [];
-  for (const line of lines) {
-    const parts = line.split('\t');
-    if (parts.length < 4) continue;
-    const [paneId, paneCwd, activeRaw, sessionName] = parts;
-    if (!paneId || !paneCwd) continue;
-    if (resolvePath(paneCwd) !== expected) continue;
-    const active = activeRaw === '1';
-    candidates.push({ paneId, paneCwd, active, sessionName: sessionName || null });
-  }
-  if (candidates.length === 0) return null;
+  const nonHudRows = rows.filter((row: any) => !isHudPaneStartCommand(row.startCommand));
+  const canonicalRows = nonHudRows.filter((row: any) => /\bcodex\b/i.test(row.startCommand));
+  const activeCanonical = canonicalRows.find((row: any) => row.active);
+  if (activeCanonical) return activeCanonical.paneId;
+  if (canonicalRows[0]) return canonicalRows[0].paneId;
 
-  const pick = candidates.find((c: any) => c.active) || candidates[0];
-  return pick;
+  const activeNonHud = nonHudRows.find((row: any) => row.active);
+  if (activeNonHud) return activeNonHud.paneId;
+  return nonHudRows[0]?.paneId || null;
 }
 
 export async function resolvePaneTarget(target: any, fallbackPane: any, expectedCwd: any, modePane: any): Promise<any> {
+  const canonicalFallbackPane = safeString(fallbackPane).trim();
+  if (canonicalFallbackPane) {
+    try {
+      return await finalizeResolvedPane(canonicalFallbackPane, 'fallback_current_pane', expectedCwd);
+    } catch {
+      // Fall through to mode/config probes
+    }
+  }
+
   if (modePane) {
     try {
-      const modePaneResult = await runProcess('tmux', ['display-message', '-p', '-t', modePane, '#{pane_id}']);
-      const paneId = safeString(modePaneResult.stdout).trim();
-      if (paneId) {
-        if (expectedCwd) {
-          const paneCwdResult = await runProcess('tmux', ['display-message', '-p', '-t', paneId, '#{pane_current_path}']);
-          const paneCwd = safeString(paneCwdResult.stdout).trim();
-          if (!paneCwd || resolvePath(paneCwd) === resolvePath(expectedCwd)) {
-            const currentSession = await runProcess('tmux', ['display-message', '-p', '-t', paneId, '#S']);
-            const sessionName = safeString(currentSession.stdout).trim();
-            return {
-              paneTarget: paneId,
-              reason: 'fallback_mode_state_pane',
-              matched_session: sessionName || null,
-            };
-          }
-        } else {
-          const currentSession = await runProcess('tmux', ['display-message', '-p', '-t', paneId, '#S']);
-          const sessionName = safeString(currentSession.stdout).trim();
-          return {
-            paneTarget: paneId,
-            reason: 'fallback_mode_state_pane',
-            matched_session: sessionName || null,
-          };
-        }
+      const resolved = await resolveCanonicalPaneFromPaneTarget(modePane, expectedCwd);
+      if (resolved.paneTarget) {
+        return {
+          ...resolved,
+          reason: resolved.reason === 'ok' ? 'fallback_mode_state_pane' : resolved.reason,
+        };
       }
     } catch {
-      // Fall through to config/fallback probes
+      // Fall through to config probes
     }
   }
 
@@ -99,63 +156,18 @@ export async function resolvePaneTarget(target: any, fallbackPane: any, expected
 
   if (target.type === 'pane') {
     try {
-      const result = await runProcess('tmux', ['display-message', '-p', '-t', target.value, '#{pane_id}']);
-      const paneId = safeString(result.stdout).trim();
-      if (paneId) return { paneTarget: paneId, reason: 'ok' };
+      const resolved = await resolveCanonicalPaneFromPaneTarget(target.value, expectedCwd);
+      if (resolved.paneTarget) return resolved;
     } catch {
-      // Fall through to fallback probe
+      // Fall through
     }
   } else {
     try {
       const paneId = await resolveSessionToPane(target.value);
-      if (paneId) return { paneTarget: paneId, reason: 'ok' };
-    } catch {
-      // Fall through to fallback probe
-    }
-  }
-
-  if (fallbackPane) {
-    try {
-      const currentPane = await runProcess('tmux', ['display-message', '-p', '-t', fallbackPane, '#{pane_id}']);
-      const paneId = safeString(currentPane.stdout).trim();
-      if (paneId) {
-        if (expectedCwd) {
-          const paneCwdResult = await runProcess('tmux', ['display-message', '-p', '-t', paneId, '#{pane_current_path}']);
-          const paneCwd = safeString(paneCwdResult.stdout).trim();
-          if (paneCwd && resolvePath(paneCwd) !== resolvePath(expectedCwd)) {
-            return {
-              paneTarget: null,
-              reason: 'pane_cwd_mismatch',
-              pane_cwd: paneCwd,
-              expected_cwd: expectedCwd,
-            };
-          }
-        }
-
-        const currentSession = await runProcess('tmux', ['display-message', '-p', '-t', paneId, '#S']);
-        const sessionName = safeString(currentSession.stdout).trim();
-        return {
-          paneTarget: paneId,
-          reason: 'fallback_current_pane',
-          matched_session: sessionName || null,
-        };
-      }
+      if (paneId) return await finalizeResolvedPane(paneId, 'ok', expectedCwd);
     } catch {
       // Fall through
     }
-  }
-
-  try {
-    const match = await resolvePaneByCwd(expectedCwd);
-    if (match && match.paneId) {
-      return {
-        paneTarget: match.paneId,
-        reason: 'fallback_pane_by_cwd',
-        matched_session: match.sessionName,
-      };
-    }
-  } catch {
-    // Fall through
   }
 
   return { paneTarget: null, reason: 'target_not_found' };
@@ -268,8 +280,7 @@ export async function handleTmuxInjection({
     turnId,
     timestamp: nowIso,
   }), sourceText);
-  const { resolveCodexPane } = await import('../tmux-hook-engine.js');
-  const fallbackPane = resolveCodexPane() || safeString(process.env.TMUX_PANE || '');
+  const fallbackPane = resolveCodexPane();
   const resolution = await resolvePaneTarget(config.target, fallbackPane, cwd, modePane);
   if (!resolution.paneTarget) {
     state.last_reason = resolution.reason;
@@ -307,8 +318,8 @@ export async function handleTmuxInjection({
     return;
   }
 
-  // Pane-canonical healing: persist resolved pane target so routing stops depending on session names.
-  if (config.target && config.target.type !== 'pane') {
+  // Pane-canonical healing: persist resolved pane target so routing stops depending on session names or stale pane ids.
+  if (config.target && (config.target.type !== 'pane' || safeString(config.target.value).trim() !== paneTarget)) {
     try {
       const healed = {
         ...(rawConfig && typeof rawConfig === 'object' ? rawConfig : {}),

@@ -95,6 +95,8 @@ jobs:
             dist/cli/__tests__/sparkshell-cli.test.js \
             dist/hooks/__tests__/explore-routing.test.js \
             dist/hooks/__tests__/explore-sparkshell-guidance-contract.test.js \
+            dist/scripts/__tests__/smoke-packed-install.test.js \
+            dist/verification/__tests__/explore-harness-release-workflow.test.js \
             dist/compat/__tests__/*.test.js
 
   coverage-team-critical:

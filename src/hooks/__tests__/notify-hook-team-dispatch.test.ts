@@ -63,7 +63,15 @@ if [[ "$cmd" == "display-message" ]]; then
     exit 0
   fi
   if [[ "$fmt" == "#{pane_current_path}" ]]; then
-    pwd
+    dirname "${tmuxLogPath}"
+    exit 0
+  fi
+  if [[ "$fmt" == "#{pane_start_command}" ]]; then
+    echo "codex"
+    exit 0
+  fi
+  if [[ "$fmt" == "#{pane_current_command}" ]]; then
+    echo "codex"
     exit 0
   fi
   if [[ "$fmt" == "#S" ]]; then
@@ -272,6 +280,122 @@ describe('notify-hook team dispatch consumer', () => {
     } finally {
       if (typeof prevPath === 'string') process.env.PATH = prevPath;
       else delete process.env.PATH;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('leader-fixed dispatch prefers the canonical codex pane over a stale HUD leader pane id', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
+    const fakeBinDir = join(cwd, 'fake-bin');
+    const tmuxLogPath = join(cwd, 'tmux.log');
+    const prevPath = process.env.PATH;
+    const prevTmuxPane = process.env.TMUX_PANE;
+    try {
+      await mkdir(fakeBinDir, { recursive: true });
+      const fakeTmux = `#!/usr/bin/env bash
+set -eu
+echo "$@" >> "${tmuxLogPath}"
+cmd="$1"
+shift || true
+if [[ "$cmd" == "capture-pane" ]]; then
+  printf "› ready\\n"
+  exit 0
+fi
+if [[ "$cmd" == "display-message" ]]; then
+  target=""
+  fmt=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      -t)
+        shift
+        target="$1"
+        ;;
+      *)
+        fmt="$1"
+        ;;
+    esac
+    shift || true
+  done
+  if [[ "$fmt" == "#{pane_in_mode}" ]]; then
+    echo "0"
+    exit 0
+  fi
+  if [[ "$fmt" == "#{pane_id}" ]]; then
+    echo "\${target:-%42}"
+    exit 0
+  fi
+  if [[ "$fmt" == "#{pane_current_path}" ]]; then
+    dirname "${tmuxLogPath}"
+    exit 0
+  fi
+  if [[ "$fmt" == "#S" ]]; then
+    echo "devsess"
+    exit 0
+  fi
+  if [[ "$fmt" == "#{pane_current_command}" && "$target" == "%42" ]]; then
+    echo "node"
+    exit 0
+  fi
+  if [[ "$fmt" == "#{pane_start_command}" && "$target" == "%91" ]]; then
+    echo "node dist/cli/omx.js hud --watch"
+    exit 0
+  fi
+  if [[ "$fmt" == "#{pane_start_command}" && "$target" == "%42" ]]; then
+    echo "codex"
+    exit 0
+  fi
+  if [[ "$fmt" == "#{pane_current_command}" && "$target" == "%99" ]]; then
+    echo "codex"
+    exit 0
+  fi
+  if [[ "$fmt" == "#{pane_current_command}" && "$target" == "%42" ]]; then
+    echo "codex"
+    exit 0
+  fi
+  exit 0
+fi
+if [[ "$cmd" == "send-keys" ]]; then
+  exit 0
+fi
+if [[ "$cmd" == "list-panes" ]]; then
+  printf "%%42\\t1\\tnode\\tcodex\\n%%91\\t0\\tnode\\tnode dist/cli/omx.js hud --watch\\n"
+  exit 0
+fi
+exit 0
+`;
+      await writeFile(join(fakeBinDir, 'tmux'), fakeTmux);
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+      process.env.PATH = `${fakeBinDir}:${prevPath || ''}`;
+      process.env.TMUX_PANE = '%42';
+
+      await initTeamState('alpha', 'task', 'executor', 1, cwd);
+      const cfg = await readTeamConfig('alpha', cwd);
+      assert.ok(cfg);
+      if (!cfg) throw new Error('missing team config');
+      cfg.leader_pane_id = '%91';
+      await saveTeamConfig(cfg, cwd);
+
+      const msg = await sendDirectMessage('alpha', 'worker-1', 'leader-fixed', 'hello leader', cwd);
+      await enqueueDispatchRequest('alpha', {
+        kind: 'mailbox',
+        to_worker: 'leader-fixed',
+        message_id: msg.message_id,
+        trigger_message: 'Read .omx/state/team/alpha/mailbox/leader-fixed.json; worker-1 sent a new message. Review it and decide the next concrete step.',
+      }, cwd);
+
+      const modulePath = new URL('../../../dist/scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
+      const mod = await import(pathToFileURL(modulePath).href);
+      const result = await mod.drainPendingTeamDispatch({ cwd, maxPerTick: 5 });
+      assert.equal(result.processed, 1);
+
+      const tmuxLog = await readFile(tmuxLogPath, 'utf8');
+      assert.match(tmuxLog, /send-keys -t %42/);
+      assert.doesNotMatch(tmuxLog, /send-keys -t %91/);
+    } finally {
+      if (typeof prevPath === 'string') process.env.PATH = prevPath;
+      else delete process.env.PATH;
+      if (typeof prevTmuxPane === 'string') process.env.TMUX_PANE = prevTmuxPane;
+      else delete process.env.TMUX_PANE;
       await rm(cwd, { recursive: true, force: true });
     }
   });

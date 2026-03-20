@@ -208,6 +208,63 @@ describe('createHookPluginSdk', () => {
       }
     });
 
+
+    it('prefers non-HUD codex pane when targeting a tmux session', async () => {
+      const cwd = await mkdtemp(join(tmpdir(), 'omx-sdk-'));
+      const fakeBinDir = await mkdtemp(join(tmpdir(), 'omx-sdk-bin-'));
+      const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const previousPath = process.env.PATH;
+      try {
+        await writeFile(fakeTmuxPath, `#!/usr/bin/env bash
+set -eu
+cmd="$1"
+shift || true
+if [[ "$cmd" == "list-panes" ]]; then
+  printf "%%2	1	node /pkg/dist/cli/omx.js hud --watch
+%%42	0	codex --model gpt-5
+"
+  exit 0
+fi
+if [[ "$cmd" == "send-keys" ]]; then
+  exit 0
+fi
+if [[ "$cmd" == "display-message" ]]; then
+  target=""
+  format=""
+  while (($#)); do
+    case "$1" in
+      -p) shift ;;
+      -t) target="$2"; shift 2 ;;
+      *) format="$1"; shift ;;
+    esac
+  done
+  if [[ "$format" == "#{pane_id}" ]]; then
+    echo "$target"
+    exit 0
+  fi
+  exit 0
+fi
+exit 1
+`);
+        await import('node:fs/promises').then((fs) => fs.chmod(fakeTmuxPath, 0o755));
+        process.env.PATH = `${fakeBinDir}:${previousPath || ''}`;
+
+        const sdk = createHookPluginSdk({
+          cwd,
+          pluginName: 'test',
+          event: makeEvent(),
+          sideEffectsEnabled: true,
+        });
+        const result = await sdk.tmux.sendKeys({ text: 'hello', sessionName: 'devsess' });
+        assert.equal(result.ok, true);
+        assert.equal(result.target, '%42');
+      } finally {
+        if (typeof previousPath === 'string') process.env.PATH = previousPath;
+        else delete process.env.PATH;
+        await rm(cwd, { recursive: true, force: true });
+        await rm(fakeBinDir, { recursive: true, force: true });
+      }
+    });
     it('returns target_missing when no pane is resolvable', async () => {
       const cwd = await mkdtemp(join(tmpdir(), 'omx-sdk-'));
       const originalPane = process.env.TMUX_PANE;
