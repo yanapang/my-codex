@@ -4,6 +4,23 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-03-20
+
+5 PRs landed since `v0.11.0`. Contributors: [@Yeachan-Heo](https://github.com/Yeachan-Heo).
+
+### Fixed
+- **Pane detection regression** — auto-nudge fixtures aligned with canonical pane routing, preventing hook nudges from landing in the HUD pane. (PR [#981](https://github.com/Yeachan-Heo/oh-my-codex/pull/981))
+- **Live session interference in tests** — tmux/session discovery is now isolated from live maintainer state. (PR [#979](https://github.com/Yeachan-Heo/oh-my-codex/pull/979), closes [#963](https://github.com/Yeachan-Heo/oh-my-codex/issues/963))
+- **Packed install strict allowlist** — explore harness now fails fast for non-rg allowlist misses while keeping packed installs alive without requiring ripgrep. (PR [#978](https://github.com/Yeachan-Heo/oh-my-codex/pull/978), closes [#964](https://github.com/Yeachan-Heo/oh-my-codex/issues/964))
+- **Release smoke focus** — smoke tests now focus on boot-safe packed installs. (PR [#983](https://github.com/Yeachan-Heo/oh-my-codex/pull/983), closes [#982](https://github.com/Yeachan-Heo/oh-my-codex/issues/982))
+
+### Changed
+- **CI workflow cleanup** — streamlined release smoke tests and reduced external tool dependencies in test environments.
+
+## [0.11.0] - 2026-03-19
+
+Version bump for release.
+
 ## [0.10.3] - 2026-03-18
 
 46 commits across 21 PRs from `v0.10.2..dev`. Contributors: [@Yeachan-Heo](https://github.com/Yeachan-Heo), [@lifrary](https://github.com/lifrary) (SEUNGWOO LEE).
