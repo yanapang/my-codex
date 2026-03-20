@@ -45,6 +45,11 @@ describe('hooksCommand', () => {
     assert.match(logs.join('\n'), /Plugins are enabled by default\. Disable with OMX_HOOK_PLUGINS=0\./);
   });
 
+  it('reports init output with the same enabled-by-default wording', async () => {
+    const logs = await captureHooksCommand(['init'], {});
+    assert.match(logs.join('\n'), /Plugins are enabled by default\. Disable with OMX_HOOK_PLUGINS=0\./);
+  });
+
   it('reports status as disabled only when OMX_HOOK_PLUGINS=0', async () => {
     const enabledLogs = await captureHooksCommand(['status'], {});
     assert.match(enabledLogs.join('\n'), /Plugins enabled: yes/);

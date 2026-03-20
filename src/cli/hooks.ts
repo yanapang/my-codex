@@ -100,7 +100,7 @@ async function initHooks(): Promise<void> {
 
   await writeFile(samplePath, SAMPLE_PLUGIN);
   console.log(`Created ${samplePath}`);
-  console.log('Plugins are enabled by default. Disable with: OMX_HOOK_PLUGINS=0');
+  console.log('Plugins are enabled by default. Disable with OMX_HOOK_PLUGINS=0.');
 }
 
 async function statusHooks(): Promise<void> {
