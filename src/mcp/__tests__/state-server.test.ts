@@ -49,6 +49,14 @@ if [[ "$cmd" == "display-message" ]]; then
       *) format="$1"; shift ;;
     esac
   done
+  if [[ -z "$target" && "$format" == "#{pane_id}" ]]; then
+    echo "%777"
+    exit 0
+  fi
+  if [[ -z "$target" && "$format" == "#S" ]]; then
+    echo "maintainer-default"
+    exit 0
+  fi
   if [[ "$target" == "%777" && "$format" == "#{pane_id}" ]]; then
     echo "%777"
     exit 0
@@ -57,6 +65,10 @@ if [[ "$cmd" == "display-message" ]]; then
     echo "maintainer-default"
     exit 0
   fi
+fi
+if [[ "$cmd" == "list-sessions" ]]; then
+  echo "maintainer-default"
+  exit 0
 fi
 exit 1
 `,
