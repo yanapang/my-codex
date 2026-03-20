@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import { readModeState } from '../modes/base.js';
-import { shutdownTeam } from './runtime.js';
+import { sendWorkerMessage, shutdownTeam } from './runtime.js';
 import {
   TEAM_NAME_SAFE_PATTERN,
   WORKER_NAME_SAFE_PATTERN,
@@ -14,8 +14,9 @@ import {
   type TeamTaskApprovalStatus,
 } from './contracts.js';
 import { readTeamEvents, waitForTeamEvent } from './state/events.js';
+import { queueDirectMailboxMessage } from './mcp-comm.js';
+import { generateLeaderMailboxTriggerMessage, generateMailboxTriggerMessage } from './worker-bootstrap.js';
 import {
-  teamSendMessage as sendDirectMessage,
   teamBroadcast as broadcastMessage,
   teamListMailbox as listMailboxMessages,
   teamMarkMessageDelivered as markMessageDelivered,
@@ -527,8 +528,58 @@ export async function executeTeamApiOperation(
         if (!teamName || !toWorker || !body) {
           return { ok: false, operation, error: { code: 'invalid_input', message: 'team_name, from_worker, to_worker, body are required' } };
         }
-        const message = await sendDirectMessage(teamName, fromWorker, toWorker, body, cwd);
-        return { ok: true, operation, data: { message } };
+
+        const config = await teamReadConfig(teamName, cwd);
+        if (!config) {
+          return { ok: false, operation, error: { code: 'team_not_found', message: `Team ${teamName} not found` } };
+        }
+
+        const recipient = toWorker === 'leader-fixed'
+          ? null
+          : config.workers.find((worker) => worker.name === toWorker) ?? null;
+        if (toWorker !== 'leader-fixed' && !recipient) {
+          return { ok: false, operation, error: { code: 'worker_not_found', message: `Worker ${toWorker} not found in team ${teamName}` } };
+        }
+
+        const triggerMessage = toWorker === 'leader-fixed'
+          ? generateLeaderMailboxTriggerMessage(teamName, fromWorker)
+          : generateMailboxTriggerMessage(toWorker, teamName, 1);
+
+        const livePaneId = toWorker === 'leader-fixed'
+          ? config.leader_pane_id ?? undefined
+          : recipient?.pane_id;
+        const hasLiveTmuxTarget = typeof livePaneId === 'string' && livePaneId.trim().length > 0;
+
+        const beforeMessages = await listMailboxMessages(teamName, toWorker, cwd);
+        const beforeIds = new Set(beforeMessages.map((message) => message.message_id));
+
+        const outcome = hasLiveTmuxTarget
+          ? (await (async () => {
+            await sendWorkerMessage(teamName, fromWorker, toWorker, body, cwd);
+            return { ok: true, transport: 'hook', reason: 'api_send_message_via_runtime', message_id: '' };
+          })())
+          : await queueDirectMailboxMessage({
+            teamName,
+            fromWorker,
+            toWorker,
+            toWorkerIndex: recipient?.index,
+            toPaneId: livePaneId,
+            body,
+            triggerMessage,
+            cwd,
+            transportPreference: 'hook_preferred_with_fallback',
+            fallbackAllowed: true,
+            notify: async () => ({ ok: true, transport: 'hook', reason: 'queued_for_hook_dispatch' }),
+          });
+
+        const messages = await listMailboxMessages(teamName, toWorker, cwd);
+        const matching = outcome.message_id
+          ? messages.find((message) => message.message_id === outcome.message_id)
+          : [...messages].reverse().find((message) => !beforeIds.has(message.message_id) && message.from_worker === fromWorker && message.body === body);
+        if (!matching) {
+          throw new Error(`send-message could not locate persisted mailbox message for ${fromWorker} -> ${toWorker}`);
+        }
+        return { ok: true, operation, data: { message: matching, dispatch: outcome } };
       }
       case 'broadcast': {
         const teamName = String(args.team_name || '').trim();

@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.11.3] - 2026-03-20
+
+Hotfix release for team worker delivery regressions.
+
+### Fixed
+- **Packaged watcher entrypoint resolution** — team fallback watcher startup and one-shot flush paths now resolve shipped `dist/scripts/*.js` entrypoints instead of nonexistent top-level `scripts/*.js`, restoring worker message delivery and state-change delivery in packed installs.
+- **CI smoke coverage for packaged watcher paths** — smoke CI now exercises the packaged watcher path-resolution contract so future release builds catch this class of regression before shipping.
+
 ## [0.11.2] - 2026-03-20
 
 6 PRs landed since `v0.11.1`. Contributors: [@Yeachan-Heo](https://github.com/Yeachan-Heo).

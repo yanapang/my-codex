@@ -156,15 +156,17 @@ SEND_INPUT="$(jq -nc \
 omx team api send-message --input "$SEND_INPUT" --json >/dev/null
 MAILBOX_INPUT="$(jq -nc --arg team "$TEAM_NAME" '{team_name:$team,worker:"worker-1"}')"
 MAILBOX_JSON="$(omx team api mailbox-list --input "$MAILBOX_INPUT" --json)"
-MESSAGE_ID="$(echo "$MAILBOX_JSON" | jq -r '.data.messages[0].id // empty')"
-if [[ -n "$MESSAGE_ID" ]]; then
-  MARK_INPUT="$(jq -nc \
-    --arg team "$TEAM_NAME" \
-    --arg id "$MESSAGE_ID" \
-    '{team_name:$team,worker:"worker-1",message_id:$id}')"
-  omx team api mailbox-mark-notified --input "$MARK_INPUT" --json >/dev/null
-  omx team api mailbox-mark-delivered --input "$MARK_INPUT" --json >/dev/null
+MESSAGE_ID="$(echo "$MAILBOX_JSON" | jq -r '.data.messages[0].message_id // empty')"
+if [[ -z "$MESSAGE_ID" ]]; then
+  echo "error: failed to parse mailbox message_id from mailbox-list response" >&2
+  exit 1
 fi
+MARK_INPUT="$(jq -nc \
+  --arg team "$TEAM_NAME" \
+  --arg id "$MESSAGE_ID" \
+  '{team_name:$team,worker:"worker-1",message_id:$id}')"
+omx team api mailbox-mark-notified --input "$MARK_INPUT" --json >/dev/null
+omx team api mailbox-mark-delivered --input "$MARK_INPUT" --json >/dev/null
 
 echo "[7/8] summary envelope check"
 SUMMARY_INPUT="$(jq -nc --arg team "$TEAM_NAME" '{team_name:$team}')"

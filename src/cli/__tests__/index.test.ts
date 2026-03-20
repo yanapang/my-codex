@@ -33,6 +33,9 @@ import {
   resolveNotifyTempContract,
   buildNotifyTempStartupMessages,
   buildNotifyFallbackWatcherEnv,
+  resolveNotifyFallbackWatcherScript,
+  resolveHookDerivedWatcherScript,
+  resolveNotifyHookScript,
 } from "../index.js";
 import { HUD_TMUX_HEIGHT_LINES } from "../../hud/constants.js";
 import {
@@ -231,6 +234,23 @@ describe("resolveNotifyTempContract", () => {
     assert.equal(parsed.contract.active, true);
     assert.equal(parsed.contract.source, "env");
     assert.deepEqual(parsed.passthroughArgs, ["--model", "gpt-5"]);
+  });
+});
+
+describe("watcher script path resolution", () => {
+  it("resolves packaged watcher entrypoints from dist/scripts", () => {
+    assert.equal(
+      resolveNotifyFallbackWatcherScript("/pkg"),
+      "/pkg/dist/scripts/notify-fallback-watcher.js",
+    );
+    assert.equal(
+      resolveHookDerivedWatcherScript("/pkg"),
+      "/pkg/dist/scripts/hook-derived-watcher.js",
+    );
+    assert.equal(
+      resolveNotifyHookScript("/pkg"),
+      "/pkg/dist/scripts/notify-hook.js",
+    );
   });
 });
 

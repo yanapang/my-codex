@@ -90,6 +90,7 @@ jobs:
         run: |
           npm run build
           node --test \
+            dist/cli/__tests__/packaged-script-resolution.test.js \
             dist/cli/__tests__/package-bin-contract.test.js \
             dist/cli/__tests__/explore.test.js \
             dist/cli/__tests__/sparkshell-cli.test.js \
