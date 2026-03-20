@@ -1,6 +1,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractRalphTaskDescription, normalizeRalphCliArgs, filterRalphCodexArgs } from '../ralph.js';
+import {
+  buildRalphAppendInstructions,
+  buildRalphChangedFilesSeedContents,
+  extractRalphTaskDescription,
+  normalizeRalphCliArgs,
+  filterRalphCodexArgs,
+} from '../ralph.js';
 
 describe('extractRalphTaskDescription', () => {
   it('returns plain task text from positional args', () => {
@@ -38,5 +44,41 @@ describe('filterRalphCodexArgs', () => {
   });
   it('preserves non-omx flags', () => {
     assert.deepEqual(filterRalphCodexArgs(['--model', 'gpt-5', '--yolo', 'fix', 'it']), ['--model', 'gpt-5', '--yolo', 'fix', 'it']);
+  });
+});
+
+
+describe('ralph deslop launch wiring', () => {
+  it('consumes --no-deslop so it is not forwarded to codex', () => {
+    assert.deepEqual(filterRalphCodexArgs(['--no-deslop', '--model', 'gpt-5', 'fix', 'it']), ['--model', 'gpt-5', 'fix', 'it']);
+  });
+
+  it('documents changed-files-only deslop guidance by default', () => {
+    const instructions = buildRalphAppendInstructions('fix issue 920', {
+      changedFilesPath: '.omx/ralph/changed-files.txt',
+      noDeslop: false,
+    });
+    assert.match(instructions, /ai-slop-cleaner/i);
+    assert.match(instructions, /changed files only/i);
+    assert.match(instructions, /\.omx\/ralph\/changed-files\.txt/);
+    assert.match(instructions, /standard mode/i);
+    assert.match(instructions, /rerun the current tests\/build\/lint verification/i);
+  });
+
+  it('documents the --no-deslop opt-out when enabled', () => {
+    const instructions = buildRalphAppendInstructions('fix issue 920', {
+      changedFilesPath: '.omx/ralph/changed-files.txt',
+      noDeslop: true,
+    });
+    assert.match(instructions, /--no-deslop/);
+    assert.match(instructions, /skip the mandatory ai-slop-cleaner final pass/i);
+    assert.match(instructions, /latest successful pre-deslop verification evidence/i);
+  });
+
+  it('seeds the changed-files artifact with bounded-scope guidance', () => {
+    const seed = buildRalphChangedFilesSeedContents();
+    assert.match(seed, /mandatory final ai-slop-cleaner pass/i);
+    assert.match(seed, /one repo-relative path per line/i);
+    assert.match(seed, /strictly scoped/i);
   });
 });
