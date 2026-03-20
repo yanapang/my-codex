@@ -11,7 +11,7 @@ import { readJsonIfExists, getScopedStateDirsForCurrentSession } from './state-i
 import { runProcess } from './process-runner.js';
 import { logTmuxHookEvent } from './log.js';
 import { evaluatePaneInjectionReadiness, sendPaneInput } from './team-tmux-guard.js';
-import { DEFAULT_MARKER } from '../tmux-hook-engine.js';
+import { DEFAULT_MARKER, resolveCodexPane } from '../tmux-hook-engine.js';
 const LEADER_PANE_MISSING_NO_INJECTION_REASON = 'leader_pane_missing_no_injection';
 const LEADER_PANE_SHELL_NO_INJECTION_REASON = 'leader_pane_shell_no_injection';
 const LEADER_NOTIFICATION_DEFERRED_TYPE = 'leader_notification_deferred';
@@ -541,8 +541,9 @@ export async function maybeNudgeTeamLeader({ cwd, stateDir, logsDir, preComputed
     const workerPaneIds = Array.isArray(workers)
       ? workers.map((w) => safeString(w && w.pane_id ? w.pane_id : '')).filter(Boolean)
       : [];
-    if (!tmuxSession && !leaderPaneId) continue;
-    const tmuxTarget = leaderPaneId;
+    const canonicalLeaderPaneId = safeString(resolveCodexPane() || leaderPaneId).trim();
+    if (!tmuxSession && !canonicalLeaderPaneId) continue;
+    const tmuxTarget = canonicalLeaderPaneId;
     const paneStatus = tmuxSession
       ? await checkWorkerPanesAlive(tmuxSession, workerPaneIds)
       : { alive: false, paneCount: 0 };
