@@ -31,6 +31,7 @@ import {
   pruneStale,
 } from './session-registry.js';
 import { parseMentionAllowedMentions } from './config.js';
+import { parseTmuxTail } from './formatter.js';
 import type { ReplyConfig } from './types.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -63,6 +64,10 @@ const DEFAULT_REPLY_RATE_LIMIT_PER_MINUTE = 10;
 const MIN_REPLY_MAX_MESSAGE_LENGTH = 1;
 const MAX_REPLY_MAX_MESSAGE_LENGTH = 4_000;
 const DEFAULT_REPLY_MAX_MESSAGE_LENGTH = 500;
+const REPLY_ACK_CAPTURE_LINES = 200;
+const REPLY_ACK_SUMMARY_MAX_CHARS = 700;
+const REPLY_ACK_PREFIX = 'Injected into Codex CLI session.';
+const REPLY_ACK_FALLBACK = 'Recent output summary unavailable.';
 
 export interface ReplyListenerState {
   isRunning: boolean;
@@ -344,6 +349,39 @@ class RateLimiter {
 // Injection
 // ============================================================================
 
+interface ReplyAcknowledgementDeps {
+  capturePaneContentImpl?: typeof capturePaneContent;
+  parseTmuxTailImpl?: typeof parseTmuxTail;
+}
+
+export function captureReplyAcknowledgementSummary(
+  paneId: string,
+  deps: ReplyAcknowledgementDeps = {},
+): string | null {
+  const capturePaneContentImpl = deps.capturePaneContentImpl ?? capturePaneContent;
+  const parseTmuxTailImpl = deps.parseTmuxTailImpl ?? parseTmuxTail;
+  const raw = capturePaneContentImpl(paneId, REPLY_ACK_CAPTURE_LINES);
+  if (!raw) return null;
+
+  const summary = parseTmuxTailImpl(raw)
+    .replace(/\r/g, '')
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
+    .trim();
+
+  if (!summary) return null;
+  if (summary.length <= REPLY_ACK_SUMMARY_MAX_CHARS) return summary;
+
+  return `${summary.slice(0, REPLY_ACK_SUMMARY_MAX_CHARS - 1).trimEnd()}…`;
+}
+
+export function formatReplyAcknowledgement(summary: string | null): string {
+  if (!summary) {
+    return `${REPLY_ACK_PREFIX}\n\n${REPLY_ACK_FALLBACK}`;
+  }
+
+  return `${REPLY_ACK_PREFIX}\n\nRecent output:\n${summary}`;
+}
+
 function injectReply(
   paneId: string,
   text: string,
@@ -458,6 +496,9 @@ async function pollDiscord(
       const success = injectReply(mapping.tmuxPaneId, msg.content, 'discord', config);
       if (success) {
         state.messagesInjected++;
+        const acknowledgement = formatReplyAcknowledgement(
+          captureReplyAcknowledgementSummary(mapping.tmuxPaneId),
+        );
         // Add ✅ reaction to the user's reply
         try {
           await fetch(
@@ -486,7 +527,7 @@ async function pollDiscord(
                 'Content-Type': 'application/json',
               },
               body: JSON.stringify({
-                content: 'Injected into Codex CLI session.',
+                content: acknowledgement,
                 message_reference: { message_id: msg.id },
                 allowed_mentions: feedbackAllowedMentions,
               }),
@@ -607,10 +648,13 @@ async function pollTelegram(
       const success = injectReply(mapping.tmuxPaneId, text, 'telegram', config);
       if (success) {
         state.messagesInjected++;
+        const acknowledgement = formatReplyAcknowledgement(
+          captureReplyAcknowledgementSummary(mapping.tmuxPaneId),
+        );
         try {
           const replyBody = JSON.stringify({
             chat_id: config.telegramChatId,
-            text: 'Injected into Codex CLI session.',
+            text: acknowledgement,
             reply_to_message_id: msg.message_id,
           });
 
