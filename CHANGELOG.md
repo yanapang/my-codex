@@ -16,6 +16,7 @@ Hotfix release for stale leader nudge false-positives and README onboarding clar
 
 ## [0.11.4] - 2026-03-20
 
+
 Hotfix release for team worker delivery regressions.
 
 ### Fixed
