@@ -6,7 +6,7 @@ import { spawnSync } from 'child_process';
 import { dirname, join, resolve } from 'path';
 import { homedir } from 'os';
 import { drainPendingTeamDispatch } from './notify-hook/team-dispatch.js';
-import { maybeAutoNudge, resolveNudgePaneTarget } from './notify-hook/auto-nudge.js';
+import { maybeAutoNudge, resolveNudgePaneTarget, isDeepInterviewStateActive } from './notify-hook/auto-nudge.js';
 import { checkPaneReadyForTeamSendKeys } from './notify-hook/team-tmux-guard.js';
 import {
   isLeaderStale,
@@ -1083,6 +1083,8 @@ async function runDispatchDrainTick(): Promise<void> {
 
 async function pumpTeamControlPlaneTick(): Promise<void> {
   await runDispatchDrainTick();
+  const deepInterviewStateActive = await isDeepInterviewStateActive(stateDir);
+  if (deepInterviewStateActive) return;
   await runLeaderNudgeTick();
   await runFallbackAutoNudgeTick();
 }
@@ -1092,7 +1094,10 @@ async function runWatcherCycle(): Promise<void> {
   await ensureTrackedFiles();
   await pollFiles();
   await pumpTeamControlPlaneTick();
-  await runRalphWatcherBehaviorTick();
+  const deepInterviewStateActive = await isDeepInterviewStateActive(stateDir);
+  if (!deepInterviewStateActive) {
+    await runRalphWatcherBehaviorTick();
+  }
   await writeState();
 }
 

@@ -4,6 +4,23 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.11.8] - 2026-03-23
+
+Hotfix release for deep-interview nudge suppression and duplicate fresh-leader nudge prevention.
+
+### Fixed
+- **Deep-interview nudge suppression** — when deep-interview state is present, notify-hook and the fallback watcher now suppress leader nudges, worker-idle nudges, Ralph continue-steers, and auto-nudges so the interview can proceed without automated interruptions.
+- **Fresh leader dedupe hardening** — fallback watcher leader nudges now stay stale-only, while notify-hook regression coverage proves the same fresh mailbox message does not re-trigger repeated leader nudges.
+
+### Changed
+- **Release metadata sync** — Node and Cargo package metadata are bumped to `0.11.8` for this hotfix release.
+
+### Verified
+- `npm run build`
+- `node --test --test-reporter=spec dist/hooks/__tests__/notify-hook-auto-nudge.test.js`
+- `node --test --test-reporter=spec dist/hooks/__tests__/notify-hook-team-leader-nudge.test.js`
+- `node --test --test-reporter=spec dist/hooks/__tests__/notify-fallback-watcher.test.js`
+
 ## [0.11.7] - 2026-03-23
 
 Patch release for degraded-state auto-nudge recovery, tighter team control-plane correctness, and release metadata consistency across the `v0.11.6..dev` hotfix train.

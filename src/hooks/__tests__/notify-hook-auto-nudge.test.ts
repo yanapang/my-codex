@@ -778,6 +778,43 @@ exit 0
     });
   });
 
+
+  it('disables auto-nudge entirely when deep-interview mode state is active', async () => {
+    await withTempWorkingDir(async (cwd) => {
+      const omxDir = join(cwd, '.omx');
+      const stateDir = join(omxDir, 'state');
+      const logsDir = join(omxDir, 'logs');
+      const codexHome = join(cwd, 'codex-home');
+      const fakeBinDir = join(cwd, 'fake-bin');
+      const tmuxLogPath = join(cwd, 'tmux.log');
+
+      await mkdir(logsDir, { recursive: true });
+      await mkdir(stateDir, { recursive: true });
+      await mkdir(codexHome, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+
+      await writeJson(join(codexHome, '.omx-config.json'), {
+        autoNudge: { enabled: true, delaySec: 0 },
+      });
+      await writeJson(join(stateDir, 'deep-interview-state.json'), {
+        active: true,
+        mode: 'deep-interview',
+        current_phase: 'deep-interview',
+      });
+
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+
+      const result = runNotifyHook(cwd, fakeBinDir, codexHome, {
+        'last-assistant-message': 'Would you like me to continue?',
+      });
+      assert.equal(result.status, 0, `hook failed: ${result.stderr || result.stdout}`);
+
+      const tmuxLog = await readFile(tmuxLogPath, 'utf-8').catch(() => '');
+      assert.doesNotMatch(tmuxLog, /send-keys -t %99 -l yes, proceed \[OMX_TMUX_INJECT\]/);
+    });
+  });
+
   it('acquires the deep-interview input lock when deep-interview activates', async () => {
     await withTempWorkingDir(async (cwd) => {
       const omxDir = join(cwd, '.omx');

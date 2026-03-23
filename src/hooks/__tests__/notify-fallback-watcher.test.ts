@@ -358,6 +358,65 @@ describe('notify-fallback watcher', () => {
     }
   });
 
+
+  it('disables fallback watcher nudges when deep-interview state is active', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-deep-interview-suppressed-'));
+    const fakeBinDir = join(wd, 'fake-bin');
+    const tmuxLogPath = join(wd, 'tmux.log');
+    try {
+      await mkdir(join(wd, '.omx', 'logs'), { recursive: true });
+      await mkdir(join(wd, '.omx', 'state', 'team', 'dispatch-team'), { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+
+      await writeFile(join(wd, '.omx', 'state', 'deep-interview-state.json'), JSON.stringify({
+        active: true,
+        mode: 'deep-interview',
+        current_phase: 'deep-interview',
+      }, null, 2));
+      await writeFile(join(wd, '.omx', 'state', 'ralph-state.json'), JSON.stringify({
+        active: true,
+        current_phase: 'executing',
+        tmux_pane_id: '%42',
+      }, null, 2));
+      await writeFile(join(wd, '.omx', 'state', 'team-state.json'), JSON.stringify({
+        active: true,
+        team_name: 'dispatch-team',
+        current_phase: 'team-exec',
+      }, null, 2));
+      await writeFile(join(wd, '.omx', 'state', 'hud-state.json'), JSON.stringify({
+        last_turn_at: new Date(Date.now() - 300_000).toISOString(),
+        turn_count: 3,
+        last_agent_output: 'Would you like me to continue?',
+      }, null, 2));
+      await writeFile(join(wd, '.omx', 'state', 'team', 'dispatch-team', 'config.json'), JSON.stringify({
+        name: 'dispatch-team',
+        tmux_session: 'omx-team-dispatch-team',
+        leader_pane_id: '%42',
+      }, null, 2));
+
+      const watcherScript = new URL('../../../dist/scripts/notify-fallback-watcher.js', import.meta.url).pathname;
+      const notifyHook = new URL('../../../dist/scripts/notify-hook.js', import.meta.url).pathname;
+      const result = spawnSync(
+        process.execPath,
+        [watcherScript, '--once', '--cwd', wd, '--notify-script', notifyHook],
+        {
+          encoding: 'utf-8',
+          env: buildCleanNotifyEnv({ PATH: `${fakeBinDir}:${process.env.PATH || ''}` }),
+        },
+      );
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+
+      const tmuxLog = await readFile(tmuxLogPath, 'utf8').catch(() => '');
+      assert.doesNotMatch(tmuxLog, /Ralph loop active continue/);
+      assert.doesNotMatch(tmuxLog, /Team dispatch-team:/);
+      assert.doesNotMatch(tmuxLog, /yes, proceed \[OMX_TMUX_INJECT\]/);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it('runs leader nudge checks from the fallback watcher so stale alerts do not wait for a leader turn', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-leader-nudge-'));
     const fakeBinDir = join(wd, 'fake-bin');
