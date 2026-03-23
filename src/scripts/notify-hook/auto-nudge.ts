@@ -170,6 +170,12 @@ async function persistSkillActiveState(stateDir, state) {
   await writeFile(join(stateDir, SKILL_ACTIVE_STATE_FILE), JSON.stringify(state, null, 2)).catch(() => {});
 }
 
+
+export async function isDeepInterviewStateActive(stateDir) {
+  const modeState = await readJsonIfExists(join(stateDir, 'deep-interview-state.json'), null);
+  return Boolean(modeState && modeState.active === true);
+}
+
 function latestUserInputFromPayload(payload) {
   const inputMessages = payload['input-messages'] || payload.input_messages || [];
   if (!Array.isArray(inputMessages) || inputMessages.length === 0) return '';
