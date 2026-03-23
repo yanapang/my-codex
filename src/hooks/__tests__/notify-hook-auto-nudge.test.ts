@@ -117,6 +117,43 @@ function runNotifyHook(
 }
 
 describe('notify-hook auto-nudge', () => {
+
+  it('does not nudge immediately by default before a real stall window elapses', async () => {
+    await withTempWorkingDir(async (cwd) => {
+      const omxDir = join(cwd, '.omx');
+      const stateDir = join(omxDir, 'state');
+      const logsDir = join(omxDir, 'logs');
+      const codexHome = join(cwd, 'codex-home');
+      const fakeBinDir = join(cwd, 'fake-bin');
+      const tmuxLogPath = join(cwd, 'tmux.log');
+
+      await mkdir(logsDir, { recursive: true });
+      await mkdir(stateDir, { recursive: true });
+      await mkdir(codexHome, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+
+      await writeJson(join(codexHome, '.omx-config.json'), {
+        autoNudge: { enabled: true, delaySec: 0 },
+      });
+
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+
+      const result = runNotifyHook(cwd, fakeBinDir, codexHome, {
+        'last-assistant-message': 'I analyzed the code. If you want me to make these changes, let me know.',
+      });
+      assert.equal(result.status, 0, `hook failed: ${result.stderr || result.stdout}`);
+
+      const tmuxLog = await readFile(tmuxLogPath, 'utf-8').catch(() => '');
+      assert.doesNotMatch(tmuxLog, /send-keys -t %99 -l yes, proceed \[OMX_TMUX_INJECT\]/);
+
+      const nudgeState = JSON.parse(await readFile(join(stateDir, 'auto-nudge-state.json'), 'utf-8'));
+      assert.equal(nudgeState.nudgeCount, 0);
+      assert.ok(nudgeState.pendingSignature);
+      assert.ok(nudgeState.pendingSince);
+    });
+  });
+
   it('sends nudge when stall pattern detected in last-assistant-message', async () => {
     await withTempWorkingDir(async (cwd) => {
       const omxDir = join(cwd, '.omx');
@@ -133,7 +170,7 @@ describe('notify-hook auto-nudge', () => {
 
       // Config: enabled, delaySec=0 for fast tests
       await writeJson(join(codexHome, '.omx-config.json'), {
-        autoNudge: { enabled: true, delaySec: 0 },
+        autoNudge: { enabled: true, delaySec: 0, stallMs: 0 },
       });
 
       await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
@@ -169,7 +206,7 @@ describe('notify-hook auto-nudge', () => {
       await mkdir(fakeBinDir, { recursive: true });
 
       await writeJson(join(codexHome, '.omx-config.json'), {
-        autoNudge: { enabled: true, delaySec: 0 },
+        autoNudge: { enabled: true, delaySec: 0, stallMs: 0 },
       });
 
       // capture-pane will return content with a stall pattern
@@ -206,7 +243,7 @@ describe('notify-hook auto-nudge', () => {
       await mkdir(fakeBinDir, { recursive: true });
 
       await writeJson(join(codexHome, '.omx-config.json'), {
-        autoNudge: { enabled: true, delaySec: 0 },
+        autoNudge: { enabled: true, delaySec: 0, stallMs: 0 },
       });
 
       await writeJson(join(stateDir, 'ralph-state.json'), {
@@ -305,7 +342,7 @@ exit 0
       await mkdir(fakeBinDir, { recursive: true });
 
       await writeJson(join(codexHome, '.omx-config.json'), {
-        autoNudge: { enabled: true, delaySec: 0 },
+        autoNudge: { enabled: true, delaySec: 0, stallMs: 0 },
       });
 
       await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
@@ -342,7 +379,7 @@ exit 0
       await mkdir(fakeBinDir, { recursive: true });
 
       await writeJson(join(codexHome, '.omx-config.json'), {
-        autoNudge: { enabled: true, delaySec: 0 },
+        autoNudge: { enabled: true, delaySec: 0, stallMs: 0 },
       });
 
       await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
@@ -375,7 +412,7 @@ exit 0
       await mkdir(fakeBinDir, { recursive: true });
 
       await writeJson(join(codexHome, '.omx-config.json'), {
-        autoNudge: { enabled: true, delaySec: 0 },
+        autoNudge: { enabled: true, delaySec: 0, stallMs: 0 },
       });
 
       const fakeTmux = `#!/usr/bin/env bash
@@ -441,7 +478,7 @@ exit 0
       await mkdir(fakeBinDir, { recursive: true });
 
       await writeJson(join(codexHome, '.omx-config.json'), {
-        autoNudge: { enabled: true, delaySec: 0 },
+        autoNudge: { enabled: true, delaySec: 0, stallMs: 0 },
       });
 
       const fakeTmux = `#!/usr/bin/env bash
@@ -539,7 +576,7 @@ exit 0
       await mkdir(fakeBinDir, { recursive: true });
 
       await writeJson(join(codexHome, '.omx-config.json'), {
-        autoNudge: { enabled: true, delaySec: 0 },
+        autoNudge: { enabled: true, delaySec: 0, stallMs: 0 },
       });
 
       await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath, '1'));
@@ -572,7 +609,7 @@ exit 0
       await mkdir(fakeBinDir, { recursive: true });
 
       await writeJson(join(codexHome, '.omx-config.json'), {
-        autoNudge: { enabled: true, delaySec: 0 },
+        autoNudge: { enabled: true, delaySec: 0, stallMs: 0 },
       });
 
       await writeFile(
@@ -650,7 +687,7 @@ exit 0
       await mkdir(fakeBinDir, { recursive: true });
 
       await writeJson(join(codexHome, '.omx-config.json'), {
-        autoNudge: { enabled: true, delaySec: 0, maxNudgesPerSession: 2 },
+        autoNudge: { enabled: true, delaySec: 0, stallMs: 0, maxNudgesPerSession: 2 },
       });
 
       // Pre-seed nudge state at the limit
@@ -689,7 +726,7 @@ exit 0
       await mkdir(fakeBinDir, { recursive: true });
 
       await writeJson(join(codexHome, '.omx-config.json'), {
-        autoNudge: { enabled: true, delaySec: 0, response: 'continue now' },
+        autoNudge: { enabled: true, delaySec: 0, stallMs: 0, response: 'continue now' },
       });
 
       await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
@@ -720,7 +757,7 @@ exit 0
       await mkdir(fakeBinDir, { recursive: true });
 
       await writeJson(join(codexHome, '.omx-config.json'), {
-        autoNudge: { enabled: true, delaySec: 0 },
+        autoNudge: { enabled: true, delaySec: 0, stallMs: 0 },
       });
 
       await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
@@ -753,7 +790,7 @@ exit 0
       await mkdir(fakeBinDir, { recursive: true });
 
       await writeJson(join(codexHome, '.omx-config.json'), {
-        autoNudge: { enabled: true, delaySec: 0 },
+        autoNudge: { enabled: true, delaySec: 0, stallMs: 0 },
       });
 
       await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(join(cwd, 'tmux.log')));
@@ -794,7 +831,7 @@ exit 0
       await mkdir(fakeBinDir, { recursive: true });
 
       await writeJson(join(codexHome, '.omx-config.json'), {
-        autoNudge: { enabled: true, delaySec: 0 },
+        autoNudge: { enabled: true, delaySec: 0, stallMs: 0 },
       });
       await writeJson(join(stateDir, 'deep-interview-state.json'), {
         active: true,
@@ -829,7 +866,7 @@ exit 0
       await mkdir(fakeBinDir, { recursive: true });
 
       await writeJson(join(codexHome, '.omx-config.json'), {
-        autoNudge: { enabled: true, delaySec: 0 },
+        autoNudge: { enabled: true, delaySec: 0, stallMs: 0 },
       });
 
       await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(join(cwd, 'tmux.log')));
@@ -868,7 +905,7 @@ exit 0
         await mkdir(fakeBinDir, { recursive: true });
 
         await writeJson(join(codexHome, '.omx-config.json'), {
-          autoNudge: { enabled: true, delaySec: 0, response: blockedResponse },
+          autoNudge: { enabled: true, delaySec: 0, stallMs: 0, response: blockedResponse },
         });
         await writeJson(join(stateDir, 'skill-active-state.json'), {
           version: 1,
@@ -918,7 +955,7 @@ exit 0
       await mkdir(fakeBinDir, { recursive: true });
 
       await writeJson(join(codexHome, '.omx-config.json'), {
-        autoNudge: { enabled: true, delaySec: 0, response: NEXT_I_SHOULD_RESPONSE },
+        autoNudge: { enabled: true, delaySec: 0, stallMs: 0, response: NEXT_I_SHOULD_RESPONSE },
       });
       await writeJson(join(stateDir, 'skill-active-state.json'), {
         version: 1,
@@ -966,7 +1003,7 @@ exit 0
       await mkdir(fakeBinDir, { recursive: true });
 
       await writeJson(join(codexHome, '.omx-config.json'), {
-        autoNudge: { enabled: true, delaySec: 0 },
+        autoNudge: { enabled: true, delaySec: 0, stallMs: 0 },
       });
       await writeJson(join(stateDir, 'skill-active-state.json'), {
         version: 1,
@@ -1020,7 +1057,7 @@ exit 0
       await mkdir(fakeBinDir, { recursive: true });
 
       await writeJson(join(codexHome, '.omx-config.json'), {
-        autoNudge: { enabled: true, delaySec: 0 },
+        autoNudge: { enabled: true, delaySec: 0, stallMs: 0 },
       });
       await writeJson(join(stateDir, 'skill-active-state.json'), {
         version: 1,
@@ -1074,7 +1111,7 @@ exit 0
       await mkdir(fakeBinDir, { recursive: true });
 
       await writeJson(join(codexHome, '.omx-config.json'), {
-        autoNudge: { enabled: true, delaySec: 0 },
+        autoNudge: { enabled: true, delaySec: 0, stallMs: 0 },
       });
       await writeJson(join(stateDir, 'skill-active-state.json'), {
         version: 1,
@@ -1136,6 +1173,7 @@ exit 0
         autoNudge: {
           enabled: true,
           delaySec: 0,
+          stallMs: 0,
           patterns: ['awaiting approval'],
         },
       });
@@ -1184,7 +1222,10 @@ exit 0
       await mkdir(codexHome, { recursive: true });
       await mkdir(fakeBinDir, { recursive: true });
 
-      // No .omx-config.json at all — should use defaults (enabled=true)
+      // No .omx-config.json at all — should use defaults (enabled=true, stallMs=5000)
+      await writeJson(join(codexHome, '.omx-config.json'), {
+        autoNudge: { enabled: true, delaySec: 0, stallMs: 0 },
+      });
 
       await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
       await chmod(join(fakeBinDir, 'tmux'), 0o755);
@@ -1215,7 +1256,7 @@ exit 0
       await mkdir(fakeBinDir, { recursive: true });
 
       await writeJson(join(codexHome, '.omx-config.json'), {
-        autoNudge: { enabled: true, delaySec: 0 },
+        autoNudge: { enabled: true, delaySec: 0, stallMs: 0 },
       });
 
       await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));

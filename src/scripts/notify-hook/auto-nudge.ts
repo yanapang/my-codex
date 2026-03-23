@@ -265,6 +265,7 @@ export function normalizeAutoNudgeConfig(raw) {
       patterns: DEFAULT_STALL_PATTERNS,
       response: 'yes, proceed',
       delaySec: 3,
+      stallMs: 5000,
       maxNudgesPerSession: Infinity,
     };
   }
@@ -279,6 +280,9 @@ export function normalizeAutoNudgeConfig(raw) {
     delaySec: typeof raw.delaySec === 'number' && raw.delaySec >= 0 && raw.delaySec <= 60
       ? raw.delaySec
       : 3,
+    stallMs: typeof raw.stallMs === 'number' && raw.stallMs >= 0 && raw.stallMs <= 60_000
+      ? raw.stallMs
+      : 5000,
     maxNudgesPerSession: typeof raw.maxNudgesPerSession === 'number' && raw.maxNudgesPerSession > 0
       ? raw.maxNudgesPerSession
       : Infinity,
@@ -454,6 +458,23 @@ export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
     const signature = await resolveAutoNudgeSignature(stateDir, payload, lastMessage);
     if (signature && safeString(nudgeState.lastSignature) === signature) return;
 
+    const sourceName = safeString(payload?.source || '');
+    const isFallbackWatcherSource = sourceName === 'notify-fallback-watcher-stall';
+    if (!isFallbackWatcherSource && config.stallMs > 0) {
+      nudgeState.pendingSignature = signature;
+      nudgeState.pendingSince = new Date().toISOString();
+      await writeFile(nudgeStatePath, JSON.stringify(nudgeState, null, 2)).catch(() => {});
+      await logTmuxHookEvent(logsDir, {
+        timestamp: new Date().toISOString(),
+        type: 'auto_nudge_skipped',
+        reason: 'stall_window_pending',
+        source,
+        stall_ms: config.stallMs,
+        signature,
+      }).catch(() => {});
+      return;
+    }
+
     const paneGuard = await evaluatePaneInjectionReadiness(paneId, { skipIfScrolling: true });
     if (!paneGuard.ok) {
       await logTmuxHookEvent(logsDir, {
@@ -511,6 +532,8 @@ export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
       nudgeState.nudgeCount = nudgeCount + 1;
       nudgeState.lastNudgeAt = nowIso;
       nudgeState.lastSignature = signature;
+      nudgeState.pendingSignature = '';
+      nudgeState.pendingSince = '';
       await writeFile(nudgeStatePath, JSON.stringify(nudgeState, null, 2)).catch(() => {});
 
       if (skillState && skillState.phase === 'planning') {
