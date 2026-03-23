@@ -6,16 +6,20 @@ All notable changes to this project are documented in this file.
 
 ## [0.11.7] - 2026-03-23
 
-Patch release for team delivery parity, degraded-state auto-nudge recovery, and real tmux release verification.
+Patch release for degraded-state auto-nudge recovery, tighter team control-plane correctness, and release metadata consistency across the `v0.11.6..dev` hotfix train.
 
 ### Fixed
-- **Leader mailbox resend recovery** — hook-preferred duplicate mailbox sends no longer regress into missing dispatch IDs after notification, restoring idempotent delivery confirmation in the leader control path.
-- **Linked Ralph terminal sync on missing team state** — linked Ralph mode now finalizes cleanly when the paired team state disappears instead of remaining active indefinitely.
-- **Degraded-state auto-nudge fallback** — the fallback watcher now reuses stalled HUD turn state to trigger auto-nudge when no active mode state is available, and can resolve the live Codex pane by cwd when anchor state is missing.
-- **Stale leader / worker nudge accuracy** — release now includes the current `origin/dev` fixes for reduced false stalled nudges and recovered fallback dispatch success state. (PRs #1021, #1023)
+- **Watcher / dispatch recovery** — team dispatch now resolves the shared runtime binary correctly, fallback watcher cooldowns debounce across processes, persisted dispatch IDs stay aligned with runtime bridge request IDs, and successful tmux fallback delivery recovers requests back to `notified`. (PRs #1002, #1004, #1020, #1021)
+- **Leader nudge accuracy** — completed or foreign-session teams no longer resurface as stale leader nudges, leader control remains mailbox-only, and advancing worker turn counts count as progress before a stall is declared. (PRs #1001, #1023)
+- **Linked Ralph + team lifecycle** — linked Ralph now stays alive for the full team run, prompt-mode launches skip the bridge correctly, duplicate leader mailbox sends are deduplicated, and missing-team cleanup now finalizes linked Ralph instead of leaving it active indefinitely. (PRs #1011, #1012, #1013, #1017, #1025)
+
+### Changed
+- **Generated defaults and prompt guidance** — the default status line now includes `weekly-limit`, exact `gpt-5.4-mini` worker/subagent launches get a narrower prompt seam, and AGENTS guidance now prefers the current frontier default over stale explicit child-model pins. (PRs #1009, #1016, #1018)
+- **Release metadata sync** — Node and Cargo release metadata are realigned to `0.11.7`, keeping the repo version-sync contract intact for the release branch. (release follow-up commit `c4c5b75`)
 
 ### Verified
-- **Targeted hook + watcher regression suite** — `notify-fallback-watcher` and `notify-hook auto-nudge` pass with the new degraded-state coverage.
+- **Commit-window review** — parallel module review across `main...dev` found `3` main-only merge commits (`#995`, `#997`, `#1000`) but no main-only patch content after cherry-pick elimination, so the shipped release delta is entirely on the `dev` side.
+- **Targeted hook + watcher regression suite** — `notify-fallback-watcher` and `notify-hook auto-nudge` pass with the degraded-state coverage (`49/49` passing).
 - **Real tmux smoke for degraded auto-nudge** — a live Codex pane received `yes, proceed [OMX_TMUX_INJECT]` from the fallback watcher after a 5s stalled-turn window with only HUD state available.
 - **Real tmux smoke for Ralph anti-spam** — two back-to-back fallback watcher ticks did not emit repeated `Ralph loop active continue` sends; the persisted state stayed in cooldown (`startup_cooldown`).
 
