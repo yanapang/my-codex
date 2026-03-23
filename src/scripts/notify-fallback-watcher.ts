@@ -6,7 +6,12 @@ import { spawnSync } from 'child_process';
 import { dirname, join, resolve } from 'path';
 import { homedir } from 'os';
 import { drainPendingTeamDispatch } from './notify-hook/team-dispatch.js';
-import { maybeAutoNudge, resolveNudgePaneTarget, isDeepInterviewStateActive } from './notify-hook/auto-nudge.js';
+import {
+  maybeAutoNudge,
+  resolveNudgePaneTarget,
+  isDeepInterviewStateActive,
+  resolveAutoNudgeSignature,
+} from './notify-hook/auto-nudge.js';
 import { checkPaneReadyForTeamSendKeys } from './notify-hook/team-tmux-guard.js';
 import {
   isLeaderStale,
@@ -687,6 +692,10 @@ async function readAutoNudgeCount(): Promise<number> {
   return Math.max(0, Math.trunc(asNumber(parsed?.nudgeCount as string | number | undefined, 0)));
 }
 
+async function readAutoNudgeState(): Promise<Record<string, unknown> | null> {
+  return readJsonObject(join(stateDir, 'auto-nudge-state.json'));
+}
+
 async function runFallbackAutoNudgeTick(): Promise<void> {
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
@@ -728,9 +737,24 @@ async function runFallbackAutoNudgeTick(): Promise<void> {
     return;
   }
 
-  const signature = `${turnCount}|${lastTurnAt}|${lastMessage}`;
+  const signature = await resolveAutoNudgeSignature(stateDir, {
+    type: 'agent-turn-complete',
+    cwd,
+    source: 'notify-fallback-watcher-stall',
+    'thread-id': 'notify-fallback-watcher-stall',
+    'turn-id': `stalled-turn-${turnCount}`,
+    'input-messages': ['[notify-fallback] synthesized from stalled hud-state'],
+    'last-assistant-message': lastMessage,
+  }, lastMessage);
   if (lastFallbackAutoNudge.last_nudged_signature === signature) {
     lastFallbackAutoNudge.last_reason = 'duplicate_stall_signature';
+    return;
+  }
+
+  const persistedAutoNudgeState = await readAutoNudgeState();
+  if (safeString(persistedAutoNudgeState?.lastSignature) === signature) {
+    lastFallbackAutoNudge.last_reason = 'already_nudged_for_signature';
+    lastFallbackAutoNudge.last_nudged_signature = signature;
     return;
   }
 
