@@ -11,7 +11,7 @@ import { readJsonIfExists, getScopedStateDirsForCurrentSession } from './state-i
 import { runProcess } from './process-runner.js';
 import { logTmuxHookEvent } from './log.js';
 import { evaluatePaneInjectionReadiness, sendPaneInput } from './team-tmux-guard.js';
-import { DEFAULT_MARKER, resolveCodexPane } from '../tmux-hook-engine.js';
+import { DEFAULT_MARKER } from '../tmux-hook-engine.js';
 import { isLeaderRuntimeStale } from '../../team/leader-activity.js';
 const LEADER_PANE_MISSING_NO_INJECTION_REASON = 'leader_pane_missing_no_injection';
 const LEADER_PANE_SHELL_NO_INJECTION_REASON = 'leader_pane_shell_no_injection';
@@ -47,12 +47,21 @@ export function resolveLeaderStalenessThresholdMs() {
   return 180_000;
 }
 
-export function resolveLeaderProgressStallThresholdMs() {
+export function resolveFallbackProgressStallThresholdMs() {
   const raw = safeString(process.env.OMX_TEAM_PROGRESS_STALL_MS || '');
   const parsed = asNumber(raw);
+  // Fallback-only threshold used when worker turn-count signals are unavailable.
   // Default: 2 minutes. Guard against unreasonable values.
   if (parsed !== null && parsed >= 10_000 && parsed <= 60 * 60_000) return parsed;
   return 120_000;
+}
+
+export function resolveWorkerTurnStallThresholdMs() {
+  const raw = safeString(process.env.OMX_TEAM_WORKER_TURN_STALL_MS || '');
+  const parsed = asNumber(raw);
+  // Default: 30 seconds. Guard against unreasonable values.
+  if (parsed !== null && parsed >= 10_000 && parsed <= 10 * 60_000) return parsed;
+  return 30_000;
 }
 
 function buildStatusCheckReminder(teamName) {
@@ -108,7 +117,7 @@ function buildLeaderActionGuidance(teamName, {
     return `Next: decide whether to reconcile/merge results or gracefully shut down: omx team shutdown ${teamName}.`;
   }
   if (leaderActionState === 'stuck_waiting_on_leader') {
-    return `Next: inspect omx team status ${teamName}, read worker messages, then unblock/reassign, launch another wave, or gracefully shut down: omx team shutdown ${teamName}.`;
+    return `Next: omx team status ${teamName}; read worker messages; unblock/reassign or shutdown.`;
   }
   return buildStatusCheckReminder(teamName);
 }
@@ -196,6 +205,26 @@ async function syncScopedTeamStateFromPhase(teamStatePath, teamName, phaseSnapsh
     return changed;
   } catch {
     return false;
+  }
+}
+
+async function resolveCurrentSessionId(stateDir) {
+  const fromEnv = safeString(
+    process.env.OMX_SESSION_ID
+    || process.env.CODEX_SESSION_ID
+    || process.env.SESSION_ID
+    || '',
+  ).trim();
+  if (fromEnv) return fromEnv;
+
+  const sessionPath = join(stateDir, 'session.json');
+  try {
+    if (!existsSync(sessionPath)) return '';
+    const parsed = JSON.parse(await readFile(sessionPath, 'utf-8'));
+    const sessionId = safeString(parsed && parsed.session_id ? parsed.session_id : '').trim();
+    return sessionId;
+  } catch {
+    return '';
   }
 }
 
@@ -308,6 +337,36 @@ async function readTeamProgressSnapshot(stateDir, teamName, workerNames) {
       workers: workerSnapshot,
     }),
   };
+}
+
+function readPreviousWorkerTurnCounts(previousSignature) {
+  try {
+    const parsed = JSON.parse(previousSignature || '{}');
+    const workers = Array.isArray(parsed?.workers) ? parsed.workers : [];
+    return new Map(workers
+      .map((worker) => [safeString(worker?.worker).trim(), Number.isFinite(worker?.turn_count) ? Number(worker.turn_count) : null])
+      .filter(([workerName]) => workerName.length > 0));
+  } catch {
+    return new Map();
+  }
+}
+
+function hasWorkerTurnProgress(workerSnapshot, previousTurnCounts) {
+  return workerSnapshot.some((worker) => {
+    if (worker.state !== 'working' && worker.state !== 'blocked') return false;
+    if (!Number.isFinite(worker.turn_count) || worker.turn_count === null) return false;
+    const previousTurnCount = previousTurnCounts.get(worker.worker);
+    return Number.isFinite(previousTurnCount) && previousTurnCount !== null && worker.turn_count > previousTurnCount;
+  });
+}
+
+function hasTrackableActiveWorkerTurns(workerSnapshot, previousTurnCounts) {
+  return workerSnapshot.some((worker) => {
+    if (worker.state !== 'working' && worker.state !== 'blocked') return false;
+    if (!Number.isFinite(worker.turn_count) || worker.turn_count === null) return false;
+    const previousTurnCount = previousTurnCounts.get(worker.worker);
+    return Number.isFinite(previousTurnCount) && previousTurnCount !== null;
+  });
 }
 
 function formatDurationMs(durationMs) {
@@ -454,7 +513,8 @@ async function emitLeaderNudgeDeferredEvent(cwd, teamName, reason, nowIso, { tmu
 export async function maybeNudgeTeamLeader({ cwd, stateDir, logsDir, preComputedLeaderStale }) {
   const intervalMs = resolveLeaderNudgeIntervalMs();
   const idleCooldownMs = resolveLeaderAllIdleNudgeCooldownMs();
-  const progressStallThresholdMs = resolveLeaderProgressStallThresholdMs();
+  const fallbackProgressStallThresholdMs = resolveFallbackProgressStallThresholdMs();
+  const workerTurnStallThresholdMs = resolveWorkerTurnStallThresholdMs();
   const nowMs = Date.now();
   const nowIso = new Date().toISOString();
   const omxDir = join(cwd, '.omx');
@@ -475,6 +535,7 @@ export async function maybeNudgeTeamLeader({ cwd, stateDir, logsDir, preComputed
   }
 
   const candidateTeamNames = new Set();
+  const currentSessionId = await resolveCurrentSessionId(stateDir);
   try {
     const scopedDirs = await getScopedStateDirsForCurrentSession(stateDir);
     const candidateStateDirs = [...new Set([...scopedDirs, stateDir])];
@@ -489,8 +550,9 @@ export async function maybeNudgeTeamLeader({ cwd, stateDir, logsDir, preComputed
       const phaseSnapshot = await readTeamPhaseSnapshot(stateDir, teamName, nowIso);
       if (phaseSnapshot.terminal) {
         await syncScopedTeamStateFromPhase(teamStatePath, teamName, phaseSnapshot, nowIso);
+        continue;
       }
-      if (parsed.active === true || phaseSnapshot.terminal) {
+      if (parsed.active === true) {
         candidateTeamNames.add(teamName);
       }
     }
@@ -504,6 +566,7 @@ export async function maybeNudgeTeamLeader({ cwd, stateDir, logsDir, preComputed
   for (const teamName of candidateTeamNames) {
     let tmuxSession = '';
     let leaderPaneId = '';
+    let ownerSessionId = '';
     let workers = [];
     try {
       const manifestPath = join(omxDir, 'state', 'team', teamName, 'manifest.v2.json');
@@ -513,11 +576,13 @@ export async function maybeNudgeTeamLeader({ cwd, stateDir, logsDir, preComputed
         const raw = JSON.parse(await readFile(srcPath, 'utf-8'));
         tmuxSession = safeString(raw && raw.tmux_session ? raw.tmux_session : '').trim();
         leaderPaneId = safeString(raw && raw.leader_pane_id ? raw.leader_pane_id : '').trim();
+        ownerSessionId = safeString(raw && raw.leader && raw.leader.session_id ? raw.leader.session_id : '').trim();
         if (Array.isArray(raw && raw.workers)) workers = raw.workers;
       }
     } catch {
       // ignore
     }
+    if (currentSessionId && ownerSessionId && ownerSessionId !== currentSessionId) continue;
     let mailbox = null;
     try {
       const mailboxPath = join(omxDir, 'state', 'team', teamName, 'mailbox', 'leader-fixed.json');
@@ -535,7 +600,7 @@ export async function maybeNudgeTeamLeader({ cwd, stateDir, logsDir, preComputed
     const workerPaneIds = Array.isArray(workers)
       ? workers.map((w) => safeString(w && w.pane_id ? w.pane_id : '')).filter(Boolean)
       : [];
-    const canonicalLeaderPaneId = safeString(resolveCodexPane() || leaderPaneId).trim();
+    const canonicalLeaderPaneId = safeString(leaderPaneId).trim();
     if (!tmuxSession && !canonicalLeaderPaneId) continue;
     const tmuxTarget = canonicalLeaderPaneId;
     const paneStatus = tmuxSession
@@ -552,18 +617,22 @@ export async function maybeNudgeTeamLeader({ cwd, stateDir, logsDir, preComputed
     const previousSignature = safeString(prevProgress.signature || '');
     const previousProgressAtIso = safeString(prevProgress.last_progress_at || '');
     const previousProgressAtMs = previousProgressAtIso ? Date.parse(previousProgressAtIso) : NaN;
-    const progressChanged = !previousSignature || previousSignature !== progressSnapshot.signature;
+    const previousTurnCounts = readPreviousWorkerTurnCounts(previousSignature);
+    const workerTurnProgress = hasWorkerTurnProgress(progressSnapshot.workerSnapshot, previousTurnCounts);
+    const hasTrackableTurnSignals = hasTrackableActiveWorkerTurns(progressSnapshot.workerSnapshot, previousTurnCounts);
+    const progressChanged = !previousSignature || previousSignature !== progressSnapshot.signature || workerTurnProgress;
     const effectiveProgressAtMs = progressChanged || !Number.isFinite(previousProgressAtMs)
       ? nowMs
       : previousProgressAtMs;
     const effectiveProgressAtIso = new Date(effectiveProgressAtMs).toISOString();
     const stalledForMs = Math.max(0, nowMs - effectiveProgressAtMs);
+    const stallThresholdMs = hasTrackableTurnSignals ? workerTurnStallThresholdMs : fallbackProgressStallThresholdMs;
     const teamProgressStalled =
       progressSnapshot.workRemaining
       && paneStatus.alive
       && !allWorkersIdle
       && !progressChanged
-      && stalledForMs >= progressStallThresholdMs;
+      && stalledForMs >= stallThresholdMs;
     const leaderActionState = classifyLeaderActionState({
       allWorkersIdle,
       workerPanesAlive: paneStatus.alive,

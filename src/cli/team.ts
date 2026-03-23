@@ -11,6 +11,7 @@ import { classifyTaskSize } from '../hooks/task-size-detector.js';
 import { readApprovedExecutionLaunchHint } from '../planning/artifacts.js';
 import { routeTaskToRole } from '../team/role-router.js';
 import { allocateTasksToWorkers } from '../team/allocation-policy.js';
+import { ensureLinkedRalphModeState as ensureLinkedRalphBridgeState, runLinkedRalphBridge } from '../team/linked-ralph-bridge.js';
 import {
   buildFollowupStaffingPlan,
   resolveAvailableAgentTypes,
@@ -2461,8 +2462,22 @@ export async function teamCommand(args: string[], options: TeamCliOptions = {}):
   );
 
   await ensureTeamModeState(effectiveParsed, tasks);
+  if (parsed.ralph) {
+    await ensureLinkedRalphBridgeState(parsed.task, parsed.teamName, cwd);
+  }
   if (options.verbose) {
     console.log(`linked_ralph=${parsed.ralph}`);
   }
   await renderStartSummary(runtime, staffingPlan);
+  if (parsed.ralph) {
+    if (runtime.config.worker_launch_mode === 'prompt') {
+      return;
+    }
+    await runLinkedRalphBridge({
+      teamName: runtime.teamName,
+      task: parsed.task,
+      cwd,
+      log: (message) => console.log(message),
+    });
+  }
 }

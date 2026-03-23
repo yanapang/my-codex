@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile, readFile, mkdir, utimes } from 'fs/promises';
+import { chmod, mkdtemp, rm, writeFile, readFile, mkdir, utimes } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { existsSync, readFileSync } from 'fs';
@@ -193,6 +193,58 @@ describe('team state', () => {
     }
   });
 
+  it('dispatch bridge queue uses the same request id as the TS store', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-team-dispatch-bridge-sync-'));
+    const previousRuntimeBinary = process.env.OMX_RUNTIME_BINARY;
+    try {
+      await initTeamState('team-dispatch-sync', 't', 'executor', 1, cwd);
+      const fakeBinDir = join(cwd, 'fake-bin');
+      const runtimeLogPath = join(cwd, 'runtime.log');
+      await mkdir(fakeBinDir, { recursive: true });
+      await writeFile(
+        join(fakeBinDir, 'omx-runtime'),
+        `#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$*" >> "${runtimeLogPath}"
+if [[ "\${1:-}" == "schema" ]]; then
+  printf '{"schema_version":1,"commands":["acquire-authority","renew-authority","queue-dispatch","mark-notified","mark-delivered","mark-failed","request-replay","capture-snapshot"],"events":[],"transport":"tmux"}\n'
+  exit 0
+fi
+if [[ "\${1:-}" == "exec" ]]; then
+  printf '{"event":"DispatchQueued","request_id":"ok","target":"worker-1"}\n'
+  exit 0
+fi
+exit 1
+`,
+      );
+      await chmod(join(fakeBinDir, 'omx-runtime'), 0o755);
+      process.env.OMX_RUNTIME_BINARY = join(fakeBinDir, 'omx-runtime');
+
+      const queued = await enqueueDispatchRequest(
+        'team-dispatch-sync',
+        {
+          kind: 'inbox',
+          to_worker: 'worker-1',
+          trigger_message: 'ping',
+        },
+        cwd,
+      );
+
+      const runtimeLog = await readFile(runtimeLogPath, 'utf8');
+      const queueLine = runtimeLog.split('\n').find((line) => line.startsWith('exec {"command":"QueueDispatch"'));
+      assert.ok(queueLine, 'expected QueueDispatch bridge call');
+      const jsonStart = queueLine.indexOf('{');
+      const stateDirFlag = queueLine.lastIndexOf(' --state-dir=');
+      const jsonPayload = stateDirFlag > jsonStart ? queueLine.slice(jsonStart, stateDirFlag) : queueLine.slice(jsonStart);
+      const payload = JSON.parse(jsonPayload) as { request_id: string };
+      assert.equal(payload.request_id, queued.request.request_id);
+    } finally {
+      if (typeof previousRuntimeBinary === 'string') process.env.OMX_RUNTIME_BINARY = previousRuntimeBinary;
+      else delete process.env.OMX_RUNTIME_BINARY;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('dispatch request store enqueues, dedupes, and transitions idempotently', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-team-dispatch-store-'));
     try {
@@ -236,7 +288,7 @@ describe('team state', () => {
     }
   });
 
-  it('dispatch request store allows failed->failed reason patch and blocks failed->notified', async () => {
+  it('dispatch request store allows failed reason patches and fallback recovery to notified', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-team-dispatch-store-failed-'));
     try {
       await initTeamState('team-dispatch-failed', 't', 'executor', 1, cwd);
@@ -258,26 +310,28 @@ describe('team state', () => {
         cwd,
       );
 
-      const invalidNotified = await markDispatchRequestNotified(
+      const recovered = await markDispatchRequestNotified(
         'team-dispatch-failed',
         queued.request.request_id,
-        { last_reason: 'should_not_transition' },
+        { last_reason: 'fallback_confirmed:tmux_send_keys_sent', failed_at: undefined },
         cwd,
       );
-      assert.equal(invalidNotified, null);
+      assert.equal(recovered?.status, 'notified');
+      assert.equal(recovered?.last_reason, 'fallback_confirmed:tmux_send_keys_sent');
+      assert.equal(recovered?.failed_at, undefined);
 
       const patched = await transitionDispatchRequest(
         'team-dispatch-failed',
         queued.request.request_id,
-        'failed',
-        'failed',
+        'notified',
+        'notified',
         { last_reason: 'fallback_confirmed_after_failed_receipt:tmux_send_keys_sent' },
         cwd,
       );
-      assert.equal(patched?.status, 'failed');
+      assert.equal(patched?.status, 'notified');
       assert.equal(patched?.last_reason, 'fallback_confirmed_after_failed_receipt:tmux_send_keys_sent');
       const reread = await readDispatchRequest('team-dispatch-failed', queued.request.request_id, cwd);
-      assert.equal(reread?.status, 'failed');
+      assert.equal(reread?.status, 'notified');
       assert.equal(reread?.last_reason, 'fallback_confirmed_after_failed_receipt:tmux_send_keys_sent');
     } finally {
       await rm(cwd, { recursive: true, force: true });
@@ -1022,6 +1076,31 @@ describe('team state', () => {
       for (const id of expectedIds) {
         assert.equal(actualIds.has(id), true);
       }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('sendDirectMessage reuses identical undelivered messages instead of appending duplicates', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-team-mailbox-'));
+    try {
+      await initTeamState('team-msg-dedupe', 't', 'executor', 2, cwd);
+      const first = await sendDirectMessage('team-msg-dedupe', 'worker-1', 'leader-fixed', 'same-body', cwd);
+      const second = await sendDirectMessage('team-msg-dedupe', 'worker-1', 'leader-fixed', 'same-body', cwd);
+
+      assert.equal(second.message_id, first.message_id);
+
+      const mailbox = await listMailboxMessages('team-msg-dedupe', 'leader-fixed', cwd);
+      assert.equal(mailbox.length, 1);
+      assert.equal(mailbox[0]?.body, 'same-body');
+
+      const delivered = await markMessageDelivered('team-msg-dedupe', 'leader-fixed', first.message_id, cwd);
+      assert.equal(delivered, true);
+
+      const third = await sendDirectMessage('team-msg-dedupe', 'worker-1', 'leader-fixed', 'same-body', cwd);
+      assert.notEqual(third.message_id, first.message_id);
+      const mailboxAfter = await listMailboxMessages('team-msg-dedupe', 'leader-fixed', cwd);
+      assert.equal(mailboxAfter.length, 2);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

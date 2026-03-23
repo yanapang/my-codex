@@ -908,8 +908,11 @@ process.on('SIGTERM', () => process.exit(0));
       const worker2Instructions = await readFile(join(cwd, '.omx', 'state', 'team', runtime.teamName, 'workers', 'worker-2', 'AGENTS.md'), 'utf-8');
       assert.match(worker1Instructions, /You are operating as the \*\*test-engineer\*\* role/);
       assert.match(worker1Instructions, /Test Engineer/);
+      assert.doesNotMatch(worker1Instructions, /exact gpt-5\.4-mini model/);
       assert.match(worker2Instructions, /You are operating as the \*\*writer\*\* role/);
       assert.match(worker2Instructions, /You are Writer\./);
+      assert.match(worker2Instructions, /exact gpt-5\.4-mini model/);
+      assert.match(worker2Instructions, /strict execution order: inspect -> plan -> act -> verify/);
 
       let worker1Args: string[] | null = null;
       let worker2Args: string[] | null = null;
@@ -951,6 +954,102 @@ process.on('SIGTERM', () => process.exit(0));
       else delete process.env.OMX_TEAM_WORKER_CLI;
       if (typeof prevCaptureDir === 'string') process.env.OMX_ARGV_CAPTURE_DIR = prevCaptureDir;
       else delete process.env.OMX_ARGV_CAPTURE_DIR;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('startTeam does not apply mini guidance for exact-match negatives like gpt-5.4-mini-tuned', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-mini-tuned-'));
+    const binDir = join(cwd, 'bin');
+    const fakeCodexPath = join(binDir, 'codex');
+    const captureDir = join(cwd, 'captures');
+    const promptsDir = join(cwd, '.codex', 'prompts');
+    await mkdir(binDir, { recursive: true });
+    await mkdir(captureDir, { recursive: true });
+    await mkdir(promptsDir, { recursive: true });
+    await writeFile(join(promptsDir, 'writer.md'), '<identity>You are Writer.</identity>');
+    await writeFile(
+      fakeCodexPath,
+      `#!/usr/bin/env node
+const fs = require('fs');
+const path = require('path');
+const worker = String(process.env.OMX_TEAM_WORKER || 'unknown').replace(/[^a-zA-Z0-9_-]+/g, '__');
+const out = path.join(process.env.OMX_ARGV_CAPTURE_DIR, worker + '.json');
+fs.writeFileSync(out, JSON.stringify({ argv: process.argv.slice(2), worker }, null, 2));
+process.stdin.resume();
+setTimeout(() => process.exit(0), 5000);
+process.on('SIGTERM', () => process.exit(0));
+`,
+      { mode: 0o755 },
+    );
+
+    const prevPath = process.env.PATH;
+    const prevTmux = process.env.TMUX;
+    const prevLaunchMode = process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
+    const prevWorkerCli = process.env.OMX_TEAM_WORKER_CLI;
+    const prevCaptureDir = process.env.OMX_ARGV_CAPTURE_DIR;
+    const prevLaunchArgs = process.env.OMX_TEAM_WORKER_LAUNCH_ARGS;
+
+    process.env.PATH = `${binDir}:${prevPath ?? ''}`;
+    delete process.env.TMUX;
+    process.env.OMX_TEAM_WORKER_LAUNCH_MODE = 'prompt';
+    process.env.OMX_TEAM_WORKER_CLI = 'codex';
+    process.env.OMX_ARGV_CAPTURE_DIR = captureDir;
+    process.env.OMX_TEAM_WORKER_LAUNCH_ARGS = '--model gpt-5.4-mini-tuned';
+
+    let runtime: TeamRuntime | null = null;
+    try {
+      runtime = await withoutTeamWorkerEnv(() =>
+        startTeam(
+          'team-mini-tuned-routing',
+          'mini tuned routing handoff',
+          'executor',
+          1,
+          [
+            { subject: 'document routing report only', description: 'document routing report only', owner: 'worker-1', role: 'writer' },
+          ],
+          cwd,
+        ));
+
+      const workerInstructions = await readFile(join(cwd, '.omx', 'state', 'team', runtime.teamName, 'workers', 'worker-1', 'AGENTS.md'), 'utf-8');
+      assert.match(workerInstructions, /You are operating as the \*\*writer\*\* role/);
+      assert.match(workerInstructions, /You are Writer\./);
+      assert.doesNotMatch(workerInstructions, /exact gpt-5\.4-mini model/);
+      assert.doesNotMatch(workerInstructions, /strict execution order: inspect -> plan -> act -> verify/);
+      assert.match(workerInstructions, /resolved_model: gpt-5\.4-mini-tuned/);
+
+      let workerArgs: string[] | null = null;
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        const workerPath = join(captureDir, 'team-mini-tuned-routing__worker-1.json');
+        if (existsSync(workerPath)) {
+          workerArgs = JSON.parse(await readFile(workerPath, 'utf-8')).argv;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+
+      assert.ok(workerArgs, 'worker argv capture file should be written');
+      const workerJoined = workerArgs!.join(' ');
+      assert.match(workerJoined, /--model gpt-5\.4-mini-tuned/);
+
+      await shutdownTeam(runtime.teamName, cwd, { force: true });
+      runtime = null;
+    } finally {
+      if (runtime) {
+        await shutdownTeam(runtime.teamName, cwd, { force: true }).catch(() => {});
+      }
+      if (typeof prevPath === 'string') process.env.PATH = prevPath;
+      else delete process.env.PATH;
+      if (typeof prevTmux === 'string') process.env.TMUX = prevTmux;
+      else delete process.env.TMUX;
+      if (typeof prevLaunchMode === 'string') process.env.OMX_TEAM_WORKER_LAUNCH_MODE = prevLaunchMode;
+      else delete process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
+      if (typeof prevWorkerCli === 'string') process.env.OMX_TEAM_WORKER_CLI = prevWorkerCli;
+      else delete process.env.OMX_TEAM_WORKER_CLI;
+      if (typeof prevCaptureDir === 'string') process.env.OMX_ARGV_CAPTURE_DIR = prevCaptureDir;
+      else delete process.env.OMX_ARGV_CAPTURE_DIR;
+      if (typeof prevLaunchArgs === 'string') process.env.OMX_TEAM_WORKER_LAUNCH_ARGS = prevLaunchArgs;
+      else delete process.env.OMX_TEAM_WORKER_LAUNCH_ARGS;
       await rm(cwd, { recursive: true, force: true });
     }
   });
@@ -3354,6 +3453,71 @@ esac
       assert.equal(messages[1]?.from_worker, 'worker-2');
       assert.equal(messages[0]?.to_worker, 'leader-fixed');
       assert.equal(messages[1]?.to_worker, 'leader-fixed');
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('sendWorkerMessage dedupes identical undelivered leader-fixed messages', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-'));
+    try {
+      await initTeamState('team-leader-dedupe', 'leader mailbox dedupe test', 'executor', 1, cwd);
+      await sendWorkerMessage('team-leader-dedupe', 'worker-1', 'leader-fixed', 'INTEGRATED: same-body', cwd);
+      await sendWorkerMessage('team-leader-dedupe', 'worker-1', 'leader-fixed', 'INTEGRATED: same-body', cwd);
+
+      const messages = await listMailboxMessages('team-leader-dedupe', 'leader-fixed', cwd);
+      assert.equal(messages.length, 1);
+      assert.equal(messages[0]?.body, 'INTEGRATED: same-body');
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+
+  it('sendWorkerMessage keeps hook-preferred duplicate leader mailbox sends idempotent after notification', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-leader-dedupe-notified-'));
+    try {
+      await withMockTmuxFixture(
+        {
+          dirPrefix: 'omx-runtime-leader-dedupe-notified-bin-',
+          tmuxScript: (tmuxLogPath) => `#!/bin/sh
+set -eu
+printf '%s\n' "$$*" >> "${tmuxLogPath}"
+case "\${1:-}" in
+  send-keys)
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`,
+        },
+        async () => {
+          await initTeamState('team-leader-dedupe-notified', 'leader mailbox dedupe notified test', 'executor', 1, cwd);
+          const cfg = await readTeamConfig('team-leader-dedupe-notified', cwd);
+          assert.ok(cfg);
+          if (!cfg) throw new Error('missing team config');
+          cfg.leader_pane_id = '%55';
+          await saveTeamConfig(cfg, cwd);
+
+          const manifestPath = teamStateTestPath(cwd, 'team', 'team-leader-dedupe-notified', 'manifest.v2.json');
+          const manifest = JSON.parse(await readFile(manifestPath, 'utf-8'));
+          manifest.policy = { ...(manifest.policy || {}), dispatch_ack_timeout_ms: 100 };
+          await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+
+          await sendWorkerMessage('team-leader-dedupe-notified', 'worker-1', 'leader-fixed', 'INTEGRATED: same-body', cwd);
+          await sendWorkerMessage('team-leader-dedupe-notified', 'worker-1', 'leader-fixed', 'INTEGRATED: same-body', cwd);
+
+          const messages = await listMailboxMessages('team-leader-dedupe-notified', 'leader-fixed', cwd);
+          const workerMessages = messages.filter((message) => message.from_worker === 'worker-1' && message.body === 'INTEGRATED: same-body');
+          assert.equal(workerMessages.length, 1);
+          assert.ok(workerMessages[0]?.notified_at);
+
+          const requests = await listDispatchRequests('team-leader-dedupe-notified', cwd, { kind: 'mailbox', to_worker: 'leader-fixed' });
+          assert.ok(requests.some((request) => request.status === 'notified' && request.message_id === workerMessages[0]?.message_id));
+        },
+      );
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

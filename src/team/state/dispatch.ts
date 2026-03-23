@@ -114,6 +114,7 @@ function canTransitionDispatchStatus(from: TeamDispatchRequestStatus, to: TeamDi
   if (from === to) return true;
   if (from === 'pending' && (to === 'notified' || to === 'failed')) return true;
   if (from === 'notified' && (to === 'delivered' || to === 'failed')) return true;
+  if (from === 'failed' && to === 'notified') return true;
   return false;
 }
 
@@ -126,18 +127,6 @@ export async function enqueueDispatchRequest(
     throw new Error('mailbox dispatch requests require message_id');
   }
   deps.validateWorkerName(requestInput.to_worker);
-
-  // Dual-write: Rust bridge (non-fatal) + TS file (canonical during cutover)
-  if (isBridgeEnabled()) {
-    try {
-      getDefaultBridge(deps.cwd).execCommand({
-        command: 'QueueDispatch',
-        request_id: 'pre-' + Date.now(),
-        target: requestInput.to_worker,
-        metadata: { kind: requestInput.kind, team_name: deps.teamName, worker_index: requestInput.worker_index, pane_id: requestInput.pane_id, trigger_message: requestInput.trigger_message, message_id: requestInput.message_id, inbox_correlation_key: requestInput.inbox_correlation_key, transport_preference: requestInput.transport_preference, fallback_allowed: requestInput.fallback_allowed },
-      });
-    } catch { /* bridge failure non-fatal */ }
-  }
 
   return await deps.withDispatchLock(deps.teamName, deps.cwd, async () => {
     const requests = await deps.readDispatchRequests(deps.teamName, deps.cwd);
@@ -161,6 +150,28 @@ export async function enqueueDispatchRequest(
 
     requests.push(request);
     await deps.writeDispatchRequests(deps.teamName, requests, deps.cwd);
+
+    if (isBridgeEnabled()) {
+      try {
+        getDefaultBridge(deps.cwd).execCommand({
+          command: 'QueueDispatch',
+          request_id: request.request_id,
+          target: requestInput.to_worker,
+          metadata: {
+            kind: requestInput.kind,
+            team_name: deps.teamName,
+            worker_index: requestInput.worker_index,
+            pane_id: requestInput.pane_id,
+            trigger_message: requestInput.trigger_message,
+            message_id: requestInput.message_id,
+            inbox_correlation_key: requestInput.inbox_correlation_key,
+            transport_preference: requestInput.transport_preference,
+            fallback_allowed: requestInput.fallback_allowed,
+          },
+        });
+      } catch { /* bridge failure non-fatal */ }
+    }
+
     return { request, deduped: false };
   });
 }
@@ -214,7 +225,10 @@ export async function transitionDispatchRequest(
       attempt_count: Math.max(0, nextAttemptCount),
       updated_at: nowIso,
     };
-    if (to === 'notified') next.notified_at = patch.notified_at ?? nowIso;
+    if (to === 'notified') {
+      next.notified_at = patch.notified_at ?? nowIso;
+      next.failed_at = patch.failed_at;
+    }
     if (to === 'delivered') next.delivered_at = patch.delivered_at ?? nowIso;
     if (to === 'failed') next.failed_at = patch.failed_at ?? nowIso;
 

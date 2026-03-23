@@ -5,6 +5,7 @@
  */
 
 import { readFile, writeFile } from 'fs/promises';
+import { execFileSync } from 'child_process';
 import { join } from 'path';
 import { homedir } from 'os';
 import { asNumber, safeString } from './utils.js';
@@ -287,11 +288,71 @@ export async function capturePane(paneId, lines = 10) {
   }
 }
 
-export async function resolveNudgePaneTarget(stateDir: any) {
+function resolveCodexPaneByCwdFallback(cwd) {
+  const normalizedCwd = safeString(cwd).trim();
+  if (!normalizedCwd) return '';
+
+  try {
+    const panes = execFileSync('tmux', [
+      'list-panes', '-a', '-F', '#{pane_id}	#{pane_current_path}	#{pane_current_command}	#{pane_start_command}',
+    ], { encoding: 'utf-8', timeout: 2000 })
+      .trim()
+      .split('\n')
+      .filter(Boolean);
+
+    for (const line of panes) {
+      const [paneId, panePath = '', paneCommand = '', startCommand = ''] = line.split('\t');
+      const normalizedPanePath = safeString(panePath).trim();
+      const normalizedStart = safeString(startCommand).toLowerCase();
+      const normalizedCommand = safeString(paneCommand).trim().toLowerCase();
+      if (!paneId || normalizedPanePath !== normalizedCwd) continue;
+      if (/\bomx\b.*\bhud\b.*--watch/i.test(normalizedStart)) continue;
+      if (normalizedStart.includes('codex')) return paneId;
+      if (normalizedCommand === 'codex' || normalizedCommand === 'node' || normalizedCommand === 'npx') return paneId;
+    }
+  } catch {
+    // Fall back to empty when tmux scan is unavailable.
+  }
+
+  return '';
+}
+
+async function resolveCodexPaneFromAnchor(anchorPane) {
+  const paneId = safeString(anchorPane).trim();
+  if (!paneId) return '';
+
+  try {
+    const sessionResult = await runProcess('tmux', ['display-message', '-t', paneId, '-p', '#S'], 2000);
+    const sessionName = safeString(sessionResult.stdout).trim();
+    if (!sessionName) return '';
+
+    const panesResult = await runProcess(
+      'tmux',
+      ['list-panes', '-s', '-t', sessionName, '-F', '#{pane_id}\t#{pane_current_command}\t#{pane_start_command}'],
+      2000,
+    );
+    const panes = safeString(panesResult.stdout).trim().split('\n').filter(Boolean);
+    for (const line of panes) {
+      const [candidatePaneId, , rawStartCommand = ''] = line.split('\t');
+      const startCommand = safeString(rawStartCommand).toLowerCase();
+      if (!candidatePaneId) continue;
+      if (/\bomx\b.*\bhud\b.*--watch/i.test(startCommand)) continue;
+      if (startCommand.includes('codex')) return candidatePaneId;
+    }
+  } catch {
+    // Fall back to the anchored pane when session scanning is unavailable.
+  }
+
+  return '';
+}
+
+export async function resolveNudgePaneTarget(stateDir: any, cwd = '') {
   // Use canonical codex pane resolver — validates pane is running an agent, not a shell
   const { resolveCodexPane } = await import('../tmux-hook-engine.js');
   const codexPane = resolveCodexPane();
   if (codexPane) return codexPane;
+
+  let fallbackPane = '';
 
   try {
     const scopedDirs = await getScopedStateDirsForCurrentSession(stateDir);
@@ -303,7 +364,11 @@ export async function resolveNudgePaneTarget(stateDir: any) {
         try {
           const state = JSON.parse(await readFile(path, 'utf-8'));
           if (state && state.active && state.tmux_pane_id) {
-            return safeString(state.tmux_pane_id);
+            const anchoredPane = safeString(state.tmux_pane_id).trim();
+            if (!anchoredPane) continue;
+            const upgradedPane = await resolveCodexPaneFromAnchor(anchoredPane);
+            if (upgradedPane) return upgradedPane;
+            if (!fallbackPane) fallbackPane = anchoredPane;
           }
         } catch {
           // skip malformed state
@@ -314,7 +379,9 @@ export async function resolveNudgePaneTarget(stateDir: any) {
     // Non-critical
   }
 
-  return '';
+  if (fallbackPane) return fallbackPane;
+
+  return resolveCodexPaneByCwdFallback(cwd);
 }
 
 export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
@@ -344,7 +411,7 @@ export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
     const nudgeCount = asNumber(nudgeState.nudgeCount) ?? 0;
     if (Number.isFinite(config.maxNudgesPerSession) && nudgeCount >= config.maxNudgesPerSession) return;
 
-    const paneId = await resolveNudgePaneTarget(stateDir);
+    const paneId = await resolveNudgePaneTarget(stateDir, cwd);
 
     let detected = detectStallPattern(lastMessage, config.patterns);
     let source = 'payload';

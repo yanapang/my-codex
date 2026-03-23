@@ -1,44 +1,60 @@
-# oh-my-codex v0.11.1
+# oh-my-codex v0.11.7
 
-**5 PRs in the release window**
+**15 dev-side commits in the release window, grouped into 3 reviewed lanes**
 
-`0.11.1` is a focused patch release following `0.11.0`. This release contains CI cleanup and a single regression fix for pane detection.
+`0.11.7` is a focused patch release after `0.11.6`, centered on degraded-state auto-nudge recovery, team control-plane correctness, and release metadata consistency.
 
 ## Highlights
 
-### Pane Detection Fix
-- Auto-nudge fixtures aligned with canonical pane routing
-- Hook nudges no longer land in the HUD pane
+### Lane 1 — watcher / dispatch recovery
+- Team dispatch resolves the shared runtime binary instead of a stale hook-local path
+- Fallback watchers debounce Ralph continue-steers across processes
+- Auto-nudge upgrades stale pane anchors to the live sibling Codex pane when possible
+- Successful tmux fallback delivery now recovers requests back to `notified`
+- Leader nudges no longer resurface completed teams or foreign-session activity
 
-### CI Cleanup
-- Tests isolated from live maintainer tmux/session state
-- Packed installs no longer require ripgrep
-- Release smoke tests focused on boot-safe packed installs
+### Lane 2 — linked Ralph + team lifecycle hardening
+- Linked Ralph stays alive for the full linked team run
+- Prompt-mode launches skip the Ralph bridge correctly
+- Leader mailbox sends are deduplicated across retry / notified paths
+- Missing-team cleanup now finalizes linked Ralph cleanly
 
-## What's Changed
+### Lane 3 — config / prompt / metadata consistency
+- Default generated status lines now include `weekly-limit`
+- Exact `gpt-5.4-mini` worker/subagent launches get a narrower prompt seam
+- Child-agent guidance now prefers inheriting the current frontier default
+- Node + Cargo release metadata are synchronized at `0.11.7`
+
+## What’s Changed
 
 ### Fixes
-- fix: keep full-suite auto-nudge fixtures aligned with canonical pane routing ([#981](https://github.com/Yeachan-Heo/oh-my-codex/pull/981))
-- fix(test): isolate tmux/session discovery from live maintainer state ([#979](https://github.com/Yeachan-Heo/oh-my-codex/pull/979), closes [#963](https://github.com/Yeachan-Heo/oh-my-codex/issues/963))
-- test(explore): avoid requiring host rg in strict allowlist test ([#978](https://github.com/Yeachan-Heo/oh-my-codex/pull/978), closes [#964](https://github.com/Yeachan-Heo/oh-my-codex/issues/964))
-- fix(explore): keep packed installs alive without rg ([#978](https://github.com/Yeachan-Heo/oh-my-codex/pull/978))
-- fix: keep release smoke focused on boot-safe packed installs ([#983](https://github.com/Yeachan-Heo/oh-my-codex/pull/983), closes [#982](https://github.com/Yeachan-Heo/oh-my-codex/issues/982))
+- watcher / dispatch recovery: `#1002`, `#1004`, `#1020`, `#1021`
+- leader nudge accuracy + mailbox-only control: `#1001`, `#1023`
+- linked Ralph + team lifecycle follow-ups: `#1011`, `#1012`, `#1013`, `#1017`, `#1025`
 
-## Referenced issues
+### Changed
+- generated defaults and prompt/model guidance: `#1009`, `#1016`, `#1018`
+- release metadata consistency follow-up: `c4c5b75` (merged by `#1024`)
 
-[#963](https://github.com/Yeachan-Heo/oh-my-codex/issues/963), [#964](https://github.com/Yeachan-Heo/oh-my-codex/issues/964), [#982](https://github.com/Yeachan-Heo/oh-my-codex/issues/982)
+### Main vs dev sanity check
+- `git rev-list --left-right --count main...dev` = `3 18`
+- the `main`-only side is merge-only ancestry (`#995`, `#997`, `#1000`)
+- no main-only patch content remained after cherry-pick elimination, so no separate main-only product changes need release-note coverage
+
+## Verification
+
+- `npm run build`
+- `node --test dist/hooks/__tests__/notify-fallback-watcher.test.js dist/hooks/__tests__/notify-hook-auto-nudge.test.js` → `49/49` passing
+- live tmux smoke: degraded-state fallback auto-nudge sent `yes, proceed [OMX_TMUX_INJECT]`
+- live tmux smoke: back-to-back Ralph watcher runs stayed in `startup_cooldown` without repeat continue spam
+
+## Remaining risk
+
+- The live smoke used isolated disposable tmux sessions with a long-lived fake `codex` process, not a full interactive Codex conversation loop.
+- The highest residual risk remains subtle control-plane state transitions under real interactive tmux sessions.
 
 ## Contributors
 
 - [@Yeachan-Heo](https://github.com/Yeachan-Heo) (Bellman)
 
-## Local release verification checklist
-
-Run before tagging / publishing:
-
-- `node scripts/check-version-sync.mjs --tag v0.11.1`
-- `npm run build`
-- `npm run check:no-unused`
-- `npm test`
-
-**Full Changelog**: [`v0.11.0...v0.11.1`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.11.0...v0.11.1)
+**Full Changelog**: [`v0.11.6...v0.11.7`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.11.6...v0.11.7)

@@ -95,6 +95,7 @@ import {
   writeWorkerRoleInstructionsFile,
 } from './worker-bootstrap.js';
 import { loadRolePrompt } from './role-router.js';
+import { composeRoleInstructionsForRole } from '../agents/native-config.js';
 import { codexPromptsDir } from '../utils/paths.js';
 import { type TeamPhase, type TerminalPhase } from './orchestrator.js';
 import {
@@ -1469,8 +1470,20 @@ export async function startTeam(
       const workerRole = taskRoles.length > 0 && uniqueTaskRoles.size === 1
         ? taskRoles[0]
         : agentType;
-      const rolePromptContent = await loadRolePrompt(workerRole, join(leaderCwd, '.codex', 'prompts'))
+      const rawRolePromptContent = await loadRolePrompt(workerRole, join(leaderCwd, '.codex', 'prompts'))
         ?? await loadRolePrompt(workerRole, codexPromptsDir());
+      const preferredReasoning = resolveAgentReasoningEffort(workerRole) ?? resolveAgentReasoningEffort(agentType);
+      const workerLaunchArgs = resolveWorkerLaunchArgsFromEnv(
+        process.env,
+        workerRole,
+        undefined,
+        preferredReasoning,
+        workerCliPlan[i - 1],
+      );
+      const resolvedWorkerModel = parseTeamWorkerLaunchArgs(workerLaunchArgs).modelOverride ?? undefined;
+      const rolePromptContent = rawRolePromptContent
+        ? composeRoleInstructionsForRole(workerRole, rawRolePromptContent, resolvedWorkerModel)
+        : null;
       const workerWorktreePath = workerWorkspace.worktreePath ?? undefined;
       const fallbackInstructionsPath = workerInstructionsPath ?? join(leaderCwd, 'AGENTS.md');
       const instructionsFilePath = workerWorktreePath
@@ -1490,21 +1503,13 @@ export async function startTeam(
         teamStateRoot,
         leaderCwd,
         workerRole,
-        rolePromptContent: rolePromptContent ?? undefined,
+        rolePromptContent: rawRolePromptContent ?? undefined,
         worktreeRootAgentsCanonical: Boolean(workerWorkspace.worktreePath),
       });
       const trigger = generateTriggerMessage(
         workerName,
         sanitized,
         resolveInstructionStateRoot(workerWorkspace.worktreePath),
-      );
-      const preferredReasoning = resolveAgentReasoningEffort(workerRole) ?? resolveAgentReasoningEffort(agentType);
-      const workerLaunchArgs = resolveWorkerLaunchArgsFromEnv(
-        process.env,
-        workerRole,
-        undefined,
-        preferredReasoning,
-        workerCliPlan[i - 1],
       );
       const initialPrompt = workerCliPlan[i - 1] === 'gemini' ? trigger : undefined;
       if (initialPrompt) {
@@ -2880,16 +2885,14 @@ async function dispatchCriticalInboxInstruction(params: {
     const fallback = await notifyWorkerOutcome(config, workerIndex, triggerMessage, paneId);
     if (fallback.ok) {
       if (isBridgeEnabled()) {
-        try { getDefaultBridge(cwd).execCommand({ command: 'MarkFailed', request_id: queued.request_id, reason: `fallback_confirmed_after_failed_receipt:${fallback.reason}` }); } catch (_) { /* non-fatal */ }
+        try { getDefaultBridge(cwd).execCommand({ command: 'MarkNotified', request_id: queued.request_id, channel: `fallback_confirmed_after_failed_receipt:${fallback.reason}` }); } catch (_) { /* non-fatal */ }
       }
-      await transitionDispatchRequest(
+      await markDispatchRequestNotified(
         teamName,
         queued.request_id,
-        'failed',
-        'failed',
-        { last_reason: `fallback_confirmed_after_failed_receipt:${fallback.reason}` },
+        { last_reason: `fallback_confirmed_after_failed_receipt:${fallback.reason}`, failed_at: undefined },
         cwd,
-      ).catch(() => {});
+      ).catch(() => null);
       return {
         ok: true,
         transport: fallback.transport,
@@ -3021,14 +3024,12 @@ async function finalizeHookPreferredMailboxDispatch(params: {
   if (receipt?.status === 'failed') {
     if (fallback.ok) {
       await markMessageNotified(teamName, workerName, messageId, cwd).catch(() => false);
-      await transitionDispatchRequest(
+      await markDispatchRequestNotified(
         teamName,
         requestId,
-        'failed',
-        'failed',
-        { message_id: messageId, last_reason: `fallback_confirmed_after_failed_receipt:${fallback.reason}` },
+        { message_id: messageId, last_reason: `fallback_confirmed_after_failed_receipt:${fallback.reason}`, failed_at: undefined },
         cwd,
-      ).catch(() => {});
+      ).catch(() => null);
       return {
         ok: true,
         transport: fallback.transport,
@@ -3307,7 +3308,8 @@ export async function sendWorkerMessage(
       ),
     });
     let finalOutcome = outcome;
-    if (leaderTransportPreference === 'hook_preferred_with_fallback' && !config.leader_pane_id) {
+    const mailboxAlreadyNotified = outcome.ok && outcome.reason === 'existing_message_already_notified';
+    if (!mailboxAlreadyNotified && leaderTransportPreference === 'hook_preferred_with_fallback' && !config.leader_pane_id) {
       if (outcome.request_id) {
         await markDispatchRequestLeaderPaneMissingDeferred({
           teamName: sanitized,
@@ -3324,7 +3326,7 @@ export async function sendWorkerMessage(
       };
     }
     const canLeaderFallbackDirectly = Boolean(config.leader_pane_id) && isTmuxAvailable();
-    if (leaderTransportPreference === 'hook_preferred_with_fallback' && canLeaderFallbackDirectly) {
+    if (!mailboxAlreadyNotified && leaderTransportPreference === 'hook_preferred_with_fallback' && canLeaderFallbackDirectly) {
       if (!outcome.request_id || !outcome.message_id) {
         throw new Error('mailbox_notify_failed:dispatch_request_missing_id');
       }
@@ -3375,7 +3377,8 @@ export async function sendWorkerMessage(
     ),
   });
   let finalOutcome = outcome;
-  if (transportPreference === 'hook_preferred_with_fallback') {
+  const mailboxAlreadyNotified = outcome.ok && outcome.reason === 'existing_message_already_notified';
+  if (!mailboxAlreadyNotified && transportPreference === 'hook_preferred_with_fallback') {
     if (!outcome.request_id || !outcome.message_id) {
       throw new Error('mailbox_notify_failed:dispatch_request_missing_id');
     }
