@@ -38,7 +38,6 @@ import {
 } from './notify-hook/state-io.js';
 import { isLeaderStale, resolveLeaderStalenessThresholdMs, maybeNudgeTeamLeader } from './notify-hook/team-leader-nudge.js';
 import { drainPendingTeamDispatch } from './notify-hook/team-dispatch.js';
-import { syncLinkedRalphOnTeamTerminal } from './notify-hook/linked-sync.js';
 import { handleTmuxInjection } from './notify-hook/tmux-injection.js';
 import { maybeAutoNudge, resolveNudgePaneTarget } from './notify-hook/auto-nudge.js';
 import {
@@ -218,10 +217,6 @@ async function main() {
     }
   }
 
-  // If linked team reaches terminal state, mark linked ralph terminal/inactive too.
-  if (!isTeamWorker) {
-    await syncLinkedRalphOnTeamTerminal(stateDir, new Date().toISOString(), payloadSessionId);
-  }
 
   // 3. Track subagent metrics (lead session only)
   if (!isTeamWorker) {

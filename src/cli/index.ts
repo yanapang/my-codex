@@ -2578,23 +2578,6 @@ async function cancelModes(): Promise<void> {
     const team = states.get("team");
     const ralph = states.get("ralph");
     const hadActiveRalph = !!(ralph && ralph.state.active === true);
-
-    if (
-      team &&
-      team.state.active === true &&
-      team.state.linked_ralph === true
-    ) {
-      cancelMode("team", "cancelled", true);
-      if (ralph && ralph.state.linked_team === true) {
-        cancelMode("ralph", "cancelled", true);
-        ralph.state.linked_team_terminal_phase = "cancelled";
-        ralph.state.linked_team_terminal_at = nowIso;
-        changed.add("ralph");
-        if (ralphLinksUltrawork(ralph.state))
-          cancelMode("ultrawork", "cancelled", true);
-      }
-    }
-
     if (ralph && ralph.state.active === true) {
       cancelMode("ralph", "cancelled", true);
       if (ralphLinksUltrawork(ralph.state))
