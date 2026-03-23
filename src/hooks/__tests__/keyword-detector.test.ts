@@ -25,6 +25,16 @@ describe('keyword detector swarm/team compatibility', () => {
     assert.deepEqual(matches.map((m) => m.skill), ['analyze']);
   });
 
+  it('limits explicit multi-skill invocation to the first contiguous $skill block', () => {
+    const matches = detectKeywords('$ralplan Fix issue #1030 and ensure other directives ($ralph, $team, $deep-interview) are not affected');
+    assert.deepEqual(matches.map((m) => m.skill), ['ralplan']);
+  });
+
+  it('does not merge implicit keyword matches when an explicit $skill is present', () => {
+    const matches = detectKeywords('please run $team and then analyze the result');
+    assert.deepEqual(matches.map((m) => m.skill), ['team']);
+  });
+
   it('does not auto-detect keywords for explicit /prompts invocation without $skills', () => {
     const matches = detectKeywords('/prompts:architect analyze this issue');
     assert.deepEqual(matches, []);
@@ -510,7 +520,7 @@ describe('applyRalplanGate', () => {
       await mkdir(plansDir, { recursive: true });
       await writeFile(
         join(plansDir, 'prd-issue-831.md'),
-        '# Approved plan\n\nLaunch hint: omx team ralph 3:executor "Execute approved issue 831 plan"\n',
+        '# Approved plan\n\nLaunch hint: omx team 3:executor "Execute approved issue 831 plan"\n',
       );
       await writeFile(join(plansDir, 'test-spec-issue-831.md'), '# Test spec\n');
 
@@ -529,7 +539,7 @@ describe('applyRalplanGate', () => {
       await mkdir(plansDir, { recursive: true });
       await writeFile(
         join(plansDir, 'prd-issue-831.md'),
-        '# Approved plan\n\nLaunch hint: omx team ralph 3:executor "Execute approved issue 831 plan"\n',
+        '# Approved plan\n\nLaunch hint: omx team 3:executor "Execute approved issue 831 plan"\n',
       );
       await writeFile(join(plansDir, 'test-spec-issue-831.md'), '# Test spec\n');
 

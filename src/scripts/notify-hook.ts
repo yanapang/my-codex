@@ -12,7 +12,6 @@
  *   process-runner.js  – child-process helper
  *   log.js             – structured event logging
  *   auto-nudge.js      – stall-pattern detection and auto-nudge
- *   linked-sync.js     – linked ralph/team terminal sync
  *   tmux-injection.js  – tmux prompt injection
  *   team-dispatch.js   – durable team dispatch queue consumer
  *   team-leader-nudge.js – leader mailbox nudge
@@ -38,9 +37,8 @@ import {
 } from './notify-hook/state-io.js';
 import { isLeaderStale, resolveLeaderStalenessThresholdMs, maybeNudgeTeamLeader } from './notify-hook/team-leader-nudge.js';
 import { drainPendingTeamDispatch } from './notify-hook/team-dispatch.js';
-import { syncLinkedRalphOnTeamTerminal } from './notify-hook/linked-sync.js';
 import { handleTmuxInjection } from './notify-hook/tmux-injection.js';
-import { maybeAutoNudge, resolveNudgePaneTarget } from './notify-hook/auto-nudge.js';
+import { maybeAutoNudge, resolveNudgePaneTarget, isDeepInterviewStateActive } from './notify-hook/auto-nudge.js';
 import {
   buildOperationalContext,
   deriveAssistantSignalEvents,
@@ -218,10 +216,6 @@ async function main() {
     }
   }
 
-  // If linked team reaches terminal state, mark linked ralph terminal/inactive too.
-  if (!isTeamWorker) {
-    await syncLinkedRalphOnTeamTerminal(stateDir, new Date().toISOString(), payloadSessionId);
-  }
 
   // 3. Track subagent metrics (lead session only)
   if (!isTeamWorker) {
@@ -326,8 +320,28 @@ async function main() {
     }
   }
 
+  // 4.45. Skill activation tracking: update skill-active-state.json before any nudge logic.
+  try {
+    const { recordSkillActivation } = await import('../hooks/keyword-detector.js');
+    const inputMessages = normalizeInputMessages(payload);
+    const latestUserInput = safeString(inputMessages.length > 0 ? inputMessages[inputMessages.length - 1] : '');
+    if (latestUserInput) {
+      await recordSkillActivation({
+        stateDir,
+        text: latestUserInput,
+        sessionId: payloadSessionId,
+        threadId: safeString(payload['thread-id'] || payload.thread_id || ''),
+        turnId: safeString(payload['turn-id'] || payload.turn_id || ''),
+      });
+    }
+  } catch {
+    // Non-fatal: keyword detector module may not be built yet
+  }
+
+  const deepInterviewStateActive = await isDeepInterviewStateActive(stateDir);
+
   // 4.55. Notify leader when individual worker transitions to idle (worker session only)
-  if (isTeamWorker && parsedTeamWorker) {
+  if (isTeamWorker && parsedTeamWorker && !deepInterviewStateActive) {
     try {
       await maybeNotifyLeaderWorkerIdle({ cwd, stateDir, logsDir, parsedTeamWorker });
     } catch {
@@ -336,7 +350,7 @@ async function main() {
   }
 
   // 4.6. Notify leader when all workers are idle (worker session only)
-  if (isTeamWorker && parsedTeamWorker) {
+  if (isTeamWorker && parsedTeamWorker && !deepInterviewStateActive) {
     try {
       await maybeNotifyLeaderAllWorkersIdle({ cwd, stateDir, logsDir, parsedTeamWorker });
     } catch {
@@ -364,7 +378,7 @@ async function main() {
   }
 
   // 6. Team leader nudge (lead session only): remind the leader to check teammate/mailbox state.
-  if (!isTeamWorker) {
+  if (!isTeamWorker && !deepInterviewStateActive) {
     try {
       await maybeNudgeTeamLeader({ cwd, stateDir, logsDir, preComputedLeaderStale });
     } catch {
@@ -473,30 +487,14 @@ async function main() {
     }
   }
 
-  // 8.5. Skill activation tracking: update skill-active-state.json when a keyword is detected.
-  try {
-    const { recordSkillActivation } = await import('../hooks/keyword-detector.js');
-    const inputMessages = normalizeInputMessages(payload);
-    const latestUserInput = safeString(inputMessages.length > 0 ? inputMessages[inputMessages.length - 1] : '');
-    if (latestUserInput) {
-      await recordSkillActivation({
-        stateDir,
-        text: latestUserInput,
-        sessionId: payloadSessionId,
-        threadId: safeString(payload['thread-id'] || payload.thread_id || ''),
-        turnId: safeString(payload['turn-id'] || payload.turn_id || ''),
-      });
-    }
-  } catch {
-    // Non-fatal: keyword detector module may not be built yet
-  }
-
   // 9. Auto-nudge: detect Codex stall patterns and automatically send a continuation prompt.
   //    Works for both leader and worker contexts.
-  try {
-    await maybeAutoNudge({ cwd, stateDir, logsDir, payload });
-  } catch {
-    // Non-critical
+  if (!deepInterviewStateActive) {
+    try {
+      await maybeAutoNudge({ cwd, stateDir, logsDir, payload });
+    } catch {
+      // Non-critical
+    }
   }
 
   // 10.5. Visual verdict persistence (non-fatal, observable – issue #421)
