@@ -1003,7 +1003,9 @@ async function runLeaderNudgeTick(): Promise<void> {
 
   try {
     const preComputedLeaderStale = await isLeaderStale(stateDir, staleThresholdMs, Date.now());
-    await maybeNudgeTeamLeader({ cwd, stateDir, logsDir, preComputedLeaderStale });
+    if (preComputedLeaderStale) {
+      await maybeNudgeTeamLeader({ cwd, stateDir, logsDir, preComputedLeaderStale });
+    }
     leaderNudgeRuns += 1;
     lastLeaderNudge = {
       enabled: true,
@@ -1019,7 +1021,7 @@ async function runLeaderNudgeTick(): Promise<void> {
       run_count: leaderNudgeRuns,
       stale_threshold_ms: staleThresholdMs,
       precomputed_leader_stale: preComputedLeaderStale,
-      reason: 'leader_nudge_checked',
+      reason: preComputedLeaderStale ? 'leader_nudge_checked' : 'leader_nudge_skipped_not_stale',
     });
   } catch (err) {
     leaderNudgeRuns += 1;
