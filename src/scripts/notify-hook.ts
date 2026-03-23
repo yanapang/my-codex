@@ -12,7 +12,6 @@
  *   process-runner.js  – child-process helper
  *   log.js             – structured event logging
  *   auto-nudge.js      – stall-pattern detection and auto-nudge
- *   linked-sync.js     – linked ralph/team terminal sync
  *   tmux-injection.js  – tmux prompt injection
  *   team-dispatch.js   – durable team dispatch queue consumer
  *   team-leader-nudge.js – leader mailbox nudge
