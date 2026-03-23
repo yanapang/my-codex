@@ -110,3 +110,10 @@ Compared `main...dev` at `dev=58f5265` / `main=fa86574`.
 
 - The prompt/model guidance changes intentionally gate on exact `gpt-5.4-mini`; future model-family renames would need a deliberate follow-up rather than silently inheriting behavior.
 - `c4c5b75` validated the version-sync contract and full TS coverage locally, but did not include a fresh GitHub Actions matrix rerun in the commit evidence.
+
+## Evidence commands
+
+- `git rev-list --left-right --count main...dev` → `3 18`
+- `git log --left-right --cherry-pick --oneline main...dev`
+- `git rev-list --left-only --cherry-pick --no-merges main...dev` → no output
+- `git show --stat --no-renames <commit>` for `72c52e9`, `0aa41fe`, `35a077e`, `2faa7ab`, `eb4cd1c`, `1bc3dde`, `22b084c`, `f981102`, `18ff653`, `8b0b1d3`, `61533ff`, `a3b7e4d`, `d80cdfb`, `58a20f4`, `4b84119`, `c4c5b75`, `58f5265`
