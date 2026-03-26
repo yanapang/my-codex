@@ -231,6 +231,87 @@ describe('notify-fallback watcher', () => {
     }
   });
 
+  it('streaming mode buffers partial JSON lines until the newline arrives', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-stream-partial-'));
+    const tempHome = await mkdtemp(join(tmpdir(), 'omx-fallback-home-'));
+    const sid = randomUUID();
+    const sessionDir = todaySessionDir(tempHome);
+    const rolloutPath = join(sessionDir, `rollout-test-fallback-stream-partial-${sid}.jsonl`);
+
+    try {
+      await mkdir(join(wd, '.omx', 'logs'), { recursive: true });
+      await mkdir(join(wd, '.omx', 'state'), { recursive: true });
+      await mkdir(sessionDir, { recursive: true });
+
+      const nowIso = new Date().toISOString();
+      const threadId = `thread-${sid}`;
+      const partialTurn = `turn-partial-${sid}`;
+
+      await writeFile(
+        rolloutPath,
+        `${JSON.stringify({
+          timestamp: nowIso,
+          type: 'session_meta',
+          payload: { id: threadId, cwd: wd },
+        })}
+`
+      );
+
+      const watcherScript = new URL('../../../dist/scripts/notify-fallback-watcher.js', import.meta.url).pathname;
+      const notifyHook = new URL('../../../dist/scripts/notify-hook.js', import.meta.url).pathname;
+      const watcherStatePath = join(wd, '.omx', 'state', 'notify-fallback-state.json');
+      const turnLog = join(wd, '.omx', 'logs', `turns-${new Date().toISOString().split('T')[0]}.jsonl`);
+      const child = spawn(
+        process.execPath,
+        [watcherScript, '--cwd', wd, '--notify-script', notifyHook, '--poll-ms', '75'],
+        { cwd: wd, stdio: 'ignore', env: buildCleanNotifyEnv({ HOME: tempHome }) }
+      );
+
+      await waitFor(async () => {
+        try {
+          const state = JSON.parse(await readFile(watcherStatePath, 'utf-8'));
+          return state.tracked_files === 1;
+        } catch {
+          return false;
+        }
+      });
+
+      const partialPrefix = JSON.stringify({
+        timestamp: new Date(Date.now() + 500).toISOString(),
+        type: 'event_msg',
+        payload: {
+          type: 'task_complete',
+          turn_id: partialTurn,
+          last_agent_message: 'partial message',
+        },
+      });
+      const splitAt = Math.floor(partialPrefix.length / 2);
+      await writeFile(rolloutPath, `${await readFile(rolloutPath, 'utf-8')}${partialPrefix.slice(0, splitAt)}`);
+
+      await sleep(250);
+      const beforeLines = await readLines(turnLog);
+      assert.equal(beforeLines.length, 0, 'partial line should not be emitted before newline completes it');
+
+      await writeFile(rolloutPath, `${await readFile(rolloutPath, 'utf-8')}${partialPrefix.slice(splitAt)}\n`);
+
+      await waitFor(async () => {
+        const turnLines = await readLines(turnLog);
+        return turnLines.length === 1 && new RegExp(partialTurn).test(turnLines[0] ?? '');
+      }, 4000, 75);
+
+      child.kill('SIGTERM');
+      await once(child, 'exit');
+
+      const turnLines = await readLines(turnLog);
+      assert.equal(turnLines.length, 1);
+      assert.match(turnLines[0], new RegExp(partialTurn));
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+      await rm(tempHome, { recursive: true, force: true });
+      await rm(rolloutPath, { force: true });
+    }
+  });
+
   it('streaming mode tails from EOF and does not replay backlog', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-stream-'));
     const tempHome = await mkdtemp(join(tmpdir(), 'omx-fallback-home-'));

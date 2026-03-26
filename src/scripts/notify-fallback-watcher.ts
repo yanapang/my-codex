@@ -1101,6 +1101,15 @@ async function ensureTrackedFiles(): Promise<void> {
   }
 }
 
+function splitBufferedLines(partial: string, delta: string): { lines: string[]; partial: string } {
+  const merged = partial + delta;
+  const lines = merged.split('\n');
+  return {
+    lines,
+    partial: lines.pop() || '',
+  };
+}
+
 async function pollFiles(): Promise<void> {
   for (const [path, meta] of fileState.entries()) {
     const currentSize = (await stat(path).catch(() => ({ size: 0 }))).size || 0;
@@ -1109,9 +1118,9 @@ async function pollFiles(): Promise<void> {
     if (!content) continue;
     const delta = content.slice(meta.offset);
     meta.offset = currentSize;
-    const merged = meta.partial + delta;
-    const lines = merged.split('\n');
-    meta.partial = lines.pop() || '';
+    const buffered = splitBufferedLines(meta.partial, delta);
+    const lines = buffered.lines;
+    meta.partial = buffered.partial;
     for (const line of lines) {
       if (!line.trim()) continue;
       await processLine(meta, line, path);
