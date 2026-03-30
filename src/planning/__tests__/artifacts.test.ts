@@ -35,6 +35,27 @@ describe('planning artifacts', () => {
 
 
 
+  it('parses $ralph aliases with single-quoted task text for approved launch hints', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    const specsDir = join(tempDir, '.omx', 'specs');
+    await mkdir(plansDir, { recursive: true });
+    await mkdir(specsDir, { recursive: true });
+    await writeFile(
+      join(plansDir, 'prd-issue-1072.md'),
+      "# PRD\n\nLaunch via $ralph 'Execute approved issue 1072 plan'\n",
+    );
+    await writeFile(join(plansDir, 'test-spec-issue-1072.md'), '# Test Spec\n');
+    await writeFile(join(specsDir, 'deep-interview-issue-1072.md'), '# Deep Interview Spec\n');
+
+    const hint = readApprovedExecutionLaunchHint(tempDir, 'ralph');
+    assert.ok(hint);
+    assert.equal(hint?.command, "$ralph 'Execute approved issue 1072 plan'");
+    assert.equal(hint?.task, 'Execute approved issue 1072 plan');
+    assert.equal(hint?.sourcePath, join(plansDir, 'prd-issue-1072.md'));
+    assert.deepEqual(hint?.testSpecPaths, [join(plansDir, 'test-spec-issue-1072.md')]);
+    assert.deepEqual(hint?.deepInterviewSpecPaths, [join(specsDir, 'deep-interview-issue-1072.md')]);
+  });
+
   it('includes approved Ralph launch context with test and deep-interview artifacts', async () => {
     const plansDir = join(tempDir, '.omx', 'plans');
     const specsDir = join(tempDir, '.omx', 'specs');
@@ -53,6 +74,30 @@ describe('planning artifacts', () => {
     assert.equal(hint?.sourcePath, join(plansDir, 'prd-issue-1072.md'));
     assert.deepEqual(hint?.testSpecPaths, [join(plansDir, 'test-spec-issue-1072.md')]);
     assert.deepEqual(hint?.deepInterviewSpecPaths, [join(specsDir, 'deep-interview-issue-1072.md')]);
+  });
+
+  it('parses $team aliases with single-quoted task text for approved launch hints', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    const specsDir = join(tempDir, '.omx', 'specs');
+    await mkdir(plansDir, { recursive: true });
+    await mkdir(specsDir, { recursive: true });
+    await writeFile(
+      join(plansDir, 'prd-issue-1142.md'),
+      "# PRD\n\nLaunch via $team ralph 4:debugger 'Execute approved issue 1142 plan'\n",
+    );
+    await writeFile(join(plansDir, 'test-spec-issue-1142.md'), '# Test Spec\n');
+    await writeFile(join(specsDir, 'deep-interview-issue-1142.md'), '# Deep Interview Spec\n');
+
+    const hint = readApprovedExecutionLaunchHint(tempDir, 'team');
+    assert.ok(hint);
+    assert.equal(hint?.command, "$team ralph 4:debugger 'Execute approved issue 1142 plan'");
+    assert.equal(hint?.task, 'Execute approved issue 1142 plan');
+    assert.equal(hint?.workerCount, 4);
+    assert.equal(hint?.agentType, 'debugger');
+    assert.equal(hint?.linkedRalph, true);
+    assert.equal(hint?.sourcePath, join(plansDir, 'prd-issue-1142.md'));
+    assert.deepEqual(hint?.testSpecPaths, [join(plansDir, 'test-spec-issue-1142.md')]);
+    assert.deepEqual(hint?.deepInterviewSpecPaths, [join(specsDir, 'deep-interview-issue-1142.md')]);
   });
 
   it('includes approved team launch context with staffing and matching artifacts', async () => {
