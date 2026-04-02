@@ -202,13 +202,7 @@ If this happens, try:
 - [Français](./README.fr.md)
 - [Italiano](./README.it.md)
 - [Ελληνικά](./README.el.md)
-
-## Contributors
-
-| Role | Name | GitHub |
-| --- | --- | --- |
-| Creator & Lead | Yeachan Heo | [@Yeachan-Heo](https://github.com/Yeachan-Heo) |
-| Maintainer | HaD0Yun | [@HaD0Yun](https://github.com/HaD0Yun) |
+- [Polski](./README.pl.md)
 
 ## Contributors
 
