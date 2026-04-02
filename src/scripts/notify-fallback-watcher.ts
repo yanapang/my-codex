@@ -70,6 +70,7 @@ async function waitForPidExit(pid: number, timeoutMs = 3000, stepMs = 50): Promi
 const cwd = resolve(argValue('--cwd', process.cwd()));
 const notifyScript = resolve(argValue('--notify-script', join(cwd, 'dist', 'scripts', 'notify-hook.js')));
 const runOnce = process.argv.includes('--once');
+const authorityOnly = process.argv.includes('--authority-only');
 // Keep fallback control-plane ticks comfortably below the default dispatch
 // ack budget so leaderless team dispatch + stale-alert recovery do not feel
 // laggy between native notify-hook turns.
@@ -250,6 +251,21 @@ let lastFallbackAutoNudge: FallbackAutoNudgeState = {
 };
 function eventLog(event: Record<string, unknown>): Promise<void> {
   return appendFile(logPath, `${JSON.stringify({ timestamp: new Date().toISOString(), ...event })}\n`).catch(() => {});
+}
+
+function shouldLogLeaderNudgeTick(reason: string): boolean {
+  return reason === 'leader_nudge_checked' || reason === 'leader_nudge_failed';
+}
+
+function shouldLogDispatchDrainTick(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return false;
+  const record = result as Record<string, unknown>;
+  const processed = asNumber(record.processed as string | number | undefined, 0);
+  const skipped = asNumber(record.skipped as string | number | undefined, 0);
+  const failed = asNumber(record.failed as string | number | undefined, 0);
+  if (processed > 0 || skipped > 0 || failed > 0) return true;
+  const reason = safeString(record.reason).trim();
+  return reason !== '' && reason !== 'worker_context';
 }
 
 function normalizeRalphContinueSteerState(raw: Record<string, unknown> | null | undefined): RalphContinueSteerState {
@@ -787,6 +803,7 @@ async function writeState(extra: Record<string, unknown> = {}): Promise<void> {
     started_at: new Date(startedAt).toISOString(),
     cwd,
     notify_script: notifyScript,
+    authority_only: authorityOnly,
     poll_ms: pollMs,
     pid_file: runOnce ? null : pidFilePath,
     max_lifetime_ms: maxLifetimeMs,
@@ -1205,13 +1222,6 @@ async function runLeaderNudgeTick(): Promise<void> {
       last_tick_at: startedIso,
       last_error: 'worker_context',
     };
-    await eventLog({
-      type: 'leader_nudge_tick',
-      leader_only: false,
-      run_count: leaderNudgeRuns,
-      reason: 'worker_context',
-      stale_threshold_ms: staleThresholdMs,
-    });
     return;
   }
 
@@ -1229,14 +1239,17 @@ async function runLeaderNudgeTick(): Promise<void> {
       last_tick_at: startedIso,
       last_error: null,
     };
-    await eventLog({
-      type: 'leader_nudge_tick',
-      leader_only: true,
-      run_count: leaderNudgeRuns,
-      stale_threshold_ms: staleThresholdMs,
-      precomputed_leader_stale: preComputedLeaderStale,
-      reason: preComputedLeaderStale ? 'leader_nudge_checked' : 'leader_nudge_skipped_not_stale',
-    });
+    const reason = preComputedLeaderStale ? 'leader_nudge_checked' : 'leader_nudge_skipped_not_stale';
+    if (shouldLogLeaderNudgeTick(reason)) {
+      await eventLog({
+        type: 'leader_nudge_tick',
+        leader_only: true,
+        run_count: leaderNudgeRuns,
+        stale_threshold_ms: staleThresholdMs,
+        precomputed_leader_stale: preComputedLeaderStale,
+        reason,
+      });
+    }
   } catch (err) {
     leaderNudgeRuns += 1;
     lastLeaderNudge = {
@@ -1269,13 +1282,15 @@ async function runDispatchDrainTick(): Promise<void> {
       last_result: result,
       last_error: null,
     };
-    await eventLog({
-      type: 'dispatch_drain_tick',
-      leader_only: lastDispatchDrain.leader_only,
-      dispatch_max_per_tick: dispatchTickMax,
-      run_count: dispatchDrainRuns,
-      ...(result && typeof result === 'object' ? result as Record<string, unknown> : {}),
-    });
+    if (shouldLogDispatchDrainTick(result)) {
+      await eventLog({
+        type: 'dispatch_drain_tick',
+        leader_only: lastDispatchDrain.leader_only,
+        dispatch_max_per_tick: dispatchTickMax,
+        run_count: dispatchDrainRuns,
+        ...(result && typeof result === 'object' ? result as Record<string, unknown> : {}),
+      });
+    }
   } catch (err) {
     dispatchDrainRuns += 1;
     lastDispatchDrain = {
@@ -1305,11 +1320,13 @@ async function pumpTeamControlPlaneTick(): Promise<void> {
 
 
 async function runWatcherCycle(): Promise<void> {
-  await ensureTrackedFiles();
-  await pollFiles();
+  if (!authorityOnly) {
+    await ensureTrackedFiles();
+    await pollFiles();
+  }
   await pumpTeamControlPlaneTick();
   const deepInterviewStateActive = await isDeepInterviewStateActive(stateDir);
-  if (!deepInterviewStateActive) {
+  if (!authorityOnly && !deepInterviewStateActive) {
     await runRalphWatcherBehaviorTick();
   }
   await writeState();
@@ -1339,16 +1356,19 @@ async function main(): Promise<void> {
 
   await registerPidFile();
   await loadPersistedWatcherState();
-  await eventLog({
-    type: 'watcher_start',
-    cwd,
-    notify_script: notifyScript,
-    poll_ms: pollMs,
-    once: runOnce,
-    parent_pid: parentPid,
-    pid_file: runOnce ? null : pidFilePath,
-    max_lifetime_ms: maxLifetimeMs,
-  });
+  if (!(runOnce && authorityOnly)) {
+    await eventLog({
+      type: 'watcher_start',
+      cwd,
+      notify_script: notifyScript,
+      authority_only: authorityOnly,
+      poll_ms: pollMs,
+      once: runOnce,
+      parent_pid: parentPid,
+      pid_file: runOnce ? null : pidFilePath,
+      max_lifetime_ms: maxLifetimeMs,
+    });
+  }
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGHUP', () => shutdown('SIGHUP'));
@@ -1357,7 +1377,9 @@ async function main(): Promise<void> {
 
   if (runOnce) {
     await runWatcherCycle();
-    await eventLog({ type: 'watcher_once_complete', seen_turns: seenTurnKeys.size });
+    if (!authorityOnly) {
+      await eventLog({ type: 'watcher_once_complete', authority_only: authorityOnly, seen_turns: seenTurnKeys.size });
+    }
     process.exit(0);
   }
 
