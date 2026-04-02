@@ -17,13 +17,7 @@ export function readJsonIfExists(path: string, fallback: any): Promise<any> {
     .catch(() => fallback);
 }
 
-export async function getScopedStateDirsForCurrentSession(baseStateDir: string, payloadSessionId?: any): Promise<string[]> {
-  const explicitSessionId = safeString(payloadSessionId || '');
-  if (SESSION_ID_PATTERN.test(explicitSessionId)) {
-    const sessionDir = join(baseStateDir, 'sessions', explicitSessionId);
-    return [sessionDir];
-  }
-
+export async function getScopedStateDirsForCurrentSession(baseStateDir: string): Promise<string[]> {
   const sessionPath = join(baseStateDir, 'session.json');
   try {
     const session = JSON.parse(await readFile(sessionPath, 'utf-8'));
