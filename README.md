@@ -202,6 +202,7 @@ If this happens, try:
 - [Français](./README.fr.md)
 - [Italiano](./README.it.md)
 - [Ελληνικά](./README.el.md)
+- [Polski](./README.pl.md)
 
 ## Contributors
 
