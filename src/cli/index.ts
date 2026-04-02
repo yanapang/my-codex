@@ -2330,6 +2330,7 @@ async function startNotifyFallbackWatcher(
       cwd,
       detached: true,
       stdio: "ignore",
+      windowsHide: true,
       env: buildNotifyFallbackWatcherEnv(process.env, {
         codexHomeOverride: options.codexHomeOverride,
         enableAuthority: options.enableAuthority === true,
@@ -2397,6 +2398,7 @@ async function startHookDerivedWatcher(cwd: string): Promise<void> {
     cwd,
     detached: true,
     stdio: "ignore",
+    windowsHide: true,
     env: process.env,
   });
   child.unref();
@@ -2498,6 +2500,7 @@ async function flushNotifyFallbackOnce(
       cwd,
       stdio: "ignore",
       timeout: 3000,
+      windowsHide: true,
       env: buildNotifyFallbackWatcherEnv(process.env, {
         codexHomeOverride: options.codexHomeOverride,
         enableAuthority: options.enableAuthority === true,
@@ -2517,6 +2520,7 @@ async function flushHookDerivedWatcherOnce(cwd: string): Promise<void> {
     cwd,
     stdio: "ignore",
     timeout: 3000,
+    windowsHide: true,
     env: {
       ...process.env,
       OMX_HOOK_DERIVED_SIGNALS: "1",

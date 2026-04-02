@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -62,8 +62,61 @@ describe('buildPlatformCommandSpec', () => {
     }
   });
 
-  it('prefers PowerShell shims over cmd shims when both exist', async () => {
+  it('prefers the npm-installed codex.js entrypoint over Windows shims when available', async () => {
     const fakeBin = await mkdtemp(join(tmpdir(), 'omx-platform-ps1-'));
+    try {
+      const ps1Path = join(fakeBin, 'codex.ps1');
+      const cmdPath = join(fakeBin, 'codex.cmd');
+      const codexJsPath = join(fakeBin, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+      await writeFile(ps1Path, '');
+      await writeFile(cmdPath, '');
+      await mkdir(join(fakeBin, 'node_modules', '@openai', 'codex', 'bin'), { recursive: true });
+      await writeFile(codexJsPath, '');
+      const spec = buildPlatformCommandSpec(
+        'codex',
+        ['--version'],
+        'win32',
+        {
+          PATH: fakeBin,
+          PATHEXT: '.EXE;.CMD;.PS1',
+        },
+      );
+
+      assert.equal(spec.command, process.execPath);
+      assert.deepEqual(spec.args, [codexJsPath, '--version']);
+      assert.equal(spec.resolvedPath, codexJsPath);
+    } finally {
+      await rm(fakeBin, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to cmd shims when the node-hosted codex entrypoint is unavailable', async () => {
+    const fakeBin = await mkdtemp(join(tmpdir(), 'omx-platform-cmd-fallback-'));
+    try {
+      const cmdPath = join(fakeBin, 'codex.cmd');
+      await writeFile(cmdPath, '@echo off\r\n');
+      const spec = buildPlatformCommandSpec(
+        'codex',
+        ['--version'],
+        'win32',
+        {
+          PATH: fakeBin,
+          PATHEXT: '.EXE;.CMD;.PS1',
+          ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+        },
+      );
+
+      assert.equal(spec.command, 'C:\\Windows\\System32\\cmd.exe');
+      assert.deepEqual(spec.args.slice(0, 3), ['/d', '/s', '/c']);
+      assert.match(spec.args[3] || '', /codex\.cmd/i);
+      assert.equal(spec.resolvedPath, cmdPath);
+    } finally {
+      await rm(fakeBin, { recursive: true, force: true });
+    }
+  });
+
+  it('still prefers PowerShell shims over cmd shims when no node-hosted entrypoint exists', async () => {
+    const fakeBin = await mkdtemp(join(tmpdir(), 'omx-platform-ps1-fallback-'));
     try {
       const ps1Path = join(fakeBin, 'codex.ps1');
       const cmdPath = join(fakeBin, 'codex.cmd');
@@ -195,6 +248,56 @@ describe('spawnPlatformCommandSync', () => {
       assert.equal(calls[0]?.command, 'C:\\Windows\\System32\\cmd.exe');
       assert.match((calls[0]?.args[3] || ''), /codex\.cmd/i);
       assert.equal(calls[0]?.options?.windowsVerbatimArguments, true);
+    } finally {
+      await rm(fakeBin, { recursive: true, force: true });
+    }
+  });
+
+  it('launches Windows node-hosted codex through process.execPath without verbatim cmd arguments', async () => {
+    const fakeBin = await mkdtemp(join(tmpdir(), 'omx-platform-spawn-node-hosted-'));
+    try {
+      const cmdPath = join(fakeBin, 'codex.cmd');
+      const codexJsPath = join(fakeBin, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+      await writeFile(cmdPath, '@echo off\r\n');
+      await mkdir(join(fakeBin, 'node_modules', '@openai', 'codex', 'bin'), { recursive: true });
+      await writeFile(codexJsPath, '');
+      const calls: Array<{
+        command: string;
+        args: readonly string[];
+        options?: { windowsVerbatimArguments?: boolean; windowsHide?: boolean };
+      }> = [];
+
+      const probed = spawnPlatformCommandSync(
+        'codex',
+        ['--version'],
+        { encoding: 'utf-8' },
+        'win32',
+        {
+          PATH: fakeBin,
+          PATHEXT: '.EXE;.CMD;.PS1',
+          ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+        },
+        undefined,
+        (((command: string, args: readonly string[], options?: { windowsVerbatimArguments?: boolean; windowsHide?: boolean }) => {
+          calls.push({ command, args, options });
+          return {
+            status: 0,
+            stdout: 'ok',
+            stderr: '',
+            pid: 1,
+            output: [],
+            signal: null,
+          };
+        }) as unknown) as typeof import('child_process').spawnSync,
+      );
+
+      assert.equal(probed.spec.command, process.execPath);
+      assert.deepEqual(probed.spec.args, [codexJsPath, '--version']);
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0]?.command, process.execPath);
+      assert.deepEqual(calls[0]?.args, [codexJsPath, '--version']);
+      assert.equal(calls[0]?.options?.windowsVerbatimArguments, undefined);
+      assert.equal(calls[0]?.options?.windowsHide, true);
     } finally {
       await rm(fakeBin, { recursive: true, force: true });
     }

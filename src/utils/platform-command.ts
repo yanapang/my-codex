@@ -1,6 +1,6 @@
 import { existsSync } from 'fs';
 import { spawnSync, type SpawnSyncOptionsWithStringEncoding, type SpawnSyncReturns } from 'child_process';
-import { delimiter, extname, join, resolve } from 'path';
+import { basename, delimiter, dirname, extname, join, resolve } from 'path';
 
 type ExistsSyncLike = (path: string) => boolean;
 type SpawnSyncLike = typeof spawnSync;
@@ -23,6 +23,9 @@ const WINDOWS_DIRECT_EXTENSIONS = new Set(['.com', '.exe']);
 const WINDOWS_CMD_EXTENSIONS = new Set(['.bat', '.cmd']);
 const WINDOWS_EXTENSION_PRIORITY = ['.exe', '.com', '.ps1', '.cmd', '.bat'];
 const NODE_HOSTED_SCRIPT_EXTENSIONS = new Set(['.js', '.mjs', '.cjs']);
+const WINDOWS_NODE_HOSTED_COMMANDS: Record<string, string[]> = {
+  codex: ['node_modules', '@openai', 'codex', 'bin', 'codex.js'],
+};
 
 function isWindowsPathLike(command: string): boolean {
   return /^[A-Za-z]:/.test(command) || /[\\/]/.test(command);
@@ -45,6 +48,23 @@ function classifyWindowsCommandPath(path: string): 'direct' | 'cmd' | 'powershel
   if (extension === '.ps1') return 'powershell';
   if (WINDOWS_DIRECT_EXTENSIONS.has(extension)) return 'direct';
   return 'direct';
+}
+
+function normalizeWindowsCommandName(command: string): string {
+  return basename(command, extname(command)).toLowerCase();
+}
+
+function resolveWindowsNodeHostedCommandPath(
+  command: string,
+  resolvedPath: string,
+  existsImpl: ExistsSyncLike,
+): string | null {
+  const relativeSegments = WINDOWS_NODE_HOSTED_COMMANDS[normalizeWindowsCommandName(command)];
+  if (!relativeSegments) return null;
+  if (classifyWindowsCommandPath(resolvedPath) === 'direct') return null;
+
+  const candidate = join(dirname(resolvedPath), ...relativeSegments);
+  return existsImpl(candidate) ? candidate : null;
 }
 
 function resolveWindowsCommandPath(
@@ -173,6 +193,15 @@ export function buildPlatformCommandSpec(
   }
 
   const kind = classifyWindowsCommandPath(resolvedPath);
+  const nodeHostedPath = resolveWindowsNodeHostedCommandPath(command, resolvedPath, existsImpl);
+  if (nodeHostedPath) {
+    return {
+      command: process.execPath,
+      args: [nodeHostedPath, ...args],
+      resolvedPath: nodeHostedPath,
+    };
+  }
+
   if (kind === 'cmd') {
     return buildCmdLaunch(resolvedPath, args, env);
   }

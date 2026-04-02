@@ -71,6 +71,7 @@ export function starRepo(spawnSyncFn: typeof childProcess.spawnSync = childProce
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: 10000,
+    windowsHide: true,
   });
   if (result.error) return { ok: false, error: result.error.message };
   if (result.status !== 0) {
