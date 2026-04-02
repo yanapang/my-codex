@@ -734,6 +734,58 @@ describe('notify-fallback watcher', () => {
     }
   });
 
+  it('respects `.omx/tmux-hook.json` enabled:false for fallback auto-nudge', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-auto-nudge-disabled-'));
+    const fakeBinDir = join(wd, 'fake-bin');
+    const tmuxLogPath = join(wd, 'tmux.log');
+    const codexHome = join(wd, 'codex-home');
+    try {
+      await mkdir(join(wd, '.omx', 'logs'), { recursive: true });
+      await mkdir(join(wd, '.omx', 'state'), { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+      await mkdir(codexHome, { recursive: true });
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+      await writeFile(join(codexHome, '.omx-config.json'), JSON.stringify({
+        autoNudge: { enabled: true, delaySec: 0, ttlMs: 30_000 },
+      }, null, 2));
+      await writeFile(join(wd, '.omx', 'tmux-hook.json'), JSON.stringify({
+        enabled: false,
+        target: { type: 'pane', value: '%42' },
+      }, null, 2));
+      await writeSessionStart(wd, 'sess-managed-fallback');
+      await writeFile(join(wd, '.omx', 'state', 'hud-state.json'), JSON.stringify({
+        last_turn_at: new Date(Date.now() - 6_000).toISOString(),
+        turn_count: 7,
+        last_agent_output: 'If you want, I can keep going from here.',
+      }, null, 2));
+
+      const watcherScript = new URL('../../../dist/scripts/notify-fallback-watcher.js', import.meta.url).pathname;
+      const notifyHook = new URL('../../../dist/scripts/notify-hook.js', import.meta.url).pathname;
+      const result = spawnSync(
+        process.execPath,
+        [watcherScript, '--once', '--cwd', wd, '--notify-script', notifyHook, '--poll-ms', '50'],
+        {
+          encoding: 'utf-8',
+          env: buildCleanNotifyEnv({
+            PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+            CODEX_HOME: codexHome,
+            OMX_SESSION_ID: 'sess-managed-fallback',
+            TMUX: '1',
+            TMUX_PANE: '%42',
+            OMX_NOTIFY_FALLBACK_AUTO_NUDGE_STALL_MS: '5000',
+          }),
+        },
+      );
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+
+      const tmuxLog = await readFile(tmuxLogPath, 'utf8').catch(() => '');
+      assert.doesNotMatch(tmuxLog, /send-keys -t %42 -l yes, proceed \[OMX_TMUX_INJECT\]/);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it('suppresses fallback unmanaged-session auto-nudge skip logs while idle', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-auto-nudge-unmanaged-'));
     const fakeBinDir = join(wd, 'fake-bin');
