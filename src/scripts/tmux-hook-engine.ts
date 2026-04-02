@@ -80,6 +80,10 @@ export function normalizeTmuxHookConfig(raw: any): any {
   };
 }
 
+export function tmuxHookExplicitlyDisablesInjection(raw: any): boolean {
+  return Boolean(raw && typeof raw === 'object' && raw.enabled === false);
+}
+
 export function pickActiveMode(activeModes: any, allowedModes: any): string | null {
   const activeSet = new Set((activeModes || []).filter((mode: any) => typeof mode === 'string'));
   for (const mode of allowedModes || []) {

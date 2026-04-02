@@ -12,7 +12,7 @@ import { readJsonIfExists, getScopedStateDirsForCurrentSession, readdir } from '
 import { runProcess } from './process-runner.js';
 import { logTmuxHookEvent } from './log.js';
 import { evaluatePaneInjectionReadiness, mapPaneInjectionReadinessReason, sendPaneInput } from './team-tmux-guard.js';
-import { buildCapturePaneArgv, DEFAULT_MARKER } from '../tmux-hook-engine.js';
+import { buildCapturePaneArgv, DEFAULT_MARKER, tmuxHookExplicitlyDisablesInjection } from '../tmux-hook-engine.js';
 import {
   isManagedOmxSession,
   resolveManagedCurrentPane,
@@ -359,6 +359,13 @@ export async function loadAutoNudgeConfig() {
   return normalizeAutoNudgeConfig(raw.autoNudge);
 }
 
+async function localTmuxInjectionDisabled(cwd) {
+  const normalizedCwd = safeString(cwd).trim();
+  if (!normalizedCwd) return false;
+  const raw = await readJsonIfExists(join(normalizedCwd, '.omx', 'tmux-hook.json'), null);
+  return tmuxHookExplicitlyDisablesInjection(raw);
+}
+
 export function detectStallPattern(text, patterns) {
   if (!text || typeof text !== 'string') return false;
   const normalized = normalizeStallDetectionText(text);
@@ -413,6 +420,14 @@ export async function resolveNudgePaneTarget(stateDir: any, cwd = '', payload: a
 export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
   const config = await loadAutoNudgeConfig();
   if (!config.enabled) return;
+  if (await localTmuxInjectionDisabled(cwd)) {
+    await logTmuxHookEvent(logsDir, {
+      timestamp: new Date().toISOString(),
+      type: 'auto_nudge_skipped',
+      reason: 'tmux_hook_disabled',
+    }).catch(() => {});
+    return;
+  }
 
   const sourceName = safeString(payload?.source || '');
   const managedSession = await isManagedOmxSession(cwd, payload, { allowTeamWorker: true });
