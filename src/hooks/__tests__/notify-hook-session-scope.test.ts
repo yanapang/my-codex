@@ -24,6 +24,40 @@ function runNotifyHook(payload: Record<string, unknown>) {
 }
 
 describe('notify-hook session-scoped iteration updates', () => {
+  it('does not mutate root active mode state when current session scope exists only in session.json', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-notify-root-fallback-'));
+    try {
+      const stateDir = join(wd, '.omx', 'state');
+      const sessionId = 'sess-current';
+      await mkdir(stateDir, { recursive: true });
+
+      await writeFile(join(stateDir, 'session.json'), JSON.stringify({ session_id: sessionId }));
+      await writeFile(join(stateDir, 'team-state.json'), JSON.stringify({
+        active: true,
+        iteration: 41,
+        max_iterations: 100,
+        current_phase: 'executing',
+      }));
+
+      const result = runNotifyHook({
+        cwd: wd,
+        type: 'agent-turn-complete',
+        thread_id: 'th-root',
+        turn_id: 'tu-root',
+        input_messages: [],
+        last_assistant_message: 'ok',
+      });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+
+      const rootState = JSON.parse(await readFile(join(stateDir, 'team-state.json'), 'utf-8'));
+      assert.equal(rootState.iteration, 41);
+      assert.equal(rootState.last_turn_at, undefined);
+      assert.equal(existsSync(join(stateDir, 'sessions', sessionId, 'team-state.json')), false);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it('increments iteration for active session-scoped mode states', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-notify-test-'));
     try {
