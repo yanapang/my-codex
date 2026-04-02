@@ -676,9 +676,11 @@ export async function drainPendingTeamDispatch({
           request.notified_at = nowIso;
           request.last_reason = result.reason;
           runtimeExec({ command: 'MarkNotified', request_id: request.request_id, channel: 'tmux' }, stateDir);
-          if (usingLegacyRequests && request.kind === 'mailbox' && request.message_id) {
+          if (request.kind === 'mailbox' && request.message_id) {
             runtimeExec({ command: 'MarkMailboxNotified', message_id: request.message_id }, stateDir);
-            await updateMailboxNotified(stateDir, teamName, request.to_worker, request.message_id).catch(() => {});
+            if (usingLegacyRequests) {
+              await updateMailboxNotified(stateDir, teamName, request.to_worker, request.message_id).catch(() => {});
+            }
           }
           processed += 1;
           mutated = true;
