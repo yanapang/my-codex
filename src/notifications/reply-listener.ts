@@ -894,6 +894,7 @@ export function startReplyListener(config: ReplyListenerDaemonConfig): DaemonRes
     const child = spawn('node', ['-e', daemonScript], {
       detached: true,
       stdio: 'ignore',
+      windowsHide: true,
       cwd: process.cwd(),
       env: createMinimalDaemonEnv(),
     });
