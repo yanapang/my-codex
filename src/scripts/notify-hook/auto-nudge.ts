@@ -600,8 +600,10 @@ export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
   const config = await loadAutoNudgeConfig();
   if (!config.enabled) return;
 
+  const sourceName = safeString(payload?.source || '');
   const managedSession = await isManagedOmxSessionForAutoNudge(cwd, payload);
   if (!managedSession) {
+    if (sourceName === 'notify-fallback-watcher-stall') return;
     await logTmuxHookEvent(logsDir, {
       timestamp: new Date().toISOString(),
       type: 'auto_nudge_skipped',
@@ -681,7 +683,6 @@ export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
       return;
     }
 
-    const sourceName = safeString(payload?.source || '');
     const isFallbackWatcherSource = sourceName === 'notify-fallback-watcher-stall';
     if (!isFallbackWatcherSource && config.stallMs > 0) {
       nudgeState.pendingSignature = signature;
