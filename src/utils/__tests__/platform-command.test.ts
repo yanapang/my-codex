@@ -90,6 +90,34 @@ describe('buildPlatformCommandSpec', () => {
     }
   });
 
+  it('resolves codex.js from npm .bin-style Windows shim layouts', async () => {
+    const fakeRoot = await mkdtemp(join(tmpdir(), 'omx-platform-local-shim-'));
+    const fakeBin = join(fakeRoot, 'node_modules', '.bin');
+    try {
+      const cmdPath = join(fakeBin, 'codex.cmd');
+      const codexJsPath = join(fakeRoot, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+      await mkdir(fakeBin, { recursive: true });
+      await mkdir(join(fakeRoot, 'node_modules', '@openai', 'codex', 'bin'), { recursive: true });
+      await writeFile(cmdPath, '@echo off\r\n');
+      await writeFile(codexJsPath, '');
+      const spec = buildPlatformCommandSpec(
+        'codex',
+        ['--version'],
+        'win32',
+        {
+          PATH: fakeBin,
+          PATHEXT: '.EXE;.CMD;.PS1',
+        },
+      );
+
+      assert.equal(spec.command, process.execPath);
+      assert.deepEqual(spec.args, [codexJsPath, '--version']);
+      assert.equal(spec.resolvedPath, codexJsPath);
+    } finally {
+      await rm(fakeRoot, { recursive: true, force: true });
+    }
+  });
+
   it('falls back to cmd shims when the node-hosted codex entrypoint is unavailable', async () => {
     const fakeBin = await mkdtemp(join(tmpdir(), 'omx-platform-cmd-fallback-'));
     try {

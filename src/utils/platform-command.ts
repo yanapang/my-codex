@@ -63,8 +63,15 @@ function resolveWindowsNodeHostedCommandPath(
   if (!relativeSegments) return null;
   if (classifyWindowsCommandPath(resolvedPath) === 'direct') return null;
 
-  const candidate = join(dirname(resolvedPath), ...relativeSegments);
-  return existsImpl(candidate) ? candidate : null;
+  const candidates = [
+    join(dirname(resolvedPath), ...relativeSegments),
+    join(dirname(resolvedPath), '..', ...relativeSegments.slice(1)),
+    join(dirname(resolvedPath), '..', ...relativeSegments),
+  ];
+  for (const candidate of candidates) {
+    if (existsImpl(candidate)) return candidate;
+  }
+  return null;
 }
 
 function resolveWindowsCommandPath(
