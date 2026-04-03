@@ -18,6 +18,7 @@ const SIGTERM_GRACE_MS = 5_000;
 const STALE_TMP_MAX_AGE_MS = 60 * 60 * 1000;
 const OMX_MCP_SERVER_PATTERN = /(?:^|[\\/])dist[\\/]mcp[\\/](?:state|memory|code-intel|trace|team)-server\.(?:[cm]?js|ts)\b/i;
 const CODEX_PROCESS_PATTERN = /(?:^|[\\/\s])codex(?:\.js)?(?:\s|$)|@openai[\\/]codex/i;
+const OMX_LAUNCH_PROCESS_PATTERN = /(?:^|[\\/\s])omx(?:\.js)?(?:\s|$)|(?:^|[\\/])(?:bin|dist[\\/]cli)[\\/]omx\.js(?:\s|$)|oh-my-codex[\\/]dist[\\/]cli[\\/]omx\.js/i;
 const OMX_TMP_DIRECTORY_PATTERN = /^(omc|omx|oh-my-codex)-/;
 
 export interface ProcessEntry {
@@ -115,9 +116,14 @@ function isCodexSessionProcess(command: string): boolean {
   return CODEX_PROCESS_PATTERN.test(normalizeCommand(command));
 }
 
-function hasCodexAncestor(
+function isOmxLaunchProcess(command: string): boolean {
+  return OMX_LAUNCH_PROCESS_PATTERN.test(normalizeCommand(command));
+}
+
+function hasAncestorMatching(
   processByPid: ReadonlyMap<number, ProcessEntry>,
   pid: number,
+  predicate: (command: string) => boolean,
 ): boolean {
   const seen = new Set<number>();
   let currentPid = processByPid.get(pid)?.ppid;
@@ -126,7 +132,7 @@ function hasCodexAncestor(
     seen.add(currentPid);
     const parent = processByPid.get(currentPid);
     if (!parent) return false;
-    if (isCodexSessionProcess(parent.command)) return true;
+    if (predicate(parent.command)) return true;
     currentPid = parent.ppid;
   }
 
@@ -211,7 +217,8 @@ export function findLaunchSafeCleanupCandidates(
   );
 
   return findCleanupCandidates(processes, currentPid)
-    .filter((candidate) => !hasCodexAncestor(processByPid, candidate.pid));
+    .filter((candidate) => !hasAncestorMatching(processByPid, candidate.pid, isCodexSessionProcess))
+    .filter((candidate) => !hasAncestorMatching(processByPid, candidate.pid, isOmxLaunchProcess));
 }
 
 function defaultIsPidAlive(pid: number): boolean {

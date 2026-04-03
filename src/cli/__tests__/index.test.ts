@@ -272,6 +272,16 @@ describe("cleanupLaunchOrphanedMcpProcesses", () => {
         ppid: 820,
         command: "node /tmp/other-session/dist/mcp/state-server.js",
       },
+      {
+        pid: 830,
+        ppid: 50,
+        command: "node /repo/bin/omx.js autoresearch --topic launch",
+      },
+      {
+        pid: 831,
+        ppid: 830,
+        command: "node /tmp/parallel-session/dist/mcp/memory-server.js",
+      },
     ];
     const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
     const alive = new Set([800, 810]);
@@ -299,6 +309,11 @@ describe("cleanupLaunchOrphanedMcpProcesses", () => {
       signals.some(({ pid }) => pid === 821),
       false,
       "launch-safe cleanup must preserve OMX MCP processes still attached to another live Codex tree",
+    );
+    assert.equal(
+      signals.some(({ pid }) => pid === 831),
+      false,
+      "launch-safe cleanup must preserve OMX MCP processes still attached to another live OMX launch tree",
     );
   });
 });

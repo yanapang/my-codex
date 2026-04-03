@@ -43,6 +43,16 @@ const CURRENT_SESSION_PROCESSES: ProcessEntry[] = [
     command: 'node /tmp/other-session/dist/mcp/state-server.js',
   },
   {
+    pid: 830,
+    ppid: 50,
+    command: 'node /repo/bin/omx.js autoresearch --topic launch',
+  },
+  {
+    pid: 831,
+    ppid: 830,
+    command: 'node /tmp/parallel-session/dist/mcp/memory-server.js',
+  },
+  {
     pid: 900,
     ppid: 1,
     command: 'node /tmp/not-omx/other-server.js',
@@ -78,11 +88,17 @@ describe('findCleanupCandidates', () => {
           command: 'node /tmp/other-session/dist/mcp/state-server.js',
           reason: 'outside-current-session',
         },
+        {
+          pid: 831,
+          ppid: 830,
+          command: 'node /tmp/parallel-session/dist/mcp/memory-server.js',
+          reason: 'outside-current-session',
+        },
       ],
     );
   });
 
-  it('limits launch-safe cleanup to OMX MCP processes with no live Codex ancestor', () => {
+  it('limits launch-safe cleanup to OMX MCP processes with no live Codex or OMX launch ancestor', () => {
     assert.deepEqual(
       findLaunchSafeCleanupCandidates(CURRENT_SESSION_PROCESSES, 701),
       [
@@ -124,9 +140,9 @@ describe('cleanupOmxMcpProcesses', () => {
     });
 
     assert.equal(result.dryRun, true);
-    assert.equal(result.candidates.length, 4);
+    assert.equal(result.candidates.length, 5);
     assert.equal(signalCount, 0);
-    assert.match(lines.join('\n'), /Dry run: would terminate 4 orphaned OMX MCP server process/);
+    assert.match(lines.join('\n'), /Dry run: would terminate 5 orphaned OMX MCP server process/);
     assert.match(lines.join('\n'), /PID 800/);
     assert.match(lines.join('\n'), /PID 810/);
   });
@@ -140,7 +156,7 @@ describe('cleanupOmxMcpProcesses', () => {
     const result = await cleanupOmxMcpProcesses([], {
       currentPid: 701,
       listProcesses: () => [
-        ...CURRENT_SESSION_PROCESSES.filter((processEntry) => processEntry.pid !== 811 && processEntry.pid !== 821),
+        ...CURRENT_SESSION_PROCESSES.filter((processEntry) => processEntry.pid !== 811 && processEntry.pid !== 821 && processEntry.pid !== 831),
       ],
       isPidAlive: (pid) => alive.has(pid),
       sendSignal: (pid, signal) => {
@@ -210,6 +226,7 @@ describe('cleanupOmxMcpProcesses', () => {
     ]);
     assert.match(lines.join('\n'), /Found 3 orphaned OMX MCP server process/);
     assert.doesNotMatch(lines.join('\n'), /PID 821/);
+    assert.doesNotMatch(lines.join('\n'), /PID 831/);
   });
 });
 
