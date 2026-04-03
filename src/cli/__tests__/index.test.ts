@@ -34,6 +34,8 @@ import {
   resolveNotifyTempContract,
   buildNotifyTempStartupMessages,
   buildNotifyFallbackWatcherEnv,
+  resolveBackgroundHelperLaunchMode,
+  shouldDetachBackgroundHelper,
   resolveNotifyFallbackWatcherScript,
   resolveHookDerivedWatcherScript,
   resolveNotifyHookScript,
@@ -752,6 +754,46 @@ describe("resolveCodexLaunchPolicy", () => {
 
   it("launches directly on native Windows when tmux is unavailable", () => {
     assert.equal(resolveCodexLaunchPolicy({}, "win32", false, true), "direct");
+  });
+});
+
+describe("resolveBackgroundHelperLaunchMode", () => {
+  it("uses the hidden Windows MSYS bootstrap for win32 Git Bash", () => {
+    assert.equal(
+      resolveBackgroundHelperLaunchMode({ MSYSTEM: "MINGW64" }, "win32"),
+      "windows-msys-bootstrap",
+    );
+  });
+
+  it("spawns helpers directly on native win32", () => {
+    assert.equal(resolveBackgroundHelperLaunchMode({}, "win32"), "direct-detached");
+  });
+
+  it("spawns helpers directly on non-Windows platforms", () => {
+    assert.equal(
+      resolveBackgroundHelperLaunchMode({ MSYSTEM: "MINGW64" }, "linux"),
+      "direct-detached",
+    );
+  });
+});
+
+describe("shouldDetachBackgroundHelper", () => {
+  it("keeps the long-running helper detached under win32 Git Bash", () => {
+    assert.equal(
+      shouldDetachBackgroundHelper({ MSYSTEM: "MINGW64" }, "win32"),
+      true,
+    );
+  });
+
+  it("keeps detached helpers on native win32", () => {
+    assert.equal(shouldDetachBackgroundHelper({}, "win32"), true);
+  });
+
+  it("keeps detached helpers on non-Windows platforms", () => {
+    assert.equal(
+      shouldDetachBackgroundHelper({ MSYSTEM: "MINGW64" }, "linux"),
+      true,
+    );
   });
 });
 
