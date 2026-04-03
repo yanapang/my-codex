@@ -35,6 +35,16 @@ It keeps Codex as the execution engine and makes it easier to:
 | --- | --- |
 | Sigrid Jin | [@sigridjineth](https://github.com/sigridjineth) |
 
+## Top Collaborators
+
+| Name | GitHub |
+| --- | --- |
+| HaD0Yun | [@HaD0Yun](https://github.com/HaD0Yun) |
+| Junho Yeo | [@junhoyeo](https://github.com/junhoyeo) |
+| JiHongKim98 | [@JiHongKim98](https://github.com/JiHongKim98) |
+| Deanpress | [@deanpress](https://github.com/deanpress) |
+| YeonGyu-Kim | [@code-yeongyu](https://github.com/code-yeongyu) |
+
 ## Recommended default flow
 
 If you want the default OMX experience, start here:
@@ -219,6 +229,13 @@ If this happens, try:
 - [Italiano](./README.it.md)
 - [Ελληνικά](./README.el.md)
 - [Polski](./README.pl.md)
+
+## Contributors
+
+| Role | Name | GitHub |
+| --- | --- | --- |
+| Creator & Lead | Yeachan Heo | [@Yeachan-Heo](https://github.com/Yeachan-Heo) |
+| Maintainer | HaD0Yun | [@HaD0Yun](https://github.com/HaD0Yun) |
 
 ## Star History
 
