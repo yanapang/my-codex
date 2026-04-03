@@ -105,8 +105,8 @@ export function shouldSendIdleNotification(stateDir: string, sessionId?: string,
   const cooldownSecs = getIdleNotificationCooldownSeconds();
   const normalizedFingerprint = normalizeIdleFingerprint(fingerprint);
 
-  // Cooldown of 0 means disabled — always send
-  if (cooldownSecs === 0 && !normalizedFingerprint) return true;
+  // Cooldown of 0 means disabled — always send, including fingerprinted repeats
+  if (cooldownSecs === 0) return true;
 
   const cooldownPath = getCooldownStatePath(stateDir, sessionId);
   const state = readIdleNotificationState(cooldownPath);

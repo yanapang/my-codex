@@ -69,6 +69,16 @@ describe('shouldSendIdleNotification', () => {
     assert.equal(shouldSendIdleNotification(stateDir, 'sess1'), true);
   });
 
+  it('returns true when cooldown is 0 even for unchanged fingerprints', () => {
+    process.env.OMX_IDLE_COOLDOWN_SECONDS = '0';
+    const sessionId = 'test-session-disabled-fingerprint';
+    const fingerprint = '{"phase":"idle","summary":"Waiting for input"}';
+
+    recordIdleNotificationSent(stateDir, sessionId, fingerprint);
+
+    assert.equal(shouldSendIdleNotification(stateDir, sessionId, fingerprint), true);
+  });
+
   it('returns false when cooldown has NOT elapsed', () => {
     process.env.OMX_IDLE_COOLDOWN_SECONDS = '60';
     recordIdleNotificationSent(stateDir, 'sess2');
