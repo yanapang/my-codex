@@ -5,6 +5,7 @@ import {
   cleanupOmxMcpProcesses,
   cleanupStaleTmpDirectories,
   findCleanupCandidates,
+  findLaunchSafeCleanupCandidates,
   type ProcessEntry,
 } from '../cleanup.js';
 
@@ -30,6 +31,26 @@ const CURRENT_SESSION_PROCESSES: ProcessEntry[] = [
     pid: 811,
     ppid: 810,
     command: 'node /tmp/worktree/dist/mcp/team-server.js',
+  },
+  {
+    pid: 820,
+    ppid: 50,
+    command: 'codex --model gpt-5',
+  },
+  {
+    pid: 821,
+    ppid: 820,
+    command: 'node /tmp/other-session/dist/mcp/state-server.js',
+  },
+  {
+    pid: 830,
+    ppid: 50,
+    command: 'node /repo/bin/omx.js autoresearch --topic launch',
+  },
+  {
+    pid: 831,
+    ppid: 830,
+    command: 'node /tmp/parallel-session/dist/mcp/memory-server.js',
   },
   {
     pid: 900,
@@ -61,8 +82,64 @@ describe('findCleanupCandidates', () => {
           command: 'node /tmp/worktree/dist/mcp/team-server.js',
           reason: 'outside-current-session',
         },
+        {
+          pid: 821,
+          ppid: 820,
+          command: 'node /tmp/other-session/dist/mcp/state-server.js',
+          reason: 'outside-current-session',
+        },
+        {
+          pid: 831,
+          ppid: 830,
+          command: 'node /tmp/parallel-session/dist/mcp/memory-server.js',
+          reason: 'outside-current-session',
+        },
       ],
     );
+  });
+
+  it('limits launch-safe cleanup to OMX MCP processes with no live Codex or OMX launch ancestor', () => {
+    assert.deepEqual(
+      findLaunchSafeCleanupCandidates(CURRENT_SESSION_PROCESSES, 701),
+      [
+        {
+          pid: 800,
+          ppid: 1,
+          command: 'node /tmp/oh-my-codex/dist/mcp/memory-server.js',
+          reason: 'ppid=1',
+        },
+        {
+          pid: 810,
+          ppid: 42,
+          command: 'node /tmp/worktree/dist/mcp/trace-server.js',
+          reason: 'outside-current-session',
+        },
+        {
+          pid: 811,
+          ppid: 810,
+          command: 'node /tmp/worktree/dist/mcp/team-server.js',
+          reason: 'outside-current-session',
+        },
+      ],
+    );
+  });
+
+  it('keeps detached MCP candidates whose ancestor chain is live but unrelated to Codex or OMX launchers', () => {
+    const unrelatedAncestorProcesses: ProcessEntry[] = [
+      { pid: 701, ppid: 700, command: 'node /repo/bin/omx.js' },
+      { pid: 840, ppid: 841, command: 'node /tmp/unrelated/dist/mcp/state-server.js' },
+      { pid: 841, ppid: 842, command: 'node worker.js' },
+      { pid: 842, ppid: 1, command: 'bash' },
+    ];
+
+    assert.deepEqual(findLaunchSafeCleanupCandidates(unrelatedAncestorProcesses, 701), [
+      {
+        pid: 840,
+        ppid: 841,
+        command: 'node /tmp/unrelated/dist/mcp/state-server.js',
+        reason: 'outside-current-session',
+      },
+    ]);
   });
 });
 
@@ -81,9 +158,9 @@ describe('cleanupOmxMcpProcesses', () => {
     });
 
     assert.equal(result.dryRun, true);
-    assert.equal(result.candidates.length, 3);
+    assert.equal(result.candidates.length, 5);
     assert.equal(signalCount, 0);
-    assert.match(lines.join('\n'), /Dry run: would terminate 3 orphaned OMX MCP server process/);
+    assert.match(lines.join('\n'), /Dry run: would terminate 5 orphaned OMX MCP server process/);
     assert.match(lines.join('\n'), /PID 800/);
     assert.match(lines.join('\n'), /PID 810/);
   });
@@ -97,7 +174,7 @@ describe('cleanupOmxMcpProcesses', () => {
     const result = await cleanupOmxMcpProcesses([], {
       currentPid: 701,
       listProcesses: () => [
-        ...CURRENT_SESSION_PROCESSES.filter((processEntry) => processEntry.pid !== 811),
+        ...CURRENT_SESSION_PROCESSES.filter((processEntry) => processEntry.pid !== 811 && processEntry.pid !== 821 && processEntry.pid !== 831),
       ],
       isPidAlive: (pid) => alive.has(pid),
       sendSignal: (pid, signal) => {
@@ -122,6 +199,52 @@ describe('cleanupOmxMcpProcesses', () => {
     ]);
     assert.match(lines.join('\n'), /Escalating to SIGKILL for 1 process/);
     assert.match(lines.join('\n'), /Killed 2 orphaned OMX MCP server process\(es\) \(1 required SIGKILL\)\./);
+  });
+
+  it('supports launch-safe candidate selection for automatic cleanup', async () => {
+    const lines: string[] = [];
+    const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+
+    const result = await cleanupOmxMcpProcesses([], {
+      currentPid: 701,
+      listProcesses: () => CURRENT_SESSION_PROCESSES,
+      selectCandidates: findLaunchSafeCleanupCandidates,
+      isPidAlive: () => false,
+      sendSignal: (pid, signal) => {
+        signals.push({ pid, signal });
+      },
+      writeLine: (line) => lines.push(line),
+    });
+
+    assert.equal(result.terminatedCount, 3);
+    assert.deepEqual(result.candidates, [
+      {
+        pid: 800,
+        ppid: 1,
+        command: 'node /tmp/oh-my-codex/dist/mcp/memory-server.js',
+        reason: 'ppid=1',
+      },
+      {
+        pid: 810,
+        ppid: 42,
+        command: 'node /tmp/worktree/dist/mcp/trace-server.js',
+        reason: 'outside-current-session',
+      },
+      {
+        pid: 811,
+        ppid: 810,
+        command: 'node /tmp/worktree/dist/mcp/team-server.js',
+        reason: 'outside-current-session',
+      },
+    ]);
+    assert.deepEqual(signals, [
+      { pid: 800, signal: 'SIGTERM' },
+      { pid: 810, signal: 'SIGTERM' },
+      { pid: 811, signal: 'SIGTERM' },
+    ]);
+    assert.match(lines.join('\n'), /Found 3 orphaned OMX MCP server process/);
+    assert.doesNotMatch(lines.join('\n'), /PID 821/);
+    assert.doesNotMatch(lines.join('\n'), /PID 831/);
   });
 });
 
