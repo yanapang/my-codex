@@ -123,6 +123,24 @@ describe('findCleanupCandidates', () => {
       ],
     );
   });
+
+  it('keeps detached MCP candidates whose ancestor chain is live but unrelated to Codex or OMX launchers', () => {
+    const unrelatedAncestorProcesses: ProcessEntry[] = [
+      { pid: 701, ppid: 700, command: 'node /repo/bin/omx.js' },
+      { pid: 840, ppid: 841, command: 'node /tmp/unrelated/dist/mcp/state-server.js' },
+      { pid: 841, ppid: 842, command: 'node worker.js' },
+      { pid: 842, ppid: 1, command: 'bash' },
+    ];
+
+    assert.deepEqual(findLaunchSafeCleanupCandidates(unrelatedAncestorProcesses, 701), [
+      {
+        pid: 840,
+        ppid: 841,
+        command: 'node /tmp/unrelated/dist/mcp/state-server.js',
+        reason: 'outside-current-session',
+      },
+    ]);
+  });
 });
 
 describe('cleanupOmxMcpProcesses', () => {

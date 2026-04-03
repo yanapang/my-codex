@@ -54,6 +54,12 @@ async function initRepo(): Promise<string> {
   return cwd;
 }
 
+async function installFakePs(fakeBin: string): Promise<void> {
+  const fakePsPath = join(fakeBin, 'ps');
+  await writeFile(fakePsPath, '#!/bin/sh\nexit 0\n', 'utf-8');
+  execFileSync('chmod', ['+x', fakePsPath], { stdio: 'ignore' });
+}
+
 describe('normalizeAutoresearchCodexArgs', () => {
   it('adds sandbox bypass by default for autoresearch workers', () => {
     assert.deepEqual(normalizeAutoresearchCodexArgs(['--model', 'gpt-5']), ['--model', 'gpt-5', '--dangerously-bypass-approvals-and-sandbox']);
@@ -242,6 +248,7 @@ touch -t 202603180000 "$OMX_TEST_REPO_ROOT/.omx/specs/autoresearch-test-launch/r
         'utf-8',
       );
       execFileSync('chmod', ['+x', fakeCodexPath], { stdio: 'ignore' });
+      await installFakePs(fakeBin);
 
       const result = runOmx(repo, ['autoresearch', '--topic', 'Investigate flaky onboarding behavior', '--evaluator', 'node scripts/eval.js', '--slug', 'test-launch'], {
         PATH: `${fakeBin}:${process.env.PATH || ''}`,
@@ -351,6 +358,7 @@ EOF
         'utf-8',
       );
       execFileSync('chmod', ['+x', fakeCodexPath], { stdio: 'ignore' });
+      await installFakePs(fakeBin);
 
       const fakeTmuxPath = join(fakeBin, 'tmux');
       await writeFile(
@@ -459,6 +467,7 @@ perl -0pi -e "s/HEAD_PLACEHOLDER/$head_commit/g" "$candidate_file"
         'utf-8',
       );
       execFileSync('chmod', ['+x', fakeCodexPath], { stdio: 'ignore' });
+      await installFakePs(fakeBin);
 
       const fakeTmuxPath = join(fakeBin, 'tmux');
       await writeFile(
@@ -564,6 +573,7 @@ perl -0pi -e "s/HEAD_PLACEHOLDER/$head_commit/g" "$candidate_file"
         'utf-8',
       );
       execFileSync('chmod', ['+x', fakeCodexPath], { stdio: 'ignore' });
+      await installFakePs(fakeBin);
 
       const fakeTmuxPath = join(fakeBin, 'tmux');
       await writeFile(
@@ -761,6 +771,7 @@ printf '{\\n  "status": "abort",\\n  "candidate_commit": null,\\n  "base_commit"
         'utf-8',
       );
       execFileSync('chmod', ['+x', fakeCodexPath], { stdio: 'ignore' });
+      await installFakePs(fakeBin);
 
       const result = runOmx(
         repo,
@@ -814,6 +825,7 @@ EOF
         'utf-8',
       );
       execFileSync('chmod', ['+x', fakeCodexPath], { stdio: 'ignore' });
+      await installFakePs(fakeBin);
 
       const result = runOmx(
         repo,
