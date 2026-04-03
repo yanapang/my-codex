@@ -96,6 +96,63 @@ describe('shouldSendIdleNotification', () => {
     writeFileSync(cooldownPath, 'invalid json {{{');
     assert.equal(shouldSendIdleNotification(stateDir), true);
   });
+
+  it('suppresses repeated unchanged idle fingerprints', () => {
+    const sessionId = 'test-session-unchanged';
+    const fingerprint = '{"phase":"idle","summary":"Waiting for input"}';
+
+    recordIdleNotificationSent(stateDir, sessionId, fingerprint);
+
+    assert.equal(shouldSendIdleNotification(stateDir, sessionId, fingerprint), false);
+  });
+
+  it('allows a changed summary fingerprint immediately', () => {
+    process.env.OMX_IDLE_COOLDOWN_SECONDS = '60';
+    const sessionId = 'test-session-summary-change';
+
+    recordIdleNotificationSent(stateDir, sessionId, '{"phase":"idle","summary":"Waiting on review"}');
+
+    assert.equal(
+      shouldSendIdleNotification(stateDir, sessionId, '{"phase":"idle","summary":"Waiting on user input"}'),
+      true,
+    );
+  });
+
+  it('allows a progress transition to clear prior idle suppression', () => {
+    process.env.OMX_IDLE_COOLDOWN_SECONDS = '60';
+    const sessionId = 'test-session-progress-reset';
+    const blockedFingerprint = '{"phase":"idle","summary":"Blocked on dependency"}';
+    const progressFingerprint = '{"phase":"progress","summary":"Applied fix and running tests"}';
+
+    recordIdleNotificationSent(stateDir, sessionId, blockedFingerprint);
+    assert.equal(shouldSendIdleNotification(stateDir, sessionId, blockedFingerprint), false);
+
+    recordIdleNotificationSent(stateDir, sessionId, progressFingerprint);
+    assert.equal(shouldSendIdleNotification(stateDir, sessionId, blockedFingerprint), true);
+  });
+
+  it('allows terminal transitions to clear prior idle suppression', () => {
+    process.env.OMX_IDLE_COOLDOWN_SECONDS = '60';
+    const sessionId = 'test-session-terminal-reset';
+    const blockedFingerprint = '{"phase":"idle","summary":"Awaiting next step"}';
+
+    recordIdleNotificationSent(stateDir, sessionId, blockedFingerprint);
+    recordIdleNotificationSent(stateDir, sessionId, '{"phase":"finished","summary":"Completed and waiting for input"}');
+    assert.equal(shouldSendIdleNotification(stateDir, sessionId, blockedFingerprint), true);
+
+    recordIdleNotificationSent(stateDir, sessionId, blockedFingerprint);
+    recordIdleNotificationSent(stateDir, sessionId, '{"phase":"failed","summary":"Command failed"}');
+    assert.equal(shouldSendIdleNotification(stateDir, sessionId, blockedFingerprint), true);
+  });
+
+  it('still honors cooldown-only behavior when no fingerprint is provided', () => {
+    process.env.OMX_IDLE_COOLDOWN_SECONDS = '60';
+    const sessionId = 'test-session-cooldown-only';
+
+    recordIdleNotificationSent(stateDir, sessionId);
+
+    assert.equal(shouldSendIdleNotification(stateDir, sessionId), false);
+  });
 });
 
 describe('recordIdleNotificationSent', () => {
@@ -121,5 +178,17 @@ describe('recordIdleNotificationSent', () => {
     recordIdleNotificationSent(stateDir, sessionId);
     const sessionFile = join(stateDir, 'sessions', sessionId, 'idle-notif-cooldown.json');
     assert.ok(existsSync(sessionFile));
+  });
+
+  it('persists the idle fingerprint when provided', () => {
+    const sessionId = 'fingerprint-session';
+    const fingerprint = '{"phase":"idle","summary":"Waiting for input"}';
+
+    recordIdleNotificationSent(stateDir, sessionId, fingerprint);
+
+    const sessionFile = join(stateDir, 'sessions', sessionId, 'idle-notif-cooldown.json');
+    const content = JSON.parse(readFileSync(sessionFile, 'utf-8')) as { lastSentAt: string; fingerprint?: string };
+    assert.equal(content.fingerprint, fingerprint);
+    assert.equal(typeof content.lastSentAt, 'string');
   });
 });

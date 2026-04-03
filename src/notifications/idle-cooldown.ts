@@ -18,6 +18,12 @@ import { codexHome } from '../utils/paths.js';
 
 const DEFAULT_COOLDOWN_SECONDS = 60;
 const SESSION_ID_SAFE_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$/;
+const MAX_IDLE_FINGERPRINT_LENGTH = 512;
+
+interface IdleNotificationState {
+  lastSentAt?: string;
+  fingerprint?: string;
+}
 
 /**
  * Read the idle notification cooldown in seconds.
@@ -66,32 +72,56 @@ function getCooldownStatePath(stateDir: string, sessionId?: string): string {
   return join(stateDir, 'idle-notif-cooldown.json');
 }
 
+function normalizeIdleFingerprint(fingerprint: string | null | undefined): string {
+  if (typeof fingerprint !== 'string') return '';
+  const normalized = fingerprint.trim();
+  if (!normalized) return '';
+  return normalized.length > MAX_IDLE_FINGERPRINT_LENGTH
+    ? normalized.slice(0, MAX_IDLE_FINGERPRINT_LENGTH)
+    : normalized;
+}
+
+function readIdleNotificationState(cooldownPath: string): IdleNotificationState | null {
+  try {
+    if (!existsSync(cooldownPath)) return null;
+    const data = JSON.parse(readFileSync(cooldownPath, 'utf-8')) as Record<string, unknown>;
+    return {
+      lastSentAt: typeof data?.lastSentAt === 'string' ? data.lastSentAt : undefined,
+      fingerprint: normalizeIdleFingerprint(typeof data?.fingerprint === 'string' ? data.fingerprint : ''),
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Check whether the idle notification cooldown has elapsed.
+ * Check whether an idle notification should be sent.
  *
- * Returns true if the notification should be sent (cooldown has elapsed or is disabled).
- * Returns false if the notification should be suppressed (too soon since last send).
+ * Without a fingerprint this preserves the legacy cooldown-only behavior.
+ * With a fingerprint it suppresses unchanged idle-state repeats until the
+ * fingerprint meaningfully changes.
  */
-export function shouldSendIdleNotification(stateDir: string, sessionId?: string): boolean {
+export function shouldSendIdleNotification(stateDir: string, sessionId?: string, fingerprint?: string): boolean {
   const cooldownSecs = getIdleNotificationCooldownSeconds();
+  const normalizedFingerprint = normalizeIdleFingerprint(fingerprint);
 
   // Cooldown of 0 means disabled — always send
-  if (cooldownSecs === 0) return true;
+  if (cooldownSecs === 0 && !normalizedFingerprint) return true;
 
   const cooldownPath = getCooldownStatePath(stateDir, sessionId);
-  try {
-    if (!existsSync(cooldownPath)) return true;
+  const state = readIdleNotificationState(cooldownPath);
+  if (!state) return true;
 
-    const data = JSON.parse(readFileSync(cooldownPath, 'utf-8')) as Record<string, unknown>;
-    if (data?.lastSentAt && typeof data.lastSentAt === 'string') {
-      const lastSentMs = new Date(data.lastSentAt).getTime();
-      if (Number.isFinite(lastSentMs)) {
-        const elapsedSecs = (Date.now() - lastSentMs) / 1000;
-        if (elapsedSecs < cooldownSecs) return false;
-      }
+  if (normalizedFingerprint) {
+    return state.fingerprint !== normalizedFingerprint;
+  }
+
+  if (state.lastSentAt) {
+    const lastSentMs = new Date(state.lastSentAt).getTime();
+    if (Number.isFinite(lastSentMs)) {
+      const elapsedSecs = (Date.now() - lastSentMs) / 1000;
+      if (elapsedSecs < cooldownSecs) return false;
     }
-  } catch {
-    // ignore read/parse errors — treat as no cooldown file, allow send
   }
 
   return true;
@@ -99,14 +129,20 @@ export function shouldSendIdleNotification(stateDir: string, sessionId?: string)
 
 /**
  * Record that an idle notification was sent at the current timestamp.
- * Call this after a successful dispatch to arm the cooldown.
+ * Call this after a successful dispatch to arm the cooldown and optionally
+ * persist the current idle-state fingerprint.
  */
-export function recordIdleNotificationSent(stateDir: string, sessionId?: string): void {
+export function recordIdleNotificationSent(stateDir: string, sessionId?: string, fingerprint?: string): void {
   const cooldownPath = getCooldownStatePath(stateDir, sessionId);
   try {
     const dir = dirname(cooldownPath);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(cooldownPath, JSON.stringify({ lastSentAt: new Date().toISOString() }, null, 2));
+    const normalizedFingerprint = normalizeIdleFingerprint(fingerprint);
+    const state: IdleNotificationState = { lastSentAt: new Date().toISOString() };
+    if (normalizedFingerprint) {
+      state.fingerprint = normalizedFingerprint;
+    }
+    writeFileSync(cooldownPath, JSON.stringify(state, null, 2));
   } catch {
     // ignore write errors — best effort
   }

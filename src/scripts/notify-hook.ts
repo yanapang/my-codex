@@ -68,6 +68,79 @@ const RALPH_ACTIVE_PROGRESS_PHASES = new Set([
   'fixing',
 ]);
 
+const IDLE_NOTIFICATION_SUMMARY_MAX_LENGTH = 240;
+
+function summarizeIdleNotificationMessage(message: unknown): string {
+  const source = safeString(message)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const preferred = source.at(-1) || '';
+  const normalized = preferred.replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+  return normalized.length > IDLE_NOTIFICATION_SUMMARY_MAX_LENGTH
+    ? `${normalized.slice(0, IDLE_NOTIFICATION_SUMMARY_MAX_LENGTH - 1)}…`
+    : normalized;
+}
+
+function classifyIdleNotificationPhase(message: unknown): 'idle' | 'progress' | 'finished' | 'failed' {
+  const lower = safeString(message).toLowerCase();
+  if (!lower) return 'idle';
+
+  if (/(error|failed|exception|invalid|timed out|timeout)/i.test(lower)) {
+    return 'failed';
+  }
+
+  if ([
+    'all tests pass',
+    'build succeeded',
+    'completed',
+    'complete',
+    'done',
+    'final summary',
+    'summary',
+  ].some((pattern) => lower.includes(pattern))) {
+    return 'finished';
+  }
+
+  if ([
+    'verify',
+    'verified',
+    'verification',
+    'review',
+    'reviewed',
+    'diagnostic',
+    'typecheck',
+    'test',
+    'implement',
+    'implemented',
+    'apply patch',
+    'change',
+    'fix',
+    'update',
+    'refactor',
+    'resume',
+    'resumed',
+    'progress',
+    'continue',
+    'continued',
+  ].some((pattern) => lower.includes(pattern))) {
+    return 'progress';
+  }
+
+  return 'idle';
+}
+
+function buildIdleNotificationFingerprint(payload: Record<string, unknown>): string {
+  const lastAssistantMessage = safeString(payload['last-assistant-message'] || payload.last_assistant_message || '');
+  const summary = summarizeIdleNotificationMessage(lastAssistantMessage);
+  const phase = classifyIdleNotificationPhase(lastAssistantMessage);
+  return JSON.stringify({
+    phase,
+    ...(summary ? { summary } : {}),
+  });
+}
+
 async function main() {
   const rawPayload = process.argv[process.argv.length - 1];
   if (!rawPayload || rawPayload.startsWith('-')) {
@@ -443,19 +516,20 @@ async function main() {
       const { notifyLifecycle } = await import('../notifications/index.js');
       const { shouldSendIdleNotification, recordIdleNotificationSent } = await import('../notifications/idle-cooldown.js');
       const sessionJsonPath = join(stateDir, 'session.json');
+      const idleFingerprint = buildIdleNotificationFingerprint(payload);
       let notifySessionId = '';
       try {
         const sessionData = JSON.parse(await readFile(sessionJsonPath, 'utf-8'));
         notifySessionId = safeString(sessionData && sessionData.session_id ? sessionData.session_id : '');
       } catch { /* no session file */ }
 
-      if (notifySessionId && shouldSendIdleNotification(stateDir, notifySessionId)) {
+      if (notifySessionId && shouldSendIdleNotification(stateDir, notifySessionId, idleFingerprint)) {
         const idleResult = await notifyLifecycle('session-idle', {
           sessionId: notifySessionId,
           projectPath: cwd,
         });
         if (idleResult && idleResult.anySuccess) {
-          recordIdleNotificationSent(stateDir, notifySessionId);
+          recordIdleNotificationSent(stateDir, notifySessionId, idleFingerprint);
         }
         try {
           const { buildNativeHookEvent } = await import('../hooks/extensibility/events.js');
