@@ -432,6 +432,8 @@ export async function uninstall(options: UninstallOptions = {}): Promise<void> {
     legacySkillRootWarning: null,
   };
 
+  summary.legacySkillRootWarning = await detectLegacySkillRootWarning(scope);
+
   // Step 1: Clean config.toml
   if (keepConfig) {
     console.log("[1/5] Skipping config.toml cleanup (--keep-config).");
@@ -510,8 +512,6 @@ export async function uninstall(options: UninstallOptions = {}): Promise<void> {
     }
   }
   console.log();
-
-  summary.legacySkillRootWarning = await detectLegacySkillRootWarning(scope);
 
   printSummary(summary, dryRun);
 
