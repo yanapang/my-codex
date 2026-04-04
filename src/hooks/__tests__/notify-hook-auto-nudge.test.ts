@@ -1280,6 +1280,17 @@ exit 0
       assert.equal(skillState.input_lock?.active, true);
       assert.deepEqual(skillState.input_lock?.blocked_inputs, DEEP_INTERVIEW_BLOCKED_APPROVAL_INPUTS);
       assert.match(skillState.input_lock?.message || '', /Deep interview is active/i);
+
+      const modeState = JSON.parse(await readFile(join(stateDir, 'deep-interview-state.json'), 'utf-8')) as {
+        active: boolean;
+        mode: string;
+        current_phase: string;
+        input_lock?: { active: boolean };
+      };
+      assert.equal(modeState.active, true);
+      assert.equal(modeState.mode, 'deep-interview');
+      assert.equal(modeState.current_phase, 'intent-first');
+      assert.equal(modeState.input_lock?.active, true);
     });
   });
 
