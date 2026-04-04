@@ -79,6 +79,7 @@ import {
   waitForDispatchReceipt,
   type DispatchOutcome,
 } from './mcp-comm.js';
+import { appendTeamDeliveryLogForCwd } from './delivery-log.js';
 import {
   generateWorkerOverlay,
   writeTeamWorkerInstructionsFile,
@@ -213,6 +214,29 @@ interface ShutdownOptions {
 
 export interface TeamShutdownSummary {
   commitHygieneArtifacts: TeamCommitHygieneArtifactPaths | null;
+}
+
+async function logRuntimeDispatchOutcome(params: {
+  cwd: string;
+  teamName: string;
+  workerName: string;
+  requestId?: string;
+  messageId?: string;
+  outcome: DispatchOutcome;
+  source?: string;
+}): Promise<void> {
+  const { cwd, teamName, workerName, requestId, messageId, outcome, source = 'team.runtime' } = params;
+  await appendTeamDeliveryLogForCwd(cwd, {
+    event: 'dispatch_result',
+    source,
+    team: teamName,
+    request_id: requestId,
+    message_id: messageId,
+    to_worker: workerName,
+    transport: outcome.transport,
+    result: outcome.ok ? 'confirmed' : 'failed',
+    reason: outcome.reason,
+  });
 }
 
 function collectProvisionedShutdownWorktrees(config: TeamConfig): EnsureWorktreeResult[] {
@@ -3310,7 +3334,9 @@ async function finalizeHookPreferredMailboxDispatch(params: {
   });
   if (receipt && (receipt.status === 'notified' || receipt.status === 'delivered')) {
     await markMessageNotified(teamName, workerName, messageId, cwd).catch(() => false);
-    return { ok: true, transport: 'hook', reason: `hook_receipt_${receipt.status}`, request_id: requestId, message_id: messageId };
+    const outcome = { ok: true, transport: 'hook', reason: `hook_receipt_${receipt.status}`, request_id: requestId, message_id: messageId } as const;
+    await logRuntimeDispatchOutcome({ cwd, teamName, workerName, requestId, messageId, outcome });
+    return outcome;
   }
 
   const fallback: DispatchOutcome = fallbackNotify
@@ -3327,13 +3353,15 @@ async function finalizeHookPreferredMailboxDispatch(params: {
         { message_id: messageId, last_reason: `fallback_confirmed_after_failed_receipt:${fallback.reason}`, failed_at: undefined },
         cwd,
       ).catch(() => null);
-      return {
+      const outcome = {
         ok: true,
         transport: fallback.transport,
         reason: `fallback_confirmed_after_failed_receipt:${fallback.reason}`,
         request_id: requestId,
         message_id: messageId,
-      };
+      } as const;
+      await logRuntimeDispatchOutcome({ cwd, teamName, workerName, requestId, messageId, outcome });
+      return outcome;
     }
     await transitionDispatchRequest(
       teamName,
@@ -3343,13 +3371,15 @@ async function finalizeHookPreferredMailboxDispatch(params: {
       { message_id: messageId, last_reason: `fallback_attempted_but_unconfirmed:${fallback.reason}` },
       cwd,
     ).catch(() => {});
-    return {
+    const outcome = {
       ok: false,
       transport: fallback.transport,
       reason: `fallback_attempted_but_unconfirmed:${fallback.reason}`,
       request_id: requestId,
       message_id: messageId,
-    };
+    } as const;
+    await logRuntimeDispatchOutcome({ cwd, teamName, workerName, requestId, messageId, outcome });
+    return outcome;
   }
 
   if (fallback.ok) {
@@ -3360,13 +3390,15 @@ async function finalizeHookPreferredMailboxDispatch(params: {
         messageId,
         cwd,
       });
-      return {
+      const outcome = {
         ok: true,
         transport: fallback.transport,
         reason: 'leader_pane_missing_mailbox_persisted',
         request_id: requestId,
         message_id: messageId,
-      };
+      } as const;
+      await logRuntimeDispatchOutcome({ cwd, teamName, workerName, requestId, messageId, outcome });
+      return outcome;
     }
 
     await markMessageNotified(teamName, workerName, messageId, cwd).catch(() => false);
@@ -3386,13 +3418,15 @@ async function finalizeHookPreferredMailboxDispatch(params: {
         cwd,
       ).catch(() => {});
     }
-    return {
+    const outcome = {
       ok: true,
       transport: fallback.transport,
       reason: `hook_timeout_fallback_confirmed:${fallback.reason}`,
       request_id: requestId,
       message_id: messageId,
-    };
+    } as const;
+    await logRuntimeDispatchOutcome({ cwd, teamName, workerName, requestId, messageId, outcome });
+    return outcome;
   }
 
   const current = await readDispatchRequest(teamName, requestId, cwd);
@@ -3406,13 +3440,15 @@ async function finalizeHookPreferredMailboxDispatch(params: {
       cwd,
     ).catch(() => {});
   }
-  return {
+  const outcome = {
     ok: false,
     transport: fallback.transport,
     reason: `fallback_attempted_but_unconfirmed:${fallback.reason}`,
     request_id: requestId,
     message_id: messageId,
-  };
+  } as const;
+  await logRuntimeDispatchOutcome({ cwd, teamName, workerName, requestId, messageId, outcome });
+  return outcome;
 }
 
 async function notifyLeaderAsync(config: TeamConfig, message: string, cwd: string): Promise<DispatchOutcome> {
@@ -3520,6 +3556,14 @@ async function deliverPendingMailboxMessages(
             cwd,
           ).catch(() => null);
         }
+        await logRuntimeDispatchOutcome({
+          cwd,
+          teamName,
+          workerName: worker.name,
+          requestId: queued.request.request_id,
+          messageId: msg.message_id,
+          outcome,
+        });
       }
 
       if (outcome.ok) {
@@ -3586,6 +3630,14 @@ export async function sendWorkerMessage(
         transport: 'mailbox',
         reason: 'leader_pane_missing_mailbox_persisted',
       };
+      await logRuntimeDispatchOutcome({
+        cwd,
+        teamName: sanitized,
+        workerName: 'leader-fixed',
+        requestId: finalOutcome.request_id,
+        messageId: finalOutcome.message_id,
+        outcome: finalOutcome,
+      });
     }
     const canLeaderFallbackDirectly = Boolean(config.leader_pane_id) && isTmuxAvailable();
     if (!mailboxAlreadyNotified && leaderTransportPreference === 'hook_preferred_with_fallback' && canLeaderFallbackDirectly) {
