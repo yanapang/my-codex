@@ -14,6 +14,7 @@ import {
   saveTeamConfig,
   listMailboxMessages,
   listDispatchRequests,
+  transitionDispatchRequest,
   updateWorkerHeartbeat,
   writeAtomic,
   readTask,
@@ -3684,6 +3685,78 @@ esac
             && typeof entry.reason === 'string'
             && String(entry.reason).includes('leader_mailbox_notified'));
           assert.equal(runtimeEntries.length, 1, 'leader hook-preferred confirmation should emit exactly one runtime dispatch_result entry');
+        },
+      );
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('sendWorkerMessage keeps failed hook receipts failed when fallback mailbox persistence confirms delivery', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-leader-failed-receipt-'));
+    try {
+      await withMockTmuxFixture(
+        {
+          dirPrefix: 'omx-runtime-leader-failed-receipt-bin-',
+          tmuxScript: (tmuxLogPath) => `#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "${tmuxLogPath}"
+case "\${1:-}" in
+  send-keys)
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`,
+        },
+        async () => {
+          await initTeamState('team-leader-failed-receipt', 'leader failed receipt fallback test', 'executor', 1, cwd);
+          const cfg = await readTeamConfig('team-leader-failed-receipt', cwd);
+          assert.ok(cfg);
+          if (!cfg) throw new Error('missing team config');
+          cfg.leader_pane_id = '%55';
+          await saveTeamConfig(cfg, cwd);
+
+          const manifestPath = teamStateTestPath(cwd, 'team', 'team-leader-failed-receipt', 'manifest.v2.json');
+          const manifest = JSON.parse(await readFile(manifestPath, 'utf-8'));
+          manifest.policy = { ...(manifest.policy || {}), dispatch_ack_timeout_ms: 250 };
+          await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+
+          const sendPromise = sendWorkerMessage('team-leader-failed-receipt', 'worker-1', 'leader-fixed', 'hello failed receipt', cwd);
+
+          const deadline = Date.now() + 2_000;
+          let requestId: string | null = null;
+          while (Date.now() < deadline && !requestId) {
+            const requests = await listDispatchRequests('team-leader-failed-receipt', cwd, { kind: 'mailbox', to_worker: 'leader-fixed' });
+            requestId = requests[requests.length - 1]?.request_id ?? null;
+            if (!requestId) await new Promise((resolve) => setTimeout(resolve, 20));
+          }
+          assert.ok(requestId, 'expected mailbox dispatch request to be queued');
+          if (!requestId) throw new Error('missing request id');
+
+          await transitionDispatchRequest(
+            'team-leader-failed-receipt',
+            requestId,
+            'pending',
+            'failed',
+            { last_reason: 'hook_failed:test_receipt' },
+            cwd,
+          );
+
+          const outcome = await sendPromise;
+          assert.equal(outcome.ok, true);
+          assert.equal(outcome.reason, 'fallback_confirmed_after_failed_receipt:leader_mailbox_notified');
+
+          const requests = await listDispatchRequests('team-leader-failed-receipt', cwd, { kind: 'mailbox', to_worker: 'leader-fixed' });
+          const latest = requests[requests.length - 1];
+          assert.equal(latest?.request_id, requestId);
+          assert.equal(latest?.status, 'failed');
+          assert.equal(latest?.last_reason, 'fallback_confirmed_after_failed_receipt:leader_mailbox_notified');
+
+          const mailbox = await listMailboxMessages('team-leader-failed-receipt', 'leader-fixed', cwd);
+          assert.ok(mailbox[0]?.notified_at, 'fallback mailbox persistence should still mark notified_at');
         },
       );
     } finally {

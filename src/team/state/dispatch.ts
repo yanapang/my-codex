@@ -115,7 +115,6 @@ function canTransitionDispatchStatus(from: TeamDispatchRequestStatus, to: TeamDi
   if (from === to) return true;
   if (from === 'pending' && (to === 'notified' || to === 'failed')) return true;
   if (from === 'notified' && (to === 'delivered' || to === 'failed')) return true;
-  if (from === 'failed' && to === 'notified') return true;
   return false;
 }
 

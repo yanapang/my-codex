@@ -3220,12 +3220,14 @@ async function dispatchCriticalInboxInstruction(params: {
   if (receipt?.status === 'failed') {
     const fallback = await notifyWorkerOutcome(config, workerIndex, triggerMessage, paneId);
     if (fallback.ok) {
-      await markDispatchRequestNotified(
+      await transitionDispatchRequest(
         teamName,
         queued.request_id,
-        { last_reason: `fallback_confirmed_after_failed_receipt:${fallback.reason}`, failed_at: undefined },
+        'failed',
+        'failed',
+        { last_reason: `fallback_confirmed_after_failed_receipt:${fallback.reason}` },
         cwd,
-      ).catch(() => null);
+      ).catch(() => {});
       return {
         ok: true,
         transport: fallback.transport,
@@ -3347,12 +3349,14 @@ async function finalizeHookPreferredMailboxDispatch(params: {
   if (receipt?.status === 'failed') {
     if (fallback.ok) {
       await markMessageNotified(teamName, workerName, messageId, cwd).catch(() => false);
-      await markDispatchRequestNotified(
+      await transitionDispatchRequest(
         teamName,
         requestId,
-        { message_id: messageId, last_reason: `fallback_confirmed_after_failed_receipt:${fallback.reason}`, failed_at: undefined },
+        'failed',
+        'failed',
+        { message_id: messageId, last_reason: `fallback_confirmed_after_failed_receipt:${fallback.reason}` },
         cwd,
-      ).catch(() => null);
+      ).catch(() => {});
       const outcome = {
         ok: true,
         transport: fallback.transport,
