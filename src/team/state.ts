@@ -51,7 +51,7 @@ import {
   withTaskClaimLock as withTaskClaimLockImpl,
   withMailboxLock as withMailboxLockImpl,
 } from './state/locks.js';
-import { getDefaultBridge, isBridgeEnabled, resolveBridgeStateDir, type DispatchRecord, type MailboxRecord } from '../runtime/bridge.js';
+import { getDefaultBridge, isBridgeEnabled, resolveBridgeStateDir, type DispatchRecord } from '../runtime/bridge.js';
 import {
   TEAM_NAME_SAFE_PATTERN,
   WORKER_NAME_SAFE_PATTERN,
@@ -1481,18 +1481,6 @@ function serializeDispatchRequestToBridgeRecord(request: TeamDispatchRequest): D
   };
 }
 
-function serializeMailboxMessageToBridgeRecord(message: TeamMailboxMessage): MailboxRecord {
-  return {
-    message_id: message.message_id,
-    from_worker: message.from_worker,
-    to_worker: message.to_worker,
-    body: message.body,
-    created_at: message.created_at,
-    notified_at: message.notified_at ?? null,
-    delivered_at: message.delivered_at ?? null,
-  };
-}
-
 async function writeBridgeDispatchCompat(teamName: string, requests: TeamDispatchRequest[], cwd: string): Promise<void> {
   if (!isBridgeEnabled()) return;
   const stateDir = resolveBridgeStateDir(cwd);
@@ -1511,17 +1499,6 @@ async function writeBridgeDispatchCompat(teamName: string, requests: TeamDispatc
   await writeAtomic(path, JSON.stringify({ records }, null, 2));
 }
 
-async function writeBridgeMailboxCompat(teamName: string, mailbox: TeamMailbox, cwd: string): Promise<void> {
-  if (!isBridgeEnabled()) return;
-  const stateDir = resolveBridgeStateDir(cwd);
-  const path = join(stateDir, 'mailbox.json');
-  const existing = getDefaultBridge(stateDir).readCompatFile<{ records?: MailboxRecord[] }>('mailbox.json');
-  const otherRecords = Array.isArray(existing?.records)
-    ? existing.records.filter((record) => record?.to_worker !== mailbox.worker)
-    : [];
-  const records = [...otherRecords, ...mailbox.messages.map(serializeMailboxMessageToBridgeRecord)];
-  await writeAtomic(path, JSON.stringify({ records }, null, 2));
-}
 
 export function resolveDispatchLockTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
   return resolveDispatchLockTimeoutMsImpl(env);
