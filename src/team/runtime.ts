@@ -393,6 +393,16 @@ function appendIntegrationReport(
   appendFileSync(reportPath, existsSync(reportPath) ? line : `# Integration Report\n\n${line}`);
 }
 
+function resolveWorkerMergeRef(branchResult: CommandResult, workerHead: string): string {
+  const branchRef = branchResult.ok ? branchResult.stdout.trim() : '';
+  if (!branchRef || branchRef === 'HEAD') return workerHead;
+  return branchRef;
+}
+
+function leaderContainsCommit(repoRoot: string, cwd: string, commit: string): boolean {
+  return runGitCommand(repoRoot, ['merge-base', '--is-ancestor', commit, 'HEAD'], cwd).ok;
+}
+
 async function integrateWorkerCommitsIntoLeader(params: {
   teamName: string;
   config: TeamConfig;
@@ -460,40 +470,69 @@ async function integrateWorkerCommitsIntoLeader(params: {
     if (workerIsAheadOfLeader) {
       // Worker is cleanly ahead → merge --no-ff -X theirs
       const workerBranch = runGitCommand(repoRoot, ['rev-parse', '--abbrev-ref', 'HEAD'], worktreePath);
-      const branchRef = workerBranch.ok && workerBranch.stdout ? workerBranch.stdout : workerHead;
+      const branchRef = resolveWorkerMergeRef(workerBranch, workerHead);
       const merge = runGitCommand(repoRoot, ['merge', '--no-ff', '-X', 'theirs', '-m', `omx(team): merge ${worker.name}`, branchRef], cwd);
 
       if (merge.ok) {
         const newLeaderHead = resolveLeaderHead(repoRoot, cwd) ?? leaderHead;
-        state.last_integrated_head = workerHead;
-        state.last_leader_head = newLeaderHead;
-        state.status = 'integrated';
-        state.conflict_commit = undefined;
-        state.conflict_files = undefined;
-        state.updated_at = new Date().toISOString();
-        integratedWorkerNames.add(worker.name);
-        await appendIntegrationEvent(teamName, 'worker_merge_applied', worker, {
-          worker_name: worker.name,
-          worker_head: workerHead,
-          leader_head_before: leaderHead,
-          leader_head_after: newLeaderHead,
-          worktree_path: worktreePath,
-          summary: `merged ${worker.name} into leader via --no-ff -X theirs`,
-        }, cwd);
-        await sendIntegrationMessageToLeader(teamName, worker, `INTEGRATED: merged ${worker.name} (${workerHead.slice(0, 12)}) into leader HEAD ${newLeaderHead.slice(0, 12)} via merge --no-ff.`, cwd);
-        commitHygieneEntries.push({
-          recorded_at: new Date().toISOString(),
-          operation: 'integration_merge',
-          worker_name: worker.name,
-          task_id: worker.assigned_tasks[0],
-          status: 'applied',
-          operational_commit: newLeaderHead,
-          source_commit: workerHead,
-          leader_head_before: leaderHead,
-          leader_head_after: newLeaderHead,
-          worktree_path: worktreePath,
-          detail: 'Leader created a runtime merge commit to integrate worker history.',
-        });
+        const workerIntegrated = leaderContainsCommit(repoRoot, cwd, workerHead);
+        const leaderAdvanced = newLeaderHead !== leaderHead;
+        if (workerIntegrated && leaderAdvanced) {
+          state.last_integrated_head = workerHead;
+          state.last_leader_head = newLeaderHead;
+          state.status = 'integrated';
+          state.conflict_commit = undefined;
+          state.conflict_files = undefined;
+          state.updated_at = new Date().toISOString();
+          integratedWorkerNames.add(worker.name);
+          await appendIntegrationEvent(teamName, 'worker_merge_applied', worker, {
+            worker_name: worker.name,
+            worker_head: workerHead,
+            leader_head_before: leaderHead,
+            leader_head_after: newLeaderHead,
+            worktree_path: worktreePath,
+            summary: `merged ${worker.name} into leader via --no-ff -X theirs`,
+          }, cwd);
+          await sendIntegrationMessageToLeader(teamName, worker, `INTEGRATED: merged ${worker.name} (${workerHead.slice(0, 12)}) into leader HEAD ${newLeaderHead.slice(0, 12)} via merge --no-ff.`, cwd);
+          commitHygieneEntries.push({
+            recorded_at: new Date().toISOString(),
+            operation: 'integration_merge',
+            worker_name: worker.name,
+            task_id: worker.assigned_tasks[0],
+            status: 'applied',
+            operational_commit: newLeaderHead,
+            source_commit: workerHead,
+            leader_head_before: leaderHead,
+            leader_head_after: newLeaderHead,
+            worktree_path: worktreePath,
+            detail: 'Leader created a runtime merge commit to integrate worker history.',
+          });
+        } else {
+          state.last_leader_head = newLeaderHead;
+          state.status = 'idle';
+          state.updated_at = new Date().toISOString();
+          appendIntegrationReport(teamName, {
+            workerName: worker.name,
+            operation: 'merge',
+            strategy: '-X theirs',
+            files: [],
+            detail: `merge reported success but leader HEAD did not advance cleanly (leader_before=${leaderHead.slice(0, 12)}, leader_after=${newLeaderHead.slice(0, 12)}, worker_integrated=${workerIntegrated}, merge_ref=${branchRef}).`,
+          }, cwd);
+          await sendIntegrationMessageToLeader(teamName, worker, `INTEGRATION NO-OP: merge for ${worker.name} using ${branchRef.slice(0, 12)} reported success but leader HEAD stayed ${newLeaderHead.slice(0, 12)}. Inspect ${worktreePath}.`, cwd);
+          commitHygieneEntries.push({
+            recorded_at: new Date().toISOString(),
+            operation: 'integration_merge',
+            worker_name: worker.name,
+            task_id: worker.assigned_tasks[0],
+            status: 'skipped',
+            operational_commit: newLeaderHead,
+            source_commit: workerHead,
+            leader_head_before: leaderHead,
+            leader_head_after: newLeaderHead,
+            worktree_path: worktreePath,
+            detail: 'Merge command reported success but leader HEAD did not advance or contain the worker commit; runtime refused to report false integration.',
+          });
+        }
       } else {
         // Merge failed even with -X theirs (e.g. binary conflict) — abort and log
         const conflictFiles = listConflictFiles(repoRoot, cwd);

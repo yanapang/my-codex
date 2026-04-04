@@ -12,6 +12,7 @@ import { join } from 'path';
 import { startTeam, monitorTeam, shutdownTeam } from './runtime.js';
 import type { TeamRuntime, TeamShutdownSummary } from './runtime.js';
 import { teamReadConfig as readTeamConfig } from './team-ops.js';
+import { resolveCanonicalTeamStateRoot } from './state-root.js';
 
 interface CliInput {
   teamName: string;
@@ -95,7 +96,11 @@ export function detectDeadWorkerFailure(
   };
 }
 
-function collectTaskResults(stateRoot: string, teamName: string): TaskResult[] {
+export function resolveRuntimeCliStateRoot(cwd: string, env: NodeJS.ProcessEnv = process.env): string {
+  return resolveCanonicalTeamStateRoot(cwd, env);
+}
+
+export function collectTaskResults(stateRoot: string, teamName: string): TaskResult[] {
   const tasksDir = join(stateRoot, 'team', teamName, 'tasks');
   try {
     const files = readdirSync(tasksDir).filter(f => f.endsWith('.json'));
@@ -167,7 +172,7 @@ async function main(): Promise<void> {
   } = input;
 
   const workerCount = input.workerCount ?? agentTypes.length;
-  const stateRoot = join(cwd, '.omx', 'state');
+  const stateRoot = resolveRuntimeCliStateRoot(cwd);
 
   let runtime: TeamRuntime | null = null;
   let finalStatus: 'completed' | 'failed' = 'failed';

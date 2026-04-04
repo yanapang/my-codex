@@ -182,8 +182,7 @@ function parseTriggerCooldownEntry(entry) {
   };
 }
 
-async function withDispatchLock(teamDirPath, fn) {
-  const lockDir = join(teamDirPath, 'dispatch', '.lock');
+async function withLockDirectory(lockDir, timeoutError, fn) {
   const ownerPath = join(lockDir, 'owner');
   const ownerToken = `${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`;
   const deadline = Date.now() + 5_000;
@@ -210,7 +209,7 @@ async function withDispatchLock(teamDirPath, fn) {
       } catch {
         // best effort
       }
-      if (Date.now() > deadline) throw new Error(`Timed out acquiring dispatch lock for ${teamDirPath}`);
+      if (Date.now() > deadline) throw new Error(timeoutError);
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
     }
   }
@@ -229,51 +228,20 @@ async function withDispatchLock(teamDirPath, fn) {
   }
 }
 
+async function withDispatchLock(teamDirPath, fn) {
+  return await withLockDirectory(
+    join(teamDirPath, 'dispatch', '.lock'),
+    `Timed out acquiring dispatch lock for ${teamDirPath}`,
+    fn,
+  );
+}
+
 async function withMailboxLock(teamDirPath, workerName, fn) {
-  const lockDir = join(teamDirPath, 'mailbox', `.lock-${workerName}`);
-  const ownerPath = join(lockDir, 'owner');
-  const ownerToken = `${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`;
-  const deadline = Date.now() + 5_000;
-  await mkdir(dirname(lockDir), { recursive: true });
-
-  while (true) {
-    try {
-      await mkdir(lockDir, { recursive: false });
-      try {
-        await writeFile(ownerPath, ownerToken, 'utf8');
-      } catch (error) {
-        await rm(lockDir, { recursive: true, force: true });
-        throw error;
-      }
-      break;
-    } catch (error) {
-      if (error?.code !== 'EEXIST') throw error;
-      try {
-        const info = await stat(lockDir);
-        if (Date.now() - info.mtimeMs > DISPATCH_LOCK_STALE_MS) {
-          await rm(lockDir, { recursive: true, force: true });
-          continue;
-        }
-      } catch {
-        // best effort
-      }
-      if (Date.now() > deadline) throw new Error(`Timed out acquiring mailbox lock for ${teamDirPath}/${workerName}`);
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
-    }
-  }
-
-  try {
-    return await fn();
-  } finally {
-    try {
-      const currentOwner = await readFile(ownerPath, 'utf8');
-      if (currentOwner.trim() === ownerToken) {
-        await rm(lockDir, { recursive: true, force: true });
-      }
-    } catch {
-      // best effort
-    }
-  }
+  return await withLockDirectory(
+    join(teamDirPath, 'mailbox', `.lock-${workerName}`),
+    `Timed out acquiring mailbox lock for ${teamDirPath}/${workerName}`,
+    fn,
+  );
 }
 
 function resolveLeaderPaneId(config) {
