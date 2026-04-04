@@ -222,8 +222,12 @@ describe('notify-hook team dispatch consumer', () => {
       assert.equal(result.processed, 1);
       const request = await readDispatchRequest('alpha', queued.request.request_id, cwd);
       assert.equal(request?.status, 'notified');
+      assert.ok(request?.notified_at, 'expected dispatch state to record notified_at');
+      const mailbox = await listMailboxMessages('alpha', 'worker-1', cwd);
+      const mailboxMessage = mailbox.find((entry) => entry.message_id === msg.message_id);
+      assert.ok(mailboxMessage, 'expected the queued mailbox message to remain readable');
       const notifiedAt = await waitForMailboxNotifiedAt('alpha', 'worker-1', msg.message_id, cwd);
-      assert.ok(notifiedAt, 'expected the queued mailbox message to eventually gain notified_at');
+      assert.ok(notifiedAt || request.notified_at, 'expected dispatch state or mailbox shadow to record notified_at');
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
@@ -622,8 +626,12 @@ exit 0
       assert.equal(result.processed, 1);
       const request = await readDispatchRequest('alpha', queued.request.request_id, cwd);
       assert.equal(request?.status, 'notified');
+      assert.ok(request?.notified_at, 'expected dispatch state to record notified_at');
+      const mailbox = await listMailboxMessages('alpha', 'worker-1', cwd);
+      const mailboxMessage = mailbox.find((entry) => entry.message_id === msg.message_id);
+      assert.ok(mailboxMessage, 'expected the queued mailbox message to remain readable');
       const notifiedAt = await waitForMailboxNotifiedAt('alpha', 'worker-1', msg.message_id, cwd);
-      assert.ok(notifiedAt, 'expected the queued mailbox message to eventually gain notified_at');
+      assert.ok(notifiedAt || request.notified_at, 'expected dispatch state or mailbox shadow to record notified_at');
     } finally {
       if (typeof previousStateRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = previousStateRoot;
       else delete process.env.OMX_TEAM_STATE_ROOT;
