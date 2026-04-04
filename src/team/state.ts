@@ -53,16 +53,20 @@ import {
 } from './state/locks.js';
 import { getDefaultBridge, isBridgeEnabled, resolveBridgeStateDir, type DispatchRecord } from '../runtime/bridge.js';
 import {
+  type TeamDispatchRequestStatus,
   TEAM_NAME_SAFE_PATTERN,
   WORKER_NAME_SAFE_PATTERN,
   TASK_ID_SAFE_PATTERN,
   TEAM_TASK_STATUSES,
+  type TeamWorkerIntegrationStatus,
   canTransitionTeamTaskStatus,
   isTerminalTeamTaskStatus,
   type TeamTaskStatus,
   type TeamEventType,
 } from './contracts.js';
 import type { WorktreeMode } from './worktree.js';
+
+export type { TeamDispatchRequestStatus, TeamWorkerIntegrationStatus } from './contracts.js';
 
 export interface TeamConfig {
   name: string;
@@ -178,7 +182,6 @@ export interface TeamGovernance {
 }
 
 export type TeamDispatchRequestKind = 'inbox' | 'mailbox' | 'nudge';
-export type TeamDispatchRequestStatus = 'pending' | 'notified' | 'delivered' | 'failed';
 export type TeamDispatchTransportPreference = 'hook_preferred_with_fallback' | 'transport_direct' | 'prompt_stdin';
 
 export interface TeamDispatchRequest {
@@ -1781,7 +1784,7 @@ export interface TeamWorkerIntegrationState {
   last_integrated_head?: string;
   last_leader_head?: string;
   last_rebased_leader_head?: string;
-  status?: 'idle' | 'integrated' | 'integration_failed' | 'cherry_pick_conflict' | 'rebase_conflict';
+  status?: TeamWorkerIntegrationStatus;
   conflict_commit?: string;
   conflict_files?: string[];
   updated_at?: string;

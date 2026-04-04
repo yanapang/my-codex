@@ -1,5 +1,5 @@
 import type { TeamPhase, TerminalPhase } from '../orchestrator.js';
-import type { TeamTaskStatus, TeamEventType } from '../contracts.js';
+import type { TeamDispatchRequestStatus, TeamEventType, TeamTaskStatus } from '../contracts.js';
 import type { WorktreeMode } from '../worktree.js';
 
 export interface TeamConfig {
@@ -111,7 +111,6 @@ export interface TeamGovernance {
 }
 
 export type TeamDispatchRequestKind = 'inbox' | 'mailbox' | 'nudge';
-export type TeamDispatchRequestStatus = 'pending' | 'notified' | 'delivered' | 'failed';
 export type TeamDispatchTransportPreference = 'hook_preferred_with_fallback' | 'transport_direct' | 'prompt_stdin';
 
 export interface TeamDispatchRequest {

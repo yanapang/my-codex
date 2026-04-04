@@ -22,6 +22,42 @@ export function canTransitionTeamTaskStatus(from: TeamTaskStatus, to: TeamTaskSt
   return TEAM_TASK_STATUS_TRANSITIONS[from]?.includes(to) ?? false;
 }
 
+export const TEAM_DISPATCH_REQUEST_STATUSES = ['pending', 'notified', 'delivered', 'failed'] as const;
+export type TeamDispatchRequestStatus = (typeof TEAM_DISPATCH_REQUEST_STATUSES)[number];
+
+export const TEAM_TERMINAL_DISPATCH_REQUEST_STATUSES: ReadonlySet<TeamDispatchRequestStatus> = new Set(['delivered', 'failed']);
+export const TEAM_DISPATCH_REQUEST_STATUS_TRANSITIONS: Readonly<Record<TeamDispatchRequestStatus, readonly TeamDispatchRequestStatus[]>> = {
+  pending: ['notified', 'failed'],
+  notified: ['delivered', 'failed'],
+  delivered: [],
+  failed: [],
+};
+
+export function isTeamDispatchRequestStatus(status: unknown): status is TeamDispatchRequestStatus {
+  return TEAM_DISPATCH_REQUEST_STATUSES.includes(status as TeamDispatchRequestStatus);
+}
+
+export function isTerminalTeamDispatchRequestStatus(status: TeamDispatchRequestStatus): boolean {
+  return TEAM_TERMINAL_DISPATCH_REQUEST_STATUSES.has(status);
+}
+
+export function canTransitionTeamDispatchRequestStatus(from: TeamDispatchRequestStatus, to: TeamDispatchRequestStatus): boolean {
+  return TEAM_DISPATCH_REQUEST_STATUS_TRANSITIONS[from]?.includes(to) ?? false;
+}
+
+export const TEAM_WORKER_INTEGRATION_STATUSES = [
+  'idle',
+  'integrated',
+  'integration_failed',
+  'cherry_pick_conflict',
+  'rebase_conflict',
+] as const;
+export type TeamWorkerIntegrationStatus = (typeof TEAM_WORKER_INTEGRATION_STATUSES)[number];
+
+export function isTeamWorkerIntegrationStatus(status: unknown): status is TeamWorkerIntegrationStatus {
+  return TEAM_WORKER_INTEGRATION_STATUSES.includes(status as TeamWorkerIntegrationStatus);
+}
+
 export const TEAM_EVENT_TYPES = [
   'task_completed',
   'task_failed',
