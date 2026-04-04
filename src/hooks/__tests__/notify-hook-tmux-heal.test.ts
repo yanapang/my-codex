@@ -417,16 +417,22 @@ exit 1
         'last-assistant-message': 'output',
       };
 
-      const result = spawnSync(process.execPath, [NOTIFY_HOOK_SCRIPT.pathname, JSON.stringify(payload)], {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
-          OMX_TEAM_WORKER: '',
-          TMUX_PANE: '%42',
-        },
-      });
-      assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
+      const previousPath = process.env.PATH;
+      const previousTeamWorker = process.env.OMX_TEAM_WORKER;
+      const previousTmuxPane = process.env.TMUX_PANE;
+      try {
+        process.env.PATH = `${fakeBinDir}:${process.env.PATH || ''}`;
+        process.env.OMX_TEAM_WORKER = '';
+        process.env.TMUX_PANE = '%42';
+        await handleTmuxInjection({ payload, cwd, stateDir, logsDir });
+      } finally {
+        if (typeof previousPath === 'string') process.env.PATH = previousPath;
+        else delete process.env.PATH;
+        if (typeof previousTeamWorker === 'string') process.env.OMX_TEAM_WORKER = previousTeamWorker;
+        else delete process.env.OMX_TEAM_WORKER;
+        if (typeof previousTmuxPane === 'string') process.env.TMUX_PANE = previousTmuxPane;
+        else delete process.env.TMUX_PANE;
+      }
 
       const hookState = await readJson<Record<string, unknown>>(hookStatePath);
       assert.equal(hookState.last_reason, 'pane_cwd_mismatch');
