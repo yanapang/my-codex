@@ -734,7 +734,6 @@ export async function maybeNudgeTeamLeader({
       text =
         `Team ${teamName}: leader stale, ${paneStatus.paneCount} worker pane(s) still active. `
         + leaderActionGuidance;
-<<<<<<< HEAD
     } else if (hasActionableNewMessage) {
       nudgeReason = 'new_mailbox_message';
       text = `Team ${teamName}: ${messages.length} msg(s) for leader. ${buildMailboxCheckReminder(teamName)}`;
