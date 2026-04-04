@@ -919,6 +919,7 @@ const STARTUP_EVIDENCE_POLL_MS = 100;
 interface PromptWorkerHandle {
   child: ChildProcessByStdio<Writable, null, null>;
   pid: number;
+  processGroupId: number | null;
 }
 
 const promptWorkerRegistry = new Map<string, Map<string, PromptWorkerHandle>>();
@@ -1076,12 +1077,20 @@ function registerPromptWorkerHandle(
   }
   const processPid = pid as number;
   const existingTeamHandles = promptWorkerRegistry.get(teamName) ?? new Map<string, PromptWorkerHandle>();
-  existingTeamHandles.set(workerName, { child, pid: processPid });
+  existingTeamHandles.set(workerName, {
+    child,
+    pid: processPid,
+    processGroupId: process.platform !== 'win32' ? processPid : null,
+  });
   promptWorkerRegistry.set(teamName, existingTeamHandles);
 
   child.on('exit', () => {
     const teamHandles = promptWorkerRegistry.get(teamName);
     if (!teamHandles) return;
+    const handle = teamHandles.get(workerName);
+    if (handle?.processGroupId && isProcessGroupAlive(handle.processGroupId)) {
+      return;
+    }
     teamHandles.delete(workerName);
     if (teamHandles.size === 0) promptWorkerRegistry.delete(teamName);
   });
@@ -1110,14 +1119,17 @@ function isPidAlive(pid: number): boolean {
   }
 }
 
-async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> {
-  if (!isPidAlive(pid)) return true;
-  const deadline = Date.now() + Math.max(0, timeoutMs);
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, PROMPT_WORKER_EXIT_POLL_MS));
-    if (!isPidAlive(pid)) return true;
+function isProcessGroupAlive(processGroupId: number): boolean {
+  if (process.platform === 'win32') return false;
+  if (!Number.isFinite(processGroupId) || processGroupId <= 0) return false;
+  try {
+    process.kill(-processGroupId, 0);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ESRCH') return false;
+    process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+    return false;
   }
-  return !isPidAlive(pid);
 }
 
 interface PromptWorkerTeardownResult {
@@ -1125,6 +1137,186 @@ interface PromptWorkerTeardownResult {
   forcedKill: boolean;
   pid: number | null;
   error?: string;
+}
+
+interface ProcessTreeEntry {
+  pid: number;
+  ppid: number;
+}
+
+function listProcessTreeEntries(): ProcessTreeEntry[] {
+  if (process.platform === 'win32') return [];
+  const result = spawnSync('ps', ['axww', '-o', 'pid=,ppid='], {
+    encoding: 'utf-8',
+    windowsHide: true,
+  });
+  if (result.status !== 0 || typeof result.stdout !== 'string') return [];
+
+  return result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^(\d+)\s+(\d+)$/);
+      if (!match) return null;
+      const pid = Number.parseInt(match[1], 10);
+      const ppid = Number.parseInt(match[2], 10);
+      if (!Number.isFinite(pid) || pid <= 0) return null;
+      if (!Number.isFinite(ppid) || ppid < 0) return null;
+      return { pid, ppid } satisfies ProcessTreeEntry;
+    })
+    .filter((entry): entry is ProcessTreeEntry => entry !== null);
+}
+
+function collectProcessTreePids(rootPid: number): number[] {
+  if (!Number.isFinite(rootPid) || rootPid <= 0) return [];
+
+  const childrenByPid = new Map<number, number[]>();
+  for (const entry of listProcessTreeEntries()) {
+    const siblings = childrenByPid.get(entry.ppid) ?? [];
+    siblings.push(entry.pid);
+    childrenByPid.set(entry.ppid, siblings);
+  }
+
+  const ordered: number[] = [];
+  const stack = [rootPid];
+  const seen = new Set<number>();
+  while (stack.length > 0) {
+    const pid = stack.pop()!;
+    if (seen.has(pid)) continue;
+    seen.add(pid);
+    ordered.push(pid);
+    for (const childPid of childrenByPid.get(pid) ?? []) {
+      if (!seen.has(childPid)) stack.push(childPid);
+    }
+  }
+
+  return ordered.reverse();
+}
+
+async function waitForTrackedPidsExit(pids: readonly number[], timeoutMs: number): Promise<boolean> {
+  const tracked = [...new Set(pids.filter((pid) => Number.isFinite(pid) && pid > 0))];
+  if (tracked.length === 0) return true;
+
+  const deadline = Date.now() + Math.max(0, timeoutMs);
+  while (Date.now() < deadline) {
+    if (tracked.every((pid) => !isPidAlive(pid))) return true;
+    await new Promise((resolve) => setTimeout(resolve, PROMPT_WORKER_EXIT_POLL_MS));
+  }
+
+  return tracked.every((pid) => !isPidAlive(pid));
+}
+
+async function terminateTrackedProcessTree(
+  rootPid: number,
+  processGroupId: number | null = null,
+  graceMs: number = PROMPT_WORKER_SIGTERM_WAIT_MS,
+  killWaitMs: number = PROMPT_WORKER_SIGKILL_WAIT_MS,
+): Promise<{ terminated: boolean; forcedKill: boolean; trackedPids: number[] }> {
+  if (processGroupId && process.platform !== 'win32') {
+    const trackedPids = collectProcessTreePids(rootPid);
+    try {
+      process.kill(-processGroupId, 'SIGTERM');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+        process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+      }
+    }
+    for (const pid of trackedPids) {
+      if (pid === rootPid) continue;
+      try {
+        process.kill(pid, 'SIGTERM');
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+          process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+        }
+      }
+    }
+
+    const groupDeadline = Date.now() + Math.max(0, graceMs);
+    while (Date.now() < groupDeadline) {
+      const groupAlive = isProcessGroupAlive(processGroupId);
+      const descendantsAlive = trackedPids.some((pid) => isPidAlive(pid));
+      if (!groupAlive && !descendantsAlive) {
+        return { terminated: true, forcedKill: false, trackedPids };
+      }
+      await new Promise((resolve) => setTimeout(resolve, PROMPT_WORKER_EXIT_POLL_MS));
+    }
+
+    try {
+      process.kill(-processGroupId, 'SIGKILL');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+        process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+      }
+    }
+    for (const pid of trackedPids) {
+      if (!isPidAlive(pid)) continue;
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+          process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+        }
+      }
+    }
+
+    const killDeadline = Date.now() + Math.max(0, killWaitMs);
+    while (Date.now() < killDeadline) {
+      const groupAlive = isProcessGroupAlive(processGroupId);
+      const descendantsAlive = trackedPids.some((pid) => isPidAlive(pid));
+      if (!groupAlive && !descendantsAlive) {
+        return { terminated: true, forcedKill: true, trackedPids };
+      }
+      await new Promise((resolve) => setTimeout(resolve, PROMPT_WORKER_EXIT_POLL_MS));
+    }
+
+    return {
+      terminated: !isProcessGroupAlive(processGroupId) && trackedPids.every((pid) => !isPidAlive(pid)),
+      forcedKill: true,
+      trackedPids,
+    };
+  }
+
+  const trackedPids = collectProcessTreePids(rootPid);
+  if (trackedPids.length === 0) {
+    return {
+      terminated: !isPidAlive(rootPid),
+      forcedKill: false,
+      trackedPids: [],
+    };
+  }
+
+  for (const pid of trackedPids) {
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+        process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+      }
+    }
+  }
+
+  if (await waitForTrackedPidsExit(trackedPids, graceMs)) {
+    return { terminated: true, forcedKill: false, trackedPids };
+  }
+
+  for (const pid of trackedPids) {
+    if (!isPidAlive(pid)) continue;
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+        process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+      }
+    }
+  }
+
+  return {
+    terminated: await waitForTrackedPidsExit(trackedPids, killWaitMs),
+    forcedKill: true,
+    trackedPids,
+  };
 }
 
 async function teardownPromptWorker(
@@ -1136,32 +1328,21 @@ async function teardownPromptWorker(
 ): Promise<PromptWorkerTeardownResult> {
   const handle = getPromptWorkerHandle(teamName, workerName);
   const handlePid = handle?.pid;
+  const processGroupId = handle?.processGroupId ?? null;
   const pid = (typeof handlePid === 'number' && Number.isFinite(handlePid))
     ? handlePid
     : (Number.isFinite(fallbackPid) && (fallbackPid ?? 0) > 0 ? (fallbackPid as number) : null);
 
-  if (pid === null) {
+  if (pid === null && processGroupId === null) {
     removePromptWorkerHandle(teamName, workerName);
     return { terminated: true, forcedKill: false, pid: null };
   }
 
-  try {
-    if (handle && handle.child.exitCode === null && !handle.child.killed) {
-      handle.child.kill('SIGTERM');
-    } else {
-      process.kill(pid, 'SIGTERM');
-    }
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
-      process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
-    }
-    // Best effort.
-  }
-
-  const exitedOnTerm = await waitForPidExit(pid, PROMPT_WORKER_SIGTERM_WAIT_MS);
-  if (exitedOnTerm) {
+  const teardown = await terminateTrackedProcessTree(pid ?? 0, processGroupId);
+  const processGone = processGroupId ? !isProcessGroupAlive(processGroupId) : !isPidAlive(pid!);
+  if (teardown.terminated && processGone) {
     removePromptWorkerHandle(teamName, workerName);
-    return { terminated: true, forcedKill: false, pid };
+    return { terminated: true, forcedKill: teardown.forcedKill, pid };
   }
 
   await appendTeamEvent(
@@ -1173,22 +1354,7 @@ async function teardownPromptWorker(
     },
     cwd,
   ).catch(() => {});
-
-  try {
-    if (handle && handle.child.exitCode === null) {
-      handle.child.kill('SIGKILL');
-    } else {
-      process.kill(pid, 'SIGKILL');
-    }
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
-      process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
-    }
-    // Best effort.
-  }
-
-  const exitedOnKill = await waitForPidExit(pid, PROMPT_WORKER_SIGKILL_WAIT_MS);
-  if (!exitedOnKill) {
+  if (!teardown.terminated) {
     await appendTeamEvent(
       teamName,
       {
@@ -1200,19 +1366,21 @@ async function teardownPromptWorker(
     ).catch(() => {});
     return {
       terminated: false,
-      forcedKill: true,
+      forcedKill: teardown.forcedKill,
       pid,
       error: 'still_alive_after_sigkill',
     };
   }
 
   removePromptWorkerHandle(teamName, workerName);
-  return { terminated: true, forcedKill: true, pid };
+  return { terminated: true, forcedKill: teardown.forcedKill, pid };
 }
 
 function isPromptWorkerAlive(config: TeamConfig, worker: WorkerInfo): boolean {
   const handle = getPromptWorkerHandle(config.name, worker.name);
   if (handle?.child.exitCode === null && !handle.child.killed) return true;
+  if (handle?.processGroupId && isProcessGroupAlive(handle.processGroupId)) return true;
+  if (process.platform !== 'win32' && isProcessGroupAlive(worker.pid as number)) return true;
   return isPidAlive(worker.pid as number);
 }
 
@@ -1244,6 +1412,7 @@ function spawnPromptWorker(
     processSpec.args,
     {
       cwd: workerCwd,
+      detached: process.platform !== 'win32',
       env: { ...process.env, ...processSpec.env },
       stdio: ['pipe', 'ignore', 'ignore'],
     },
@@ -1773,7 +1942,11 @@ export async function startTeam(
 
       // In split-pane topology, we must not kill the entire tmux session; kill only created panes.
       if (sessionName.includes(':')) {
-        for (const paneId of createdWorkerPaneIds) {
+        for (const [index, paneId] of createdWorkerPaneIds.entries()) {
+          const panePid = getWorkerPanePid(sessionName, index + 1, paneId);
+          if (panePid) {
+            await terminateTrackedProcessTree(panePid);
+          }
           try {
             await killWorkerByPaneIdAsync(paneId, createdLeaderPaneId);
           } catch (err) {
@@ -2378,6 +2551,13 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
   const leaderPaneId = config.leader_pane_id;
   const hudPaneId = config.hud_pane_id;
   if (config.worker_launch_mode === 'interactive') {
+    const workerPanePids = config.workers
+      .map((w) => getWorkerPanePid(sessionName, w.index, w.pane_id))
+      .filter((pid): pid is number => typeof pid === 'number' && Number.isFinite(pid) && pid > 0);
+    for (const panePid of workerPanePids) {
+      await terminateTrackedProcessTree(panePid);
+    }
+
     let resizeHookWarning: string | null = null;
     if (config.resize_hook_name && config.resize_hook_target) {
       const resizeHookName = config.resize_hook_name;
