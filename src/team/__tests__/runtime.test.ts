@@ -1614,6 +1614,96 @@ process.on('SIGTERM', () => {
     }
   });
 
+  it('shutdownTeam reaps detached prompt-worker descendants', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-prompt-descendants-'));
+    const binDir = join(cwd, 'bin');
+    const fakeCodexPath = join(binDir, 'codex');
+    const helperPidPath = join(cwd, 'helper.pid');
+    await mkdir(binDir, { recursive: true });
+    await writeFile(
+      fakeCodexPath,
+      `#!/usr/bin/env node
+const { spawn } = require('child_process');
+const { writeFileSync } = require('fs');
+const helper = spawn(process.execPath, ['-e', \`
+process.on('SIGTERM', () => {});
+setInterval(() => {}, 1000);
+\`], { detached: true, stdio: 'ignore' });
+helper.unref();
+writeFileSync(process.env.OMX_HELPER_PID_PATH, String(helper.pid));
+process.stdin.resume();
+setInterval(() => {}, 1000);
+process.on('SIGTERM', () => process.exit(0));
+`,
+      { mode: 0o755 },
+    );
+
+    const prevPath = process.env.PATH;
+    const prevTmux = process.env.TMUX;
+    const prevLaunchMode = process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
+    const prevWorkerCli = process.env.OMX_TEAM_WORKER_CLI;
+    const prevHelperPidPath = process.env.OMX_HELPER_PID_PATH;
+
+    process.env.PATH = `${binDir}:${prevPath ?? ''}`;
+    delete process.env.TMUX;
+    process.env.OMX_TEAM_WORKER_LAUNCH_MODE = 'prompt';
+    process.env.OMX_TEAM_WORKER_CLI = 'codex';
+    process.env.OMX_HELPER_PID_PATH = helperPidPath;
+
+    let runtime: TeamRuntime | null = null;
+    let helperPid = 0;
+    try {
+      runtime = await withoutTeamWorkerEnv(() =>
+        startTeam(
+          'team-prompt-descendants',
+          'prompt-mode detached descendant teardown',
+          'executor',
+          1,
+          [{ subject: 's', description: 'd', owner: 'worker-1' }],
+          cwd,
+        ));
+
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        if (existsSync(helperPidPath)) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      helperPid = Number((await readFile(helperPidPath, 'utf-8')).trim());
+      assert.ok(helperPid > 0, 'detached helper pid should be captured');
+
+      await shutdownTeam(runtime.teamName, cwd, { force: true });
+      runtime = null;
+
+      let alive = false;
+      try {
+        process.kill(helperPid, 0);
+        alive = true;
+      } catch {
+        alive = false;
+      }
+      assert.equal(alive, false, `detached helper pid ${helperPid} should be terminated after shutdown`);
+    } finally {
+      if (runtime) {
+        await shutdownTeam(runtime.teamName, cwd, { force: true }).catch(() => {});
+      }
+      if (helperPid > 0) {
+        try {
+          process.kill(helperPid, 'SIGKILL');
+        } catch {}
+      }
+      if (typeof prevPath === 'string') process.env.PATH = prevPath;
+      else delete process.env.PATH;
+      if (typeof prevTmux === 'string') process.env.TMUX = prevTmux;
+      else delete process.env.TMUX;
+      if (typeof prevLaunchMode === 'string') process.env.OMX_TEAM_WORKER_LAUNCH_MODE = prevLaunchMode;
+      else delete process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
+      if (typeof prevWorkerCli === 'string') process.env.OMX_TEAM_WORKER_CLI = prevWorkerCli;
+      else delete process.env.OMX_TEAM_WORKER_CLI;
+      if (typeof prevHelperPidPath === 'string') process.env.OMX_HELPER_PID_PATH = prevHelperPidPath;
+      else delete process.env.OMX_HELPER_PID_PATH;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('monitorTeam returns null for non-existent team', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-'));
     try {
