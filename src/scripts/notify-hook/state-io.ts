@@ -3,7 +3,6 @@
  */
 
 import { readFile, readdir } from 'fs/promises';
-import { existsSync } from 'fs';
 import { join } from 'path';
 import { asNumber, safeString } from './utils.js';
 
@@ -17,20 +16,13 @@ export function readJsonIfExists(path: string, fallback: any): Promise<any> {
     .catch(() => fallback);
 }
 
-export async function getScopedStateDirsForCurrentSession(baseStateDir: string, payloadSessionId?: any): Promise<string[]> {
-  const explicitSessionId = safeString(payloadSessionId || '');
-  if (SESSION_ID_PATTERN.test(explicitSessionId)) {
-    const sessionDir = join(baseStateDir, 'sessions', explicitSessionId);
-    return [sessionDir];
-  }
-
+export async function getScopedStateDirsForCurrentSession(baseStateDir: string): Promise<string[]> {
   const sessionPath = join(baseStateDir, 'session.json');
   try {
     const session = JSON.parse(await readFile(sessionPath, 'utf-8'));
     const sessionId = safeString(session && session.session_id ? session.session_id : '');
     if (SESSION_ID_PATTERN.test(sessionId)) {
-      const sessionDir = join(baseStateDir, 'sessions', sessionId);
-      if (existsSync(sessionDir)) return [sessionDir];
+      return [join(baseStateDir, 'sessions', sessionId)];
     }
   } catch {
     // No session file or malformed - fall back to global only
