@@ -184,6 +184,11 @@ export async function isDeepInterviewStateActive(stateDir) {
   return Boolean(modeState && modeState.active === true);
 }
 
+export async function isDeepInterviewInputLockActive(stateDir) {
+  const skillState = await loadSkillActiveState(stateDir);
+  return isDeepInterviewAutoApprovalLocked(skillState);
+}
+
 export async function resolveAutoNudgeSignature(stateDir, payload, lastMessage = '') {
   const normalizedMessage = normalizeAutoNudgeSignatureText(lastMessage);
   const hudState = await readJsonIfExists(join(stateDir, 'hud-state.json'), null);
@@ -543,7 +548,7 @@ export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
     }
 
     const deepInterviewLockActive = isDeepInterviewAutoApprovalLocked(skillState) && !releaseReason;
-    if (deepInterviewLockActive && isBlockedAutoApprovalInput(config.response, skillState.input_lock?.blocked_inputs)) {
+    if (deepInterviewLockActive) {
       const blockedMessage = skillState.input_lock?.message || DEEP_INTERVIEW_INPUT_LOCK_MESSAGE;
       await logTmuxHookEvent(logsDir, {
         timestamp: new Date().toISOString(),
@@ -552,6 +557,9 @@ export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
         response: config.response,
         source,
         blocked_by: 'deep-interview-lock',
+        block_kind: isBlockedAutoApprovalInput(config.response, skillState.input_lock?.blocked_inputs)
+          ? 'blocked-auto-approval'
+          : 'input-lock-active',
         message: blockedMessage,
         suppressed: true,
       }).catch(() => {});

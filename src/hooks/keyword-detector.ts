@@ -61,8 +61,22 @@ export interface RecordSkillActivationInput {
 }
 
 export const SKILL_ACTIVE_STATE_FILE = 'skill-active-state.json';
+export const DEEP_INTERVIEW_STATE_FILE = 'deep-interview-state.json';
 export const DEEP_INTERVIEW_BLOCKED_APPROVAL_INPUTS = ['yes', 'y', 'proceed', 'continue', 'ok', 'sure', 'go ahead', 'next i should'] as const;
 export const DEEP_INTERVIEW_INPUT_LOCK_MESSAGE = 'Deep interview is active; auto-approval shortcuts are blocked until the interview finishes.';
+
+interface DeepInterviewModeState {
+  active: boolean;
+  mode: 'deep-interview';
+  current_phase: string;
+  started_at: string;
+  updated_at: string;
+  completed_at?: string;
+  session_id?: string;
+  thread_id?: string;
+  turn_id?: string;
+  input_lock?: DeepInterviewInputLock;
+}
 
 function createDeepInterviewInputLock(nowIso: string, previous?: DeepInterviewInputLock): DeepInterviewInputLock {
   return {
@@ -95,6 +109,60 @@ async function readExistingSkillState(statePath: string): Promise<SkillActiveSta
   } catch {
     return null;
   }
+}
+
+async function readExistingDeepInterviewState(statePath: string): Promise<DeepInterviewModeState | null> {
+  try {
+    const raw = await readFile(statePath, 'utf-8');
+    return JSON.parse(raw) as DeepInterviewModeState;
+  } catch {
+    return null;
+  }
+}
+
+async function persistDeepInterviewModeState(
+  stateDir: string,
+  nextSkill: SkillActiveState | null,
+  nowIso: string,
+  previousSkill: SkillActiveState | null,
+  input: RecordSkillActivationInput,
+): Promise<void> {
+  const statePath = join(stateDir, DEEP_INTERVIEW_STATE_FILE);
+  const previousModeState = await readExistingDeepInterviewState(statePath);
+
+  if (nextSkill?.skill === 'deep-interview' && nextSkill.active) {
+    const nextState: DeepInterviewModeState = {
+      active: true,
+      mode: 'deep-interview',
+      current_phase: previousModeState?.active ? previousModeState.current_phase || 'intent-first' : 'intent-first',
+      started_at: previousModeState?.active ? previousModeState.started_at || nowIso : nowIso,
+      updated_at: nowIso,
+      session_id: input.sessionId ?? previousModeState?.session_id,
+      thread_id: input.threadId ?? previousModeState?.thread_id,
+      turn_id: input.turnId ?? previousModeState?.turn_id,
+      ...(nextSkill.input_lock ? { input_lock: nextSkill.input_lock } : {}),
+    };
+    await writeFile(statePath, JSON.stringify(nextState, null, 2));
+    return;
+  }
+
+  const hadActiveDeepInterview = previousSkill?.skill === 'deep-interview' && previousSkill.active === true;
+  if (!previousModeState?.active && !hadActiveDeepInterview) return;
+
+  const releasedInputLock = nextSkill?.skill === 'deep-interview' ? nextSkill.input_lock : previousSkill?.input_lock;
+  const nextState: DeepInterviewModeState = {
+    active: false,
+    mode: 'deep-interview',
+    current_phase: 'completing',
+    started_at: previousModeState?.started_at || previousSkill?.activated_at || nowIso,
+    updated_at: nowIso,
+    completed_at: nowIso,
+    session_id: input.sessionId ?? previousModeState?.session_id ?? previousSkill?.session_id,
+    thread_id: input.threadId ?? previousModeState?.thread_id ?? previousSkill?.thread_id,
+    turn_id: input.turnId ?? previousModeState?.turn_id ?? previousSkill?.turn_id,
+    ...(releasedInputLock ? { input_lock: releasedInputLock } : {}),
+  };
+  await writeFile(statePath, JSON.stringify(nextState, null, 2));
 }
 
 function escapeRegex(text: string): string {
@@ -258,6 +326,7 @@ export async function recordSkillActivation(input: RecordSkillActivationInput): 
 
     try {
       await writeFile(statePath, JSON.stringify(state, null, 2));
+      await persistDeepInterviewModeState(input.stateDir, state, nowIso, previous, input);
     } catch (error) {
       console.warn('[omx] warning: failed to persist keyword activation state', error);
     }
@@ -289,6 +358,7 @@ export async function recordSkillActivation(input: RecordSkillActivationInput): 
 
   try {
     await writeFile(statePath, JSON.stringify(state, null, 2));
+    await persistDeepInterviewModeState(input.stateDir, state, nowIso, previous, input);
   } catch (error) {
     console.warn('[omx] warning: failed to persist keyword activation state', error);
   }

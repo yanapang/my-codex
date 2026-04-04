@@ -9,6 +9,7 @@ import { spawnPlatformCommandSync } from '../utils/platform-command.js';
 import { drainPendingTeamDispatch } from './notify-hook/team-dispatch.js';
 import {
   maybeAutoNudge,
+  isDeepInterviewInputLockActive,
   isDeepInterviewStateActive,
   loadAutoNudgeConfig,
   normalizeAutoNudgeSignatureText,
@@ -1312,8 +1313,11 @@ async function runDispatchDrainTick(): Promise<void> {
 
 async function pumpTeamControlPlaneTick(): Promise<void> {
   await runDispatchDrainTick();
-  const deepInterviewStateActive = await isDeepInterviewStateActive(stateDir);
-  if (deepInterviewStateActive) return;
+  const [deepInterviewStateActive, deepInterviewInputLockActive] = await Promise.all([
+    isDeepInterviewStateActive(stateDir),
+    isDeepInterviewInputLockActive(stateDir),
+  ]);
+  if (deepInterviewStateActive || deepInterviewInputLockActive) return;
   await runLeaderNudgeTick();
   await runFallbackAutoNudgeTick();
 }
@@ -1325,8 +1329,11 @@ async function runWatcherCycle(): Promise<void> {
     await pollFiles();
   }
   await pumpTeamControlPlaneTick();
-  const deepInterviewStateActive = await isDeepInterviewStateActive(stateDir);
-  if (!authorityOnly && !deepInterviewStateActive) {
+  const [deepInterviewStateActive, deepInterviewInputLockActive] = await Promise.all([
+    isDeepInterviewStateActive(stateDir),
+    isDeepInterviewInputLockActive(stateDir),
+  ]);
+  if (!authorityOnly && !deepInterviewStateActive && !deepInterviewInputLockActive) {
     await runRalphWatcherBehaviorTick();
   }
   await writeState();
