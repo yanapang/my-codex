@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { PassThrough } from 'node:stream';
-import { mkdtemp, readFile, rm, writeFile, chmod } from 'fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -26,6 +26,7 @@ import {
   isMsysOrGitBash,
   isNativeWindows,
   isTmuxAvailable,
+  restoreStandaloneHudPane,
   translatePathForMsys,
   isWsl2,
   isWorkerAlive,
@@ -267,6 +268,64 @@ describe('HUD resize hook command builders', () => {
       args,
       ['run-shell', `tmux resize-pane -t %7 -y ${HUD_TMUX_TEAM_HEIGHT_LINES} >/dev/null 2>&1 || true`],
     );
+  });
+
+  it('resolves the tmux executable for win32 hook shell snippets', async () => {
+    const fakeBin = await mkdtemp(join(tmpdir(), 'omx-win32-hook-tmux-'));
+    const prevPath = process.env.PATH;
+    const prevPathext = process.env.PATHEXT;
+    const origPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+    try {
+      const tmuxPath = join(fakeBin, 'tmux.exe');
+      await writeFile(tmuxPath, '');
+      process.env.PATH = fakeBin;
+      process.env.PATHEXT = '.EXE';
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+
+      const resizeArgs = buildRegisterResizeHookArgs('my-session:0', 'omx_resize_team_session_0_1', '%1');
+      const delayedArgs = buildScheduleDelayedHudResizeArgs('%1');
+      const reconcileArgs = buildReconcileHudResizeArgs('%1');
+
+      assert.match(resizeArgs[4] ?? '', new RegExp(escapeRegExp(tmuxPath)));
+      assert.doesNotMatch(resizeArgs[4] ?? '', /^run-shell -b 'tmux resize-pane/);
+      assert.match(delayedArgs[2] ?? '', new RegExp(escapeRegExp(tmuxPath)));
+      assert.doesNotMatch(delayedArgs[2] ?? '', /sleep \d+; tmux resize-pane/);
+      assert.match(reconcileArgs[1] ?? '', new RegExp(escapeRegExp(tmuxPath)));
+      assert.doesNotMatch(reconcileArgs[1] ?? '', /^tmux resize-pane/);
+    } finally {
+      if (origPlatform) Object.defineProperty(process, 'platform', origPlatform);
+      if (typeof prevPath === 'string') process.env.PATH = prevPath;
+      else delete process.env.PATH;
+      if (typeof prevPathext === 'string') process.env.PATHEXT = prevPathext;
+      else delete process.env.PATHEXT;
+      await rm(fakeBin, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves the tmux executable twice for win32 client-attached one-shot hooks', async () => {
+    const fakeBin = await mkdtemp(join(tmpdir(), 'omx-win32-attached-hook-'));
+    const prevPath = process.env.PATH;
+    const prevPathext = process.env.PATHEXT;
+    const origPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+    try {
+      const tmuxPath = join(fakeBin, 'tmux.exe');
+      await writeFile(tmuxPath, '');
+      process.env.PATH = fakeBin;
+      process.env.PATHEXT = '.EXE';
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+
+      const args = buildRegisterClientAttachedReconcileArgs('my-session:0', 'omx_attached_team_session_0_1', '%1');
+      const matches = (args[4] ?? '').match(new RegExp(escapeRegExp(tmuxPath), 'g')) || [];
+      assert.equal(matches.length, 2, 'client-attached hook should resolve tmux for both resize and unregister commands');
+      assert.doesNotMatch(args[4] ?? '', /; tmux set-hook -u -t my-session:0 client-attached/);
+    } finally {
+      if (origPlatform) Object.defineProperty(process, 'platform', origPlatform);
+      if (typeof prevPath === 'string') process.env.PATH = prevPath;
+      else delete process.env.PATH;
+      if (typeof prevPathext === 'string') process.env.PATHEXT = prevPathext;
+      else delete process.env.PATHEXT;
+      await rm(fakeBin, { recursive: true, force: true });
+    }
   });
 });
 
@@ -1298,6 +1357,228 @@ describe('team worker launch mode helpers', () => {
       else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
     }
   });
+
+  it('buildWorkerProcessLaunchSpec injects the active provider env_key from CODEX_HOME config.toml', async () => {
+    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+    const prevCodexHome = process.env.CODEX_HOME;
+    const prevProviderEnv = process.env.CUSTOM_PROVIDER_API_KEY;
+    const codexHome = await mkdtemp(join(tmpdir(), 'omx-team-provider-env-'));
+    process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
+    process.env.CODEX_HOME = codexHome;
+    process.env.CUSTOM_PROVIDER_API_KEY = 'test-secret';
+
+    try {
+      await writeFile(join(codexHome, 'config.toml'), [
+        'model_provider = "custom_provider"',
+        '',
+        '[model_providers.custom_provider]',
+        'name = "custom_provider"',
+        'base_url = "http://localhost:3000/v1"',
+        'wire_api = "responses"',
+        'requires_openai_auth = true',
+        'env_key = "CUSTOM_PROVIDER_API_KEY"',
+        '',
+      ].join('\n'));
+
+      const spec = buildWorkerProcessLaunchSpec(
+        'gamma-team',
+        1,
+        [],
+        '/tmp/workspace',
+        {},
+        'codex',
+      );
+
+      assert.equal(spec.env.CUSTOM_PROVIDER_API_KEY, 'test-secret');
+    } finally {
+      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
+      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+      if (typeof prevCodexHome === 'string') process.env.CODEX_HOME = prevCodexHome;
+      else delete process.env.CODEX_HOME;
+      if (typeof prevProviderEnv === 'string') process.env.CUSTOM_PROVIDER_API_KEY = prevProviderEnv;
+      else delete process.env.CUSTOM_PROVIDER_API_KEY;
+      await rm(codexHome, { recursive: true, force: true });
+    }
+  });
+
+  it('buildWorkerProcessLaunchSpec does not inject the active provider env_key for non-codex workers', async () => {
+    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+    const prevCodexHome = process.env.CODEX_HOME;
+    const prevProviderEnv = process.env.CUSTOM_PROVIDER_API_KEY;
+    const codexHome = await mkdtemp(join(tmpdir(), 'omx-team-provider-env-'));
+    process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
+    process.env.CODEX_HOME = codexHome;
+    process.env.CUSTOM_PROVIDER_API_KEY = 'test-secret';
+
+    try {
+      await writeFile(join(codexHome, 'config.toml'), [
+        'model_provider = "custom_provider"',
+        '',
+        '[model_providers.custom_provider]',
+        'name = "custom_provider"',
+        'base_url = "http://localhost:3000/v1"',
+        'wire_api = "responses"',
+        'requires_openai_auth = true',
+        'env_key = "CUSTOM_PROVIDER_API_KEY"',
+        '',
+      ].join('\n'));
+
+      const spec = buildWorkerProcessLaunchSpec(
+        'delta-team',
+        1,
+        [],
+        '/tmp/workspace',
+        {},
+        'claude',
+      );
+
+      assert.equal(spec.workerCli, 'claude');
+      assert.equal(spec.env.CUSTOM_PROVIDER_API_KEY, undefined);
+    } finally {
+      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
+      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+      if (typeof prevCodexHome === 'string') process.env.CODEX_HOME = prevCodexHome;
+      else delete process.env.CODEX_HOME;
+      if (typeof prevProviderEnv === 'string') process.env.CUSTOM_PROVIDER_API_KEY = prevProviderEnv;
+      else delete process.env.CUSTOM_PROVIDER_API_KEY;
+      await rm(codexHome, { recursive: true, force: true });
+    }
+  });
+
+  it('buildWorkerProcessLaunchSpec reads provider env from worker CODEX_HOME override', async () => {
+    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+    const prevCodexHome = process.env.CODEX_HOME;
+    const prevPrimaryProviderEnv = process.env.PRIMARY_PROVIDER_API_KEY;
+    const prevWorkerProviderEnv = process.env.WORKER_PROVIDER_API_KEY;
+    const leaderCodexHome = await mkdtemp(join(tmpdir(), 'omx-team-provider-env-leader-'));
+    const workerCodexHome = await mkdtemp(join(tmpdir(), 'omx-team-provider-env-worker-'));
+    process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
+    process.env.CODEX_HOME = leaderCodexHome;
+    process.env.PRIMARY_PROVIDER_API_KEY = 'leader-secret';
+    process.env.WORKER_PROVIDER_API_KEY = 'worker-secret';
+
+    try {
+      await writeFile(join(leaderCodexHome, 'config.toml'), [
+        'model_provider = "primary_provider"',
+        '',
+        '[model_providers.primary_provider]',
+        'name = "primary_provider"',
+        'base_url = "http://localhost:3000/v1"',
+        'wire_api = "responses"',
+        'requires_openai_auth = true',
+        'env_key = "PRIMARY_PROVIDER_API_KEY"',
+        '',
+      ].join('\n'));
+
+      await writeFile(join(workerCodexHome, 'config.toml'), [
+        'model_provider = "worker_provider"',
+        '',
+        '[model_providers.worker_provider]',
+        'name = "worker_provider"',
+        'base_url = "http://localhost:4000/v1"',
+        'wire_api = "responses"',
+        'requires_openai_auth = true',
+        'env_key = "WORKER_PROVIDER_API_KEY"',
+        '',
+      ].join('\n'));
+
+      const spec = buildWorkerProcessLaunchSpec(
+        'epsilon-team',
+        1,
+        [],
+        '/tmp/workspace',
+        { CODEX_HOME: workerCodexHome },
+        'codex',
+      );
+
+      assert.equal(spec.env.CODEX_HOME, workerCodexHome);
+      assert.equal(spec.env.WORKER_PROVIDER_API_KEY, 'worker-secret');
+      assert.equal(spec.env.PRIMARY_PROVIDER_API_KEY, undefined);
+    } finally {
+      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
+      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+      if (typeof prevCodexHome === 'string') process.env.CODEX_HOME = prevCodexHome;
+      else delete process.env.CODEX_HOME;
+      if (typeof prevPrimaryProviderEnv === 'string') process.env.PRIMARY_PROVIDER_API_KEY = prevPrimaryProviderEnv;
+      else delete process.env.PRIMARY_PROVIDER_API_KEY;
+      if (typeof prevWorkerProviderEnv === 'string') process.env.WORKER_PROVIDER_API_KEY = prevWorkerProviderEnv;
+      else delete process.env.WORKER_PROVIDER_API_KEY;
+      await rm(leaderCodexHome, { recursive: true, force: true });
+      await rm(workerCodexHome, { recursive: true, force: true });
+    }
+  });
+
+  it('buildWorkerProcessLaunchSpec resolves relative worker CODEX_HOME against the worker cwd', async () => {
+    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+    const prevCodexHome = process.env.CODEX_HOME;
+    const prevLeaderProviderEnv = process.env.LEADER_PROVIDER_API_KEY;
+    const prevWorkerProviderEnv = process.env.WORKER_PROVIDER_API_KEY;
+    const originalCwd = process.cwd();
+    const leaderCwd = await mkdtemp(join(tmpdir(), 'omx-team-provider-relative-leader-'));
+    const workerCwd = await mkdtemp(join(tmpdir(), 'omx-team-provider-relative-worker-'));
+    const leaderCodexHome = join(leaderCwd, '.codex');
+    const workerCodexHome = join(workerCwd, '.codex');
+    process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
+    process.env.CODEX_HOME = leaderCodexHome;
+    process.env.LEADER_PROVIDER_API_KEY = 'leader-secret';
+    process.env.WORKER_PROVIDER_API_KEY = 'worker-secret';
+
+    try {
+      await mkdir(leaderCodexHome, { recursive: true });
+      await mkdir(workerCodexHome, { recursive: true });
+
+      await writeFile(join(leaderCodexHome, 'config.toml'), [
+        'model_provider = "leader_provider"',
+        '',
+        '[model_providers.leader_provider]',
+        'name = "leader_provider"',
+        'base_url = "http://localhost:3000/v1"',
+        'wire_api = "responses"',
+        'requires_openai_auth = true',
+        'env_key = "LEADER_PROVIDER_API_KEY"',
+        '',
+      ].join('\n'));
+
+      await writeFile(join(workerCodexHome, 'config.toml'), [
+        'model_provider = "worker_provider"',
+        '',
+        '[model_providers.worker_provider]',
+        'name = "worker_provider"',
+        'base_url = "http://localhost:4000/v1"',
+        'wire_api = "responses"',
+        'requires_openai_auth = true',
+        'env_key = "WORKER_PROVIDER_API_KEY"',
+        '',
+      ].join('\n'));
+
+      process.chdir(leaderCwd);
+
+      const spec = buildWorkerProcessLaunchSpec(
+        'zeta-team',
+        1,
+        [],
+        workerCwd,
+        { CODEX_HOME: '.codex' },
+        'codex',
+      );
+
+      assert.equal(spec.env.CODEX_HOME, '.codex');
+      assert.equal(spec.env.WORKER_PROVIDER_API_KEY, 'worker-secret');
+      assert.equal(spec.env.LEADER_PROVIDER_API_KEY, undefined);
+    } finally {
+      process.chdir(originalCwd);
+      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
+      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+      if (typeof prevCodexHome === 'string') process.env.CODEX_HOME = prevCodexHome;
+      else delete process.env.CODEX_HOME;
+      if (typeof prevLeaderProviderEnv === 'string') process.env.LEADER_PROVIDER_API_KEY = prevLeaderProviderEnv;
+      else delete process.env.LEADER_PROVIDER_API_KEY;
+      if (typeof prevWorkerProviderEnv === 'string') process.env.WORKER_PROVIDER_API_KEY = prevWorkerProviderEnv;
+      else delete process.env.WORKER_PROVIDER_API_KEY;
+      await rm(leaderCwd, { recursive: true, force: true });
+      await rm(workerCwd, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('sendToWorkerStdin', () => {
@@ -1537,6 +1818,182 @@ esac
     withEmptyPath(() => {
       assert.equal(waitForWorkerReady('omx-team-x', 1, 1), false);
     });
+  });
+});
+
+describe('native Windows HUD reconciliation', () => {
+  it('avoids nested tmux run-shell hooks during team HUD startup on native Windows', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-team-win32-hud-'));
+    const prevTmux = process.env.TMUX;
+    const prevTmuxPane = process.env.TMUX_PANE;
+    const prevWorkerCli = process.env.OMX_TEAM_WORKER_CLI;
+    const prevMsystem = process.env.MSYSTEM;
+    const prevOstype = process.env.OSTYPE;
+    const prevWsl = process.env.WSL_DISTRO_NAME;
+    const prevWslInterop = process.env.WSL_INTEROP;
+    const origPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+
+    try {
+      await withMockTmuxFixture(
+        'omx-tmux-win32-hud-reconcile-',
+        (logPath) => `#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >> "${logPath}"
+case "\${1:-}" in
+  -V)
+    echo "tmux 3.4"
+    exit 0
+    ;;
+  display-message)
+    case "$*" in
+      *"#{window_width}"*)
+        echo "120"
+        ;;
+      *)
+        echo "leader:0 %1"
+        ;;
+    esac
+    exit 0
+    ;;
+  list-panes)
+    printf "%%1\\tnode\\t'codex'\\n"
+    exit 0
+    ;;
+  split-window)
+    case "$*" in
+      *" -h "*)
+        echo "%2"
+        ;;
+      *)
+        echo "%3"
+        ;;
+    esac
+    exit 0
+    ;;
+  resize-pane|select-layout|set-window-option|select-pane|kill-pane)
+    exit 0
+    ;;
+  set-hook|run-shell)
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`,
+        async ({ logPath }) => {
+          const fakeBinDir = join(logPath, '..');
+          const geminiPath = join(fakeBinDir, 'gemini');
+          await writeFile(geminiPath, '#!/bin/sh\nexit 0\n');
+          await chmod(geminiPath, 0o755);
+
+          process.env.TMUX = 'leader-session,stub,0';
+          process.env.TMUX_PANE = '%1';
+          process.env.OMX_TEAM_WORKER_CLI = 'gemini';
+          delete process.env.MSYSTEM;
+          delete process.env.OSTYPE;
+          delete process.env.WSL_DISTRO_NAME;
+          delete process.env.WSL_INTEROP;
+          Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+
+          const session = createTeamSession('Windows Team', 1, cwd);
+          assert.equal(session.hudPaneId, '%3');
+          assert.equal(session.resizeHookName, null);
+          assert.equal(session.resizeHookTarget, null);
+
+          const tmuxLog = await readFile(logPath, 'utf-8');
+          assert.match(tmuxLog, new RegExp(`resize-pane -t %3 -y ${HUD_TMUX_TEAM_HEIGHT_LINES}`));
+          assert.doesNotMatch(tmuxLog, /set-hook -t leader:0 client-resized\[\d+\]/);
+          assert.doesNotMatch(tmuxLog, /set-hook -t leader:0 client-attached\[\d+\]/);
+          assert.doesNotMatch(tmuxLog, /run-shell -b sleep \d+; tmux resize-pane -t %3 -y \d+ >/);
+          assert.doesNotMatch(tmuxLog, /run-shell tmux resize-pane -t %3 -y \d+ >/);
+        },
+      );
+    } finally {
+      if (origPlatform) Object.defineProperty(process, 'platform', origPlatform);
+      if (typeof prevTmux === 'string') process.env.TMUX = prevTmux;
+      else delete process.env.TMUX;
+      if (typeof prevTmuxPane === 'string') process.env.TMUX_PANE = prevTmuxPane;
+      else delete process.env.TMUX_PANE;
+      if (typeof prevWorkerCli === 'string') process.env.OMX_TEAM_WORKER_CLI = prevWorkerCli;
+      else delete process.env.OMX_TEAM_WORKER_CLI;
+      if (typeof prevMsystem === 'string') process.env.MSYSTEM = prevMsystem;
+      else delete process.env.MSYSTEM;
+      if (typeof prevOstype === 'string') process.env.OSTYPE = prevOstype;
+      else delete process.env.OSTYPE;
+      if (typeof prevWsl === 'string') process.env.WSL_DISTRO_NAME = prevWsl;
+      else delete process.env.WSL_DISTRO_NAME;
+      if (typeof prevWslInterop === 'string') process.env.WSL_INTEROP = prevWslInterop;
+      else delete process.env.WSL_INTEROP;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('restores standalone HUD panes with direct resize on native Windows', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-standalone-win32-hud-'));
+    const prevLeaderNodePath = process.env.OMX_LEADER_NODE_PATH;
+    const prevMsystem = process.env.MSYSTEM;
+    const prevOstype = process.env.OSTYPE;
+    const prevWsl = process.env.WSL_DISTRO_NAME;
+    const prevWslInterop = process.env.WSL_INTEROP;
+    const origPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+
+    try {
+      await withMockTmuxFixture(
+        'omx-tmux-win32-standalone-hud-',
+        (logPath) => `#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >> "${logPath}"
+case "\${1:-}" in
+  split-window)
+    echo "%44"
+    exit 0
+    ;;
+  resize-pane|select-pane)
+    exit 0
+    ;;
+  set-hook|run-shell)
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`,
+        async ({ logPath }) => {
+          delete process.env.MSYSTEM;
+          delete process.env.OSTYPE;
+          delete process.env.WSL_DISTRO_NAME;
+          delete process.env.WSL_INTEROP;
+          process.env.OMX_LEADER_NODE_PATH = 'C:\\Program Files\\nodejs\\node.exe';
+          Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+
+          const paneId = restoreStandaloneHudPane('%11', cwd);
+          assert.equal(paneId, '%44');
+
+          const tmuxLog = await readFile(logPath, 'utf-8');
+          assert.match(tmuxLog, /'C:\\Program Files\\nodejs\\node\.exe'/);
+          assert.match(tmuxLog, new RegExp(`resize-pane -t %44 -y ${HUD_TMUX_TEAM_HEIGHT_LINES}`));
+          assert.match(tmuxLog, /select-pane -t %11/);
+          assert.doesNotMatch(tmuxLog, /run-shell -b sleep \d+; tmux resize-pane -t %44 -y \d+ >/);
+          assert.doesNotMatch(tmuxLog, /run-shell tmux resize-pane -t %44 -y \d+ >/);
+          assert.doesNotMatch(tmuxLog, /set-hook -t /);
+        },
+      );
+    } finally {
+      if (origPlatform) Object.defineProperty(process, 'platform', origPlatform);
+      if (typeof prevLeaderNodePath === 'string') process.env.OMX_LEADER_NODE_PATH = prevLeaderNodePath;
+      else delete process.env.OMX_LEADER_NODE_PATH;
+      if (typeof prevMsystem === 'string') process.env.MSYSTEM = prevMsystem;
+      else delete process.env.MSYSTEM;
+      if (typeof prevOstype === 'string') process.env.OSTYPE = prevOstype;
+      else delete process.env.OSTYPE;
+      if (typeof prevWsl === 'string') process.env.WSL_DISTRO_NAME = prevWsl;
+      else delete process.env.WSL_DISTRO_NAME;
+      if (typeof prevWslInterop === 'string') process.env.WSL_INTEROP = prevWslInterop;
+      else delete process.env.WSL_INTEROP;
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 });
 

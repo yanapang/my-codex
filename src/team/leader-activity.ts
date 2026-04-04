@@ -1,8 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, posix, resolve, win32 } from 'node:path';
 import { omxStateDir } from '../utils/paths.js';
+import { findGitLayout, readGitLayoutFile } from '../utils/git-layout.js';
 
 interface LeaderRuntimeActivityDoc {
   last_activity_at?: string;
@@ -40,28 +41,10 @@ function parseEpochSecondsMs(value: string): number {
   return Number.isFinite(seconds) ? seconds * 1000 : Number.NaN;
 }
 
-/**
- * Find the .git directory by walking up from `startCwd`.
- */
-function findGitDir(startCwd: string): string | null {
-  let dir = startCwd;
-  for (;;) {
-    const candidate = join(dir, '.git');
-    try {
-      if (statSync(candidate).isDirectory()) return candidate;
-    } catch { /* walk up */ }
-    const parent = dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
-}
-
-function readGitFile(gitDir: string, ...parts: string[]): string | null {
-  try {
-    return readFileSync(join(gitDir, ...parts), 'utf-8').trim() || null;
-  } catch {
-    return null;
-  }
+function resolveGitOutputPath(cwd: string, gitPath: string | null): string | null {
+  if (!gitPath) return null;
+  if (posix.isAbsolute(gitPath) || win32.isAbsolute(gitPath)) return gitPath;
+  return resolve(cwd, gitPath);
 }
 
 /**
@@ -73,32 +56,32 @@ function readGitFile(gitDir: string, ...parts: string[]): string | null {
 function tryReadGitValue(cwd: string, args: string[]): string | null {
   if (process.platform === 'win32') {
     try {
-      const gitDir = findGitDir(cwd);
-      if (gitDir) {
+      const gitLayout = findGitLayout(cwd);
+      if (gitLayout) {
         const cmd = args.join(' ');
 
-        if (cmd === 'rev-parse --git-dir') return gitDir;
+        if (cmd === 'rev-parse --git-dir') return gitLayout.gitDir;
 
         if (cmd === 'symbolic-ref --quiet --short HEAD') {
-          const head = readGitFile(gitDir, 'HEAD');
+          const head = readGitLayoutFile(gitLayout.gitDir, 'HEAD');
           if (head?.startsWith('ref: refs/heads/'))
             return head.slice('ref: refs/heads/'.length);
           return null; // detached HEAD
         }
 
         if (cmd === 'rev-parse --git-path logs/HEAD') {
-          return join(gitDir, 'logs', 'HEAD');
+          return join(gitLayout.gitDir, 'logs', 'HEAD');
         }
 
         if (cmd.startsWith('rev-parse --git-path logs/refs/heads/')) {
           const branch = args[args.length - 1].replace('logs/', '');
-          return join(gitDir, 'logs', branch);
+          return join(gitLayout.commonDir, 'logs', branch);
         }
 
         if (cmd === 'show -s --format=%ct HEAD') {
           // Use HEAD file mtime as a proxy for last-commit timestamp.
           try {
-            const headMs = statSync(join(gitDir, 'HEAD')).mtimeMs;
+            const headMs = statSync(join(gitLayout.gitDir, 'HEAD')).mtimeMs;
             return String(Math.floor(headMs / 1000));
           } catch { return null; }
         }
@@ -150,8 +133,8 @@ async function readLeaderBranchGitActivityMs(stateDir: string): Promise<number> 
   const headCommitEpoch = tryReadGitValue(cwd, ['show', '-s', '--format=%ct', 'HEAD']);
 
   const [headLogMs, branchLogMs] = await Promise.all([
-    statMsIfExists(headLogPath ? join(cwd, headLogPath) : null),
-    statMsIfExists(branchLogPath ? join(cwd, branchLogPath) : null),
+    statMsIfExists(resolveGitOutputPath(cwd, headLogPath)),
+    statMsIfExists(resolveGitOutputPath(cwd, branchLogPath)),
   ]);
   const headCommitMs = headCommitEpoch ? parseEpochSecondsMs(headCommitEpoch) : Number.NaN;
 

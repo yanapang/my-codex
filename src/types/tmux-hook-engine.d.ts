@@ -23,6 +23,7 @@ declare module '*tmux-hook-engine.js' {
   }
 
   export function normalizeTmuxHookConfig(raw: unknown): NormalizedTmuxHookConfig;
+  export function tmuxHookExplicitlyDisablesInjection(raw: unknown): boolean;
   export function pickActiveMode(activeModes: string[], allowedModes: string[]): string | null;
   export function buildDedupeKey(args: {
     threadId?: string;

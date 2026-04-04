@@ -1614,6 +1614,96 @@ process.on('SIGTERM', () => {
     }
   });
 
+  it('shutdownTeam reaps detached prompt-worker descendants', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-prompt-descendants-'));
+    const binDir = join(cwd, 'bin');
+    const fakeCodexPath = join(binDir, 'codex');
+    const helperPidPath = join(cwd, 'helper.pid');
+    await mkdir(binDir, { recursive: true });
+    await writeFile(
+      fakeCodexPath,
+      `#!/usr/bin/env node
+const { spawn } = require('child_process');
+const { writeFileSync } = require('fs');
+const helper = spawn(process.execPath, ['-e', \`
+process.on('SIGTERM', () => {});
+setInterval(() => {}, 1000);
+\`], { detached: true, stdio: 'ignore' });
+helper.unref();
+writeFileSync(process.env.OMX_HELPER_PID_PATH, String(helper.pid));
+process.stdin.resume();
+setInterval(() => {}, 1000);
+process.on('SIGTERM', () => process.exit(0));
+`,
+      { mode: 0o755 },
+    );
+
+    const prevPath = process.env.PATH;
+    const prevTmux = process.env.TMUX;
+    const prevLaunchMode = process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
+    const prevWorkerCli = process.env.OMX_TEAM_WORKER_CLI;
+    const prevHelperPidPath = process.env.OMX_HELPER_PID_PATH;
+
+    process.env.PATH = `${binDir}:${prevPath ?? ''}`;
+    delete process.env.TMUX;
+    process.env.OMX_TEAM_WORKER_LAUNCH_MODE = 'prompt';
+    process.env.OMX_TEAM_WORKER_CLI = 'codex';
+    process.env.OMX_HELPER_PID_PATH = helperPidPath;
+
+    let runtime: TeamRuntime | null = null;
+    let helperPid = 0;
+    try {
+      runtime = await withoutTeamWorkerEnv(() =>
+        startTeam(
+          'team-prompt-descendants',
+          'prompt-mode detached descendant teardown',
+          'executor',
+          1,
+          [{ subject: 's', description: 'd', owner: 'worker-1' }],
+          cwd,
+        ));
+
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        if (existsSync(helperPidPath)) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      helperPid = Number((await readFile(helperPidPath, 'utf-8')).trim());
+      assert.ok(helperPid > 0, 'detached helper pid should be captured');
+
+      await shutdownTeam(runtime.teamName, cwd, { force: true });
+      runtime = null;
+
+      let alive = false;
+      try {
+        process.kill(helperPid, 0);
+        alive = true;
+      } catch {
+        alive = false;
+      }
+      assert.equal(alive, false, `detached helper pid ${helperPid} should be terminated after shutdown`);
+    } finally {
+      if (runtime) {
+        await shutdownTeam(runtime.teamName, cwd, { force: true }).catch(() => {});
+      }
+      if (helperPid > 0) {
+        try {
+          process.kill(helperPid, 'SIGKILL');
+        } catch {}
+      }
+      if (typeof prevPath === 'string') process.env.PATH = prevPath;
+      else delete process.env.PATH;
+      if (typeof prevTmux === 'string') process.env.TMUX = prevTmux;
+      else delete process.env.TMUX;
+      if (typeof prevLaunchMode === 'string') process.env.OMX_TEAM_WORKER_LAUNCH_MODE = prevLaunchMode;
+      else delete process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
+      if (typeof prevWorkerCli === 'string') process.env.OMX_TEAM_WORKER_CLI = prevWorkerCli;
+      else delete process.env.OMX_TEAM_WORKER_CLI;
+      if (typeof prevHelperPidPath === 'string') process.env.OMX_HELPER_PID_PATH = prevHelperPidPath;
+      else delete process.env.OMX_HELPER_PID_PATH;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('monitorTeam returns null for non-existent team', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-'));
     try {
@@ -1983,6 +2073,14 @@ process.on('SIGTERM', () => {
       // Verify worker's changes are integrated into leader
       const snapshot = await readMonitorSnapshot('team-auto-commit', repo);
       assert.ok(snapshot?.integrationByWorker?.['worker-1']?.last_integrated_head, 'auto-committed changes should be integrated');
+
+      const ledgerPath = join(repo, '.omx', 'reports', 'team-commit-hygiene', 'team-auto-commit.ledger.json');
+      assert.equal(existsSync(ledgerPath), true, 'commit hygiene ledger should be written for runtime operational commits');
+      const ledger = JSON.parse(await readFile(ledgerPath, 'utf-8')) as {
+        entries: Array<{ operation: string; operational_commit?: string | null }>;
+      };
+      assert.equal(ledger.entries.some((entry) => entry.operation === 'auto_checkpoint'), true);
+      assert.equal(ledger.entries.some((entry) => entry.operation === 'integration_merge'), true);
     } finally {
       if (workerPath) {
         await rm(workerPath, { recursive: true, force: true });
@@ -2032,6 +2130,86 @@ process.on('SIGTERM', () => {
       const commitObj = execFileSync('git', ['cat-file', '-p', leaderHeadAfter], { cwd: repo, encoding: 'utf-8' });
       const parentCount = commitObj.split('\n').filter((l: string) => l.startsWith('parent ')).length;
       assert.equal(parentCount, 2, 'merge commit should have 2 parents');
+    } finally {
+      if (workerPath) {
+        await rm(workerPath, { recursive: true, force: true });
+      }
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('monitorTeam integrates detached worker worktree by commit sha instead of merging leader HEAD into itself', async () => {
+    const repo = await initRepo();
+    let workerPath = '';
+    try {
+      workerPath = await addWorktree(repo, 'wk1-detached-merge-branch', 'omx-runtime-wk1-detached-merge-');
+
+      await writeFile(join(workerPath, 'detached-feature.txt'), 'detached worker feature\n', 'utf-8');
+      execFileSync('git', ['add', 'detached-feature.txt'], { cwd: workerPath, stdio: 'ignore' });
+      execFileSync('git', ['commit', '-m', 'detached worker feature'], { cwd: workerPath, stdio: 'ignore' });
+      execFileSync('git', ['checkout', '--detach', 'HEAD'], { cwd: workerPath, stdio: 'ignore' });
+
+      const workerHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: workerPath, encoding: 'utf-8' }).trim();
+      const detachedName = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: workerPath, encoding: 'utf-8' }).trim();
+      assert.equal(detachedName, 'HEAD');
+
+      const leaderHeadBefore = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf-8' }).trim();
+
+      await initTeamState('team-merge-detached', 'merge detached head test', 'executor', 1, repo);
+      const cfg = await readTeamConfig('team-merge-detached', repo);
+      assert.ok(cfg);
+      if (!cfg) throw new Error('missing config');
+      cfg.leader_pane_id = '';
+      cfg.workers[0] = {
+        ...cfg.workers[0],
+        assigned_tasks: ['1'],
+        worktree_repo_root: repo,
+        worktree_path: workerPath,
+        worktree_branch: undefined,
+        worktree_detached: true,
+        worktree_created: false,
+      };
+      await saveTeamConfig(cfg, repo);
+
+      await monitorTeam('team-merge-detached', repo);
+
+      const leaderHeadAfter = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf-8' }).trim();
+      assert.notEqual(leaderHeadAfter, leaderHeadBefore, 'leader HEAD should advance for detached worker integration');
+      assert.equal(await readFile(join(repo, 'detached-feature.txt'), 'utf-8'), 'detached worker feature\n');
+
+      const commitObj = execFileSync('git', ['cat-file', '-p', leaderHeadAfter], { cwd: repo, encoding: 'utf-8' });
+      const parentCount = commitObj.split('\n').filter((l: string) => l.startsWith('parent ')).length;
+      assert.equal(parentCount, 2, 'detached worker integration should still produce a merge commit');
+
+      const workerMerged = execFileSync('git', ['merge-base', '--is-ancestor', workerHead, 'HEAD'], { cwd: repo, encoding: 'utf-8' });
+      assert.equal(workerMerged.length >= 0, true);
+
+      const leaderMailbox = await listMailboxMessages('team-merge-detached', 'leader-fixed', repo);
+      assert.equal(
+        leaderMailbox.some((message) =>
+          message.body.includes(`INTEGRATED: merged worker-1 (${workerHead.slice(0, 12)})`)
+          && message.body.includes(leaderHeadAfter.slice(0, 12))),
+        true,
+      );
+
+      const ledgerPath = join(repo, '.omx', 'reports', 'team-commit-hygiene', 'team-merge-detached.ledger.json');
+      const ledger = JSON.parse(await readFile(ledgerPath, 'utf-8')) as {
+        entries: Array<{
+          operation: string;
+          status: string;
+          source_commit?: string;
+          leader_head_before?: string;
+          leader_head_after?: string;
+        }>;
+      };
+      assert.equal(
+        ledger.entries.some((entry) =>
+          entry.operation === 'integration_merge'
+          && entry.status === 'applied'
+          && entry.source_commit === workerHead
+          && entry.leader_head_before !== entry.leader_head_after),
+        true,
+      );
     } finally {
       if (workerPath) {
         await rm(workerPath, { recursive: true, force: true });
@@ -2154,6 +2332,15 @@ process.on('SIGTERM', () => {
       const newLeaderHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf-8' }).trim();
       const mergeBase = execFileSync('git', ['merge-base', newLeaderHead, 'wk2-xr-branch'], { cwd: repo, encoding: 'utf-8' }).trim();
       assert.equal(mergeBase, newLeaderHead, 'worker-2 should be rebased onto new leader HEAD');
+
+      const ledgerPath = join(repo, '.omx', 'reports', 'team-commit-hygiene', 'team-cross-rebase.ledger.json');
+      const ledger = JSON.parse(await readFile(ledgerPath, 'utf-8')) as {
+        entries: Array<{ operation: string; worker_name: string; status: string }>;
+      };
+      assert.equal(
+        ledger.entries.some((entry) => entry.operation === 'cross_rebase' && entry.worker_name === 'worker-2' && entry.status === 'applied'),
+        true,
+      );
     } finally {
       if (worker1Path) {
         await rm(worker1Path, { recursive: true, force: true });

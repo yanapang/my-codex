@@ -28,11 +28,15 @@ import {
   readPersistedSetupScope,
   resolveCodexHomeForLaunch,
   buildDetachedSessionBootstrapSteps,
+  buildDetachedTmuxSessionName,
   buildDetachedSessionFinalizeSteps,
   buildDetachedSessionRollbackSteps,
   resolveNotifyTempContract,
   buildNotifyTempStartupMessages,
   buildNotifyFallbackWatcherEnv,
+  cleanupLaunchOrphanedMcpProcesses,
+  resolveBackgroundHelperLaunchMode,
+  shouldDetachBackgroundHelper,
   resolveNotifyFallbackWatcherScript,
   resolveHookDerivedWatcherScript,
   resolveNotifyHookScript,
@@ -42,6 +46,7 @@ import {
   DEFAULT_FRONTIER_MODEL,
   getTeamLowComplexityModel,
 } from "../../config/models.js";
+import type { ProcessEntry } from "../cleanup.js";
 
 function expectedLowComplexityModel(codexHomeOverride?: string): string {
   return getTeamLowComplexityModel(codexHomeOverride);
@@ -234,6 +239,82 @@ describe("resolveNotifyTempContract", () => {
     assert.equal(parsed.contract.active, true);
     assert.equal(parsed.contract.source, "env");
     assert.deepEqual(parsed.passthroughArgs, ["--model", "gpt-5"]);
+  });
+});
+
+describe("cleanupLaunchOrphanedMcpProcesses", () => {
+  it("reaps only detached OMX MCP processes without a live Codex ancestor", async () => {
+    const processes: ProcessEntry[] = [
+      { pid: 700, ppid: 500, command: "codex" },
+      { pid: 701, ppid: 700, command: "node /repo/bin/omx.js" },
+      {
+        pid: 710,
+        ppid: 700,
+        command: "node /repo/oh-my-codex/dist/mcp/state-server.js",
+      },
+      {
+        pid: 800,
+        ppid: 1,
+        command: "node /tmp/oh-my-codex/dist/mcp/memory-server.js",
+      },
+      {
+        pid: 810,
+        ppid: 42,
+        command: "node /tmp/oh-my-codex/dist/mcp/trace-server.js",
+      },
+      {
+        pid: 820,
+        ppid: 50,
+        command: "codex --model gpt-5",
+      },
+      {
+        pid: 821,
+        ppid: 820,
+        command: "node /tmp/other-session/dist/mcp/state-server.js",
+      },
+      {
+        pid: 830,
+        ppid: 50,
+        command: "node /repo/bin/omx.js autoresearch --topic launch",
+      },
+      {
+        pid: 831,
+        ppid: 830,
+        command: "node /tmp/parallel-session/dist/mcp/memory-server.js",
+      },
+    ];
+    const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const alive = new Set([800, 810]);
+
+    const result = await cleanupLaunchOrphanedMcpProcesses({
+      currentPid: 701,
+      listProcesses: () => processes,
+      isPidAlive: (pid) => alive.has(pid),
+      sendSignal: (pid, signal) => {
+        signals.push({ pid, signal });
+        alive.delete(pid);
+      },
+      sleep: async () => {},
+      now: () => 0,
+    });
+
+    assert.equal(result.terminatedCount, 2);
+    assert.equal(result.forceKilledCount, 0);
+    assert.deepEqual(result.failedPids, []);
+    assert.deepEqual(signals, [
+      { pid: 800, signal: "SIGTERM" },
+      { pid: 810, signal: "SIGTERM" },
+    ]);
+    assert.equal(
+      signals.some(({ pid }) => pid === 821),
+      false,
+      "launch-safe cleanup must preserve OMX MCP processes still attached to another live Codex tree",
+    );
+    assert.equal(
+      signals.some(({ pid }) => pid === 831),
+      false,
+      "launch-safe cleanup must preserve OMX MCP processes still attached to another live OMX launch tree",
+    );
   });
 });
 
@@ -754,6 +835,46 @@ describe("resolveCodexLaunchPolicy", () => {
   });
 });
 
+describe("resolveBackgroundHelperLaunchMode", () => {
+  it("uses the hidden Windows MSYS bootstrap for win32 Git Bash", () => {
+    assert.equal(
+      resolveBackgroundHelperLaunchMode({ MSYSTEM: "MINGW64" }, "win32"),
+      "windows-msys-bootstrap",
+    );
+  });
+
+  it("spawns helpers directly on native win32", () => {
+    assert.equal(resolveBackgroundHelperLaunchMode({}, "win32"), "direct-detached");
+  });
+
+  it("spawns helpers directly on non-Windows platforms", () => {
+    assert.equal(
+      resolveBackgroundHelperLaunchMode({ MSYSTEM: "MINGW64" }, "linux"),
+      "direct-detached",
+    );
+  });
+});
+
+describe("shouldDetachBackgroundHelper", () => {
+  it("keeps the long-running helper detached under win32 Git Bash", () => {
+    assert.equal(
+      shouldDetachBackgroundHelper({ MSYSTEM: "MINGW64" }, "win32"),
+      true,
+    );
+  });
+
+  it("keeps detached helpers on native win32", () => {
+    assert.equal(shouldDetachBackgroundHelper({}, "win32"), true);
+  });
+
+  it("keeps detached helpers on non-Windows platforms", () => {
+    assert.equal(
+      shouldDetachBackgroundHelper({ MSYSTEM: "MINGW64" }, "linux"),
+      true,
+    );
+  });
+});
+
 describe("classifyCodexExecFailure", () => {
   it("classifies child process exit status as codex exit", () => {
     const err = Object.assign(new Error("codex exited 9"), { status: 9 });
@@ -1171,6 +1292,16 @@ describe("buildTmuxSessionName", () => {
       "omx-789-ghi",
     );
     assert.match(name, /^omx-my-repo-autoresearch-demo-/);
+  });
+});
+
+describe("buildDetachedTmuxSessionName", () => {
+  it("reuses the OMX session id for the detached tmux session name", () => {
+    const sessionName = buildDetachedTmuxSessionName(
+      "/tmp/My Repo",
+      "omx-1770992424158-abc123",
+    );
+    assert.equal(sessionName, "omx-my-repo-detached-1770992424158-abc123");
   });
 });
 

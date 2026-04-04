@@ -5,9 +5,11 @@ import { appendFile, mkdir, open, readFile, readdir, rename, stat, unlink, write
 import { spawnSync } from 'child_process';
 import { dirname, join, resolve } from 'path';
 import { homedir } from 'os';
+import { spawnPlatformCommandSync } from '../utils/platform-command.js';
 import { drainPendingTeamDispatch } from './notify-hook/team-dispatch.js';
 import {
   maybeAutoNudge,
+  isDeepInterviewInputLockActive,
   isDeepInterviewStateActive,
   loadAutoNudgeConfig,
   normalizeAutoNudgeSignatureText,
@@ -37,6 +39,11 @@ function asNumber(value: string | number | undefined, fallback: number): number 
 
 function safeString(v: unknown): string {
   return typeof v === 'string' ? v : '';
+}
+
+function parsePositivePid(value: unknown): number | null {
+  const pid = Math.trunc(asNumber(value as string | number | undefined, 0));
+  return pid > 0 ? pid : null;
 }
 
 function parseIsoMillis(value: string | null | undefined): number | null {
@@ -70,6 +77,7 @@ async function waitForPidExit(pid: number, timeoutMs = 3000, stepMs = 50): Promi
 const cwd = resolve(argValue('--cwd', process.cwd()));
 const notifyScript = resolve(argValue('--notify-script', join(cwd, 'dist', 'scripts', 'notify-hook.js')));
 const runOnce = process.argv.includes('--once');
+const authorityOnly = process.argv.includes('--authority-only');
 // Keep fallback control-plane ticks comfortably below the default dispatch
 // ack budget so leaderless team dispatch + stale-alert recovery do not feel
 // laggy between native notify-hook turns.
@@ -250,6 +258,21 @@ let lastFallbackAutoNudge: FallbackAutoNudgeState = {
 };
 function eventLog(event: Record<string, unknown>): Promise<void> {
   return appendFile(logPath, `${JSON.stringify({ timestamp: new Date().toISOString(), ...event })}\n`).catch(() => {});
+}
+
+function shouldLogLeaderNudgeTick(reason: string): boolean {
+  return reason === 'leader_nudge_checked' || reason === 'leader_nudge_failed';
+}
+
+function shouldLogDispatchDrainTick(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return false;
+  const record = result as Record<string, unknown>;
+  const processed = asNumber(record.processed as string | number | undefined, 0);
+  const skipped = asNumber(record.skipped as string | number | undefined, 0);
+  const failed = asNumber(record.failed as string | number | undefined, 0);
+  if (processed > 0 || skipped > 0 || failed > 0) return true;
+  const reason = safeString(record.reason).trim();
+  return reason !== '' && reason !== 'worker_context';
 }
 
 function normalizeRalphContinueSteerState(raw: Record<string, unknown> | null | undefined): RalphContinueSteerState {
@@ -448,22 +471,19 @@ async function resolveActiveTeamState(): Promise<ActiveTeamResult> {
 async function emitRalphContinueSteer(paneId: string, message: string): Promise<void> {
   const markedText = `${message} ${DEFAULT_MARKER}`;
   await new Promise<void>((resolve) => {
-    const typed = spawnSync('tmux', ['send-keys', '-t', paneId, '-l', markedText], { encoding: 'utf-8',
-      windowsHide: true,
-    });
+    const { result: typed } = spawnPlatformCommandSync('tmux', ['send-keys', '-t', paneId, '-l', markedText], { encoding: 'utf-8' });
+    if (typed.error) throw new Error(typed.error.message);
     if (typed.status !== 0) throw new Error((typed.stderr || typed.stdout || '').trim() || 'tmux send-keys failed');
     setTimeout(resolve, 100);
   });
   await new Promise<void>((resolve) => {
-    const submitA = spawnSync('tmux', ['send-keys', '-t', paneId, 'C-m'], { encoding: 'utf-8',
-      windowsHide: true,
-    });
+    const { result: submitA } = spawnPlatformCommandSync('tmux', ['send-keys', '-t', paneId, 'C-m'], { encoding: 'utf-8' });
+    if (submitA.error) throw new Error(submitA.error.message);
     if (submitA.status !== 0) throw new Error((submitA.stderr || submitA.stdout || '').trim() || 'tmux send-keys C-m failed');
     setTimeout(resolve, 100);
   });
-  const submitB = spawnSync('tmux', ['send-keys', '-t', paneId, 'C-m'], { encoding: 'utf-8',
-      windowsHide: true,
-    });
+  const { result: submitB } = spawnPlatformCommandSync('tmux', ['send-keys', '-t', paneId, 'C-m'], { encoding: 'utf-8' });
+  if (submitB.error) throw new Error(submitB.error.message);
   if (submitB.status !== 0) {
     throw new Error((submitB.stderr || submitB.stdout || '').trim() || 'tmux send-keys C-m failed');
   }
@@ -487,9 +507,9 @@ async function readRalphSteerLock(path: string): Promise<RalphSteerLockRecord | 
   if (!raw.trim()) return null;
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const pid = Math.trunc(asNumber(parsed.pid as string | number | undefined, 0));
+    const pid = parsePositivePid(parsed.pid);
     const acquiredAt = safeString(parsed.acquired_at).trim();
-    if (!pid || !acquiredAt) return null;
+    if (pid === null || !acquiredAt) return null;
     return { pid, acquired_at: acquiredAt };
   } catch {
     return null;
@@ -589,19 +609,19 @@ async function readPidFileRecord(path: string): Promise<PidFileRecord | null> {
   if (!trimmed) return null;
   try {
     const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-    const pid = Math.trunc(asNumber(parsed.pid as string | number | undefined, 0));
-    if (pid <= 0) return null;
+    const pid = parsePositivePid(parsed.pid);
+    if (pid === null) return null;
     return {
       pid,
-      parent_pid: Math.trunc(asNumber(parsed.parent_pid as string | number | undefined, 0)) || undefined,
+      parent_pid: parsePositivePid(parsed.parent_pid) ?? undefined,
       cwd: safeString(parsed.cwd) || undefined,
       started_at: safeString(parsed.started_at) || undefined,
       max_lifetime_ms: asNumber(parsed.max_lifetime_ms as string | number | undefined, 0) || undefined,
       owner_token: safeString(parsed.owner_token) || undefined,
     };
   } catch {
-    const pid = Number.parseInt(trimmed, 10);
-    return Number.isFinite(pid) && pid > 0 ? { pid } : null;
+    const pid = parsePositivePid(trimmed);
+    return pid === null ? null : { pid };
   }
 }
 
@@ -622,6 +642,7 @@ async function runRalphContinueSteerTick(): Promise<void> {
   const nowIso = new Date(now).toISOString();
   const startupIso = new Date(startedAt).toISOString();
   const activeRalph = await resolveActiveRalphState();
+  const activePaneId = safeString(activeRalph.state?.tmux_pane_id).trim();
   lastRalphContinueSteer = {
     ...lastRalphContinueSteer,
     active: activeRalph.active,
@@ -630,6 +651,7 @@ async function runRalphContinueSteerTick(): Promise<void> {
     last_reason: activeRalph.reason,
     last_error: null,
     state_path: activeRalph.path,
+    pane_id: activePaneId,
     pane_current_command: '',
     shared_timestamp_path: ralphSteerTimestampPath,
     singleton_lock_path: ralphSteerLockPath,
@@ -787,6 +809,7 @@ async function writeState(extra: Record<string, unknown> = {}): Promise<void> {
     started_at: new Date(startedAt).toISOString(),
     cwd,
     notify_script: notifyScript,
+    authority_only: authorityOnly,
     poll_ms: pollMs,
     pid_file: runOnce ? null : pidFilePath,
     max_lifetime_ms: maxLifetimeMs,
@@ -1205,21 +1228,18 @@ async function runLeaderNudgeTick(): Promise<void> {
       last_tick_at: startedIso,
       last_error: 'worker_context',
     };
-    await eventLog({
-      type: 'leader_nudge_tick',
-      leader_only: false,
-      run_count: leaderNudgeRuns,
-      reason: 'worker_context',
-      stale_threshold_ms: staleThresholdMs,
-    });
     return;
   }
 
   try {
     const preComputedLeaderStale = await isLeaderStale(stateDir, staleThresholdMs, Date.now());
-    if (preComputedLeaderStale) {
-      await maybeNudgeTeamLeader({ cwd, stateDir, logsDir, preComputedLeaderStale });
-    }
+    await maybeNudgeTeamLeader({
+      cwd,
+      stateDir,
+      logsDir,
+      preComputedLeaderStale,
+      allowFreshMailboxNudges: false,
+    });
     leaderNudgeRuns += 1;
     lastLeaderNudge = {
       enabled: true,
@@ -1229,14 +1249,17 @@ async function runLeaderNudgeTick(): Promise<void> {
       last_tick_at: startedIso,
       last_error: null,
     };
-    await eventLog({
-      type: 'leader_nudge_tick',
-      leader_only: true,
-      run_count: leaderNudgeRuns,
-      stale_threshold_ms: staleThresholdMs,
-      precomputed_leader_stale: preComputedLeaderStale,
-      reason: preComputedLeaderStale ? 'leader_nudge_checked' : 'leader_nudge_skipped_not_stale',
-    });
+    const reason = preComputedLeaderStale ? 'leader_nudge_checked' : 'leader_nudge_skipped_not_stale';
+    if (shouldLogLeaderNudgeTick(reason)) {
+      await eventLog({
+        type: 'leader_nudge_tick',
+        leader_only: true,
+        run_count: leaderNudgeRuns,
+        stale_threshold_ms: staleThresholdMs,
+        precomputed_leader_stale: preComputedLeaderStale,
+        reason,
+      });
+    }
   } catch (err) {
     leaderNudgeRuns += 1;
     lastLeaderNudge = {
@@ -1269,13 +1292,15 @@ async function runDispatchDrainTick(): Promise<void> {
       last_result: result,
       last_error: null,
     };
-    await eventLog({
-      type: 'dispatch_drain_tick',
-      leader_only: lastDispatchDrain.leader_only,
-      dispatch_max_per_tick: dispatchTickMax,
-      run_count: dispatchDrainRuns,
-      ...(result && typeof result === 'object' ? result as Record<string, unknown> : {}),
-    });
+    if (shouldLogDispatchDrainTick(result)) {
+      await eventLog({
+        type: 'dispatch_drain_tick',
+        leader_only: lastDispatchDrain.leader_only,
+        dispatch_max_per_tick: dispatchTickMax,
+        run_count: dispatchDrainRuns,
+        ...(result && typeof result === 'object' ? result as Record<string, unknown> : {}),
+      });
+    }
   } catch (err) {
     dispatchDrainRuns += 1;
     lastDispatchDrain = {
@@ -1295,21 +1320,29 @@ async function runDispatchDrainTick(): Promise<void> {
   }
 }
 
+async function shouldSuppressInteractiveFallbackTicks(): Promise<boolean> {
+  const [deepInterviewStateActive, deepInterviewInputLockActive] = await Promise.all([
+    isDeepInterviewStateActive(stateDir),
+    isDeepInterviewInputLockActive(stateDir),
+  ]);
+  return deepInterviewStateActive || deepInterviewInputLockActive;
+}
+
 async function pumpTeamControlPlaneTick(): Promise<void> {
   await runDispatchDrainTick();
-  const deepInterviewStateActive = await isDeepInterviewStateActive(stateDir);
-  if (deepInterviewStateActive) return;
+  if (await shouldSuppressInteractiveFallbackTicks()) return;
   await runLeaderNudgeTick();
   await runFallbackAutoNudgeTick();
 }
 
 
 async function runWatcherCycle(): Promise<void> {
-  await ensureTrackedFiles();
-  await pollFiles();
+  if (!authorityOnly) {
+    await ensureTrackedFiles();
+    await pollFiles();
+  }
   await pumpTeamControlPlaneTick();
-  const deepInterviewStateActive = await isDeepInterviewStateActive(stateDir);
-  if (!deepInterviewStateActive) {
+  if (!authorityOnly && !(await shouldSuppressInteractiveFallbackTicks())) {
     await runRalphWatcherBehaviorTick();
   }
   await writeState();
@@ -1339,16 +1372,19 @@ async function main(): Promise<void> {
 
   await registerPidFile();
   await loadPersistedWatcherState();
-  await eventLog({
-    type: 'watcher_start',
-    cwd,
-    notify_script: notifyScript,
-    poll_ms: pollMs,
-    once: runOnce,
-    parent_pid: parentPid,
-    pid_file: runOnce ? null : pidFilePath,
-    max_lifetime_ms: maxLifetimeMs,
-  });
+  if (!(runOnce && authorityOnly)) {
+    await eventLog({
+      type: 'watcher_start',
+      cwd,
+      notify_script: notifyScript,
+      authority_only: authorityOnly,
+      poll_ms: pollMs,
+      once: runOnce,
+      parent_pid: parentPid,
+      pid_file: runOnce ? null : pidFilePath,
+      max_lifetime_ms: maxLifetimeMs,
+    });
+  }
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGHUP', () => shutdown('SIGHUP'));
@@ -1357,7 +1393,9 @@ async function main(): Promise<void> {
 
   if (runOnce) {
     await runWatcherCycle();
-    await eventLog({ type: 'watcher_once_complete', seen_turns: seenTurnKeys.size });
+    if (!authorityOnly) {
+      await eventLog({ type: 'watcher_once_complete', authority_only: authorityOnly, seen_turns: seenTurnKeys.size });
+    }
     process.exit(0);
   }
 

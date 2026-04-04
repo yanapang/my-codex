@@ -102,6 +102,7 @@ function runGlobalUpdate(): { ok: boolean; stderr: string } {
     encoding: 'utf-8',
     stdio: ['ignore', 'ignore', 'pipe'],
     timeout: 120000,
+    windowsHide: true,
   });
 
   if (result.error) {

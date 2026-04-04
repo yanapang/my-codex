@@ -18,6 +18,7 @@ const SIGTERM_GRACE_MS = 5_000;
 const STALE_TMP_MAX_AGE_MS = 60 * 60 * 1000;
 const OMX_MCP_SERVER_PATTERN = /(?:^|[\\/])dist[\\/]mcp[\\/](?:state|memory|code-intel|trace|team)-server\.(?:[cm]?js|ts)\b/i;
 const CODEX_PROCESS_PATTERN = /(?:^|[\\/\s])codex(?:\.js)?(?:\s|$)|@openai[\\/]codex/i;
+const OMX_LAUNCH_PROCESS_PATTERN = /(?:^|[\\/\s])omx(?:\.js)?(?:\s|$)|(?:^|[\\/])(?:bin|dist[\\/]cli)[\\/]omx\.js(?:\s|$)|oh-my-codex[\\/]dist[\\/]cli[\\/]omx\.js/i;
 const OMX_TMP_DIRECTORY_PATTERN = /^(omc|omx|oh-my-codex)-/;
 
 export interface ProcessEntry {
@@ -41,6 +42,10 @@ export interface CleanupResult {
 export interface CleanupDependencies {
   currentPid?: number;
   listProcesses?: () => ProcessEntry[];
+  selectCandidates?: (
+    processes: readonly ProcessEntry[],
+    currentPid: number,
+  ) => CleanupCandidate[];
   isPidAlive?: (pid: number) => boolean;
   sendSignal?: (pid: number, signal: NodeJS.Signals) => void;
   sleep?: (ms: number) => Promise<void>;
@@ -109,6 +114,29 @@ export function listOmxProcesses(): ProcessEntry[] {
 
 function isCodexSessionProcess(command: string): boolean {
   return CODEX_PROCESS_PATTERN.test(normalizeCommand(command));
+}
+
+function isOmxLaunchProcess(command: string): boolean {
+  return OMX_LAUNCH_PROCESS_PATTERN.test(normalizeCommand(command));
+}
+
+function hasAncestorMatching(
+  processByPid: ReadonlyMap<number, ProcessEntry>,
+  pid: number,
+  predicate: (command: string) => boolean,
+): boolean {
+  const seen = new Set<number>();
+  let currentPid = processByPid.get(pid)?.ppid;
+
+  while (typeof currentPid === 'number' && currentPid > 0 && !seen.has(currentPid)) {
+    seen.add(currentPid);
+    const parent = processByPid.get(currentPid);
+    if (!parent) return false;
+    if (predicate(parent.command)) return true;
+    currentPid = parent.ppid;
+  }
+
+  return false;
 }
 
 function resolveProtectedRootPid(
@@ -180,6 +208,19 @@ export function findCleanupCandidates(
     }));
 }
 
+export function findLaunchSafeCleanupCandidates(
+  processes: readonly ProcessEntry[],
+  currentPid: number,
+): CleanupCandidate[] {
+  const processByPid = new Map(
+    processes.map((processEntry) => [processEntry.pid, processEntry] as const),
+  );
+
+  return findCleanupCandidates(processes, currentPid)
+    .filter((candidate) => !hasAncestorMatching(processByPid, candidate.pid, isCodexSessionProcess))
+    .filter((candidate) => !hasAncestorMatching(processByPid, candidate.pid, isOmxLaunchProcess));
+}
+
 function defaultIsPidAlive(pid: number): boolean {
   if (!Number.isFinite(pid) || pid <= 0) return false;
   try {
@@ -241,12 +282,13 @@ export async function cleanupOmxMcpProcesses(
   const writeLine = dependencies.writeLine ?? ((line: string) => console.log(line));
   const currentPid = dependencies.currentPid ?? process.pid;
   const listProcessesImpl = dependencies.listProcesses ?? listOmxProcesses;
+  const selectCandidates = dependencies.selectCandidates ?? findCleanupCandidates;
   const isPidAlive = dependencies.isPidAlive ?? defaultIsPidAlive;
   const sendSignal = dependencies.sendSignal ?? ((pid: number, signal: NodeJS.Signals) => process.kill(pid, signal));
   const sleep = dependencies.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const now = dependencies.now ?? Date.now;
 
-  const candidates = findCleanupCandidates(listProcessesImpl(), currentPid);
+  const candidates = selectCandidates(listProcessesImpl(), currentPid);
   if (candidates.length === 0) {
     writeLine(dryRun
       ? 'Dry run: no orphaned OMX MCP server processes found.'

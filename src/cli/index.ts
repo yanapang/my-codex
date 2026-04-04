@@ -16,7 +16,13 @@ import { hudCommand } from "../hud/index.js";
 import { teamCommand } from "./team.js";
 import { ralphCommand } from "./ralph.js";
 import { askCommand } from "./ask.js";
-import { cleanupCommand } from "./cleanup.js";
+import {
+  cleanupCommand,
+  cleanupOmxMcpProcesses,
+  findLaunchSafeCleanupCandidates,
+  type CleanupDependencies,
+  type CleanupResult,
+} from "./cleanup.js";
 import { exploreCommand } from "./explore.js";
 import { sparkshellCommand } from "./sparkshell.js";
 import { agentsInitCommand } from "./agents-init.js";
@@ -64,6 +70,7 @@ import {
   buildUnregisterClientAttachedReconcileArgs,
   buildUnregisterResizeHookArgs,
   enableMouseScrolling,
+  isMsysOrGitBash,
   isNativeWindows,
   isTmuxAvailable,
 } from "../team/tmux-session.js";
@@ -96,15 +103,19 @@ import {
 } from "../notifications/temp-contract.js";
 
 export function resolveNotifyFallbackWatcherScript(pkgRoot = getPackageRoot()): string {
-  return join(pkgRoot, "dist", "scripts", "notify-fallback-watcher.js");
+  return resolveDistScript(pkgRoot, "notify-fallback-watcher.js");
 }
 
 export function resolveHookDerivedWatcherScript(pkgRoot = getPackageRoot()): string {
-  return join(pkgRoot, "dist", "scripts", "hook-derived-watcher.js");
+  return resolveDistScript(pkgRoot, "hook-derived-watcher.js");
 }
 
 export function resolveNotifyHookScript(pkgRoot = getPackageRoot()): string {
-  return join(pkgRoot, "dist", "scripts", "notify-hook.js");
+  return resolveDistScript(pkgRoot, "notify-hook.js");
+}
+
+function resolveDistScript(pkgRoot: string, scriptName: string): string {
+  return join(pkgRoot, "dist", "scripts", scriptName);
 }
 
 const HELP = `
@@ -1332,6 +1343,13 @@ export function buildTmuxSessionName(cwd: string, sessionId: string): string {
   return name.length > 120 ? name.slice(0, 120) : name;
 }
 
+export function buildDetachedTmuxSessionName(
+  cwd: string,
+  sessionId: string,
+): string {
+  return buildTmuxSessionName(cwd, sessionId);
+}
+
 function parsePaneIdFromTmuxOutput(rawOutput: string): string | null {
   const paneId = rawOutput.split("\n")[0]?.trim() || "";
   return paneId.startsWith("%") ? paneId : null;
@@ -1580,14 +1598,25 @@ export function buildNotifyFallbackWatcherEnv(
   };
 }
 
+export async function cleanupLaunchOrphanedMcpProcesses(
+  dependencies: CleanupDependencies = {},
+): Promise<CleanupResult> {
+  return cleanupOmxMcpProcesses([], {
+    ...dependencies,
+    selectCandidates: dependencies.selectCandidates ?? findLaunchSafeCleanupCandidates,
+    writeLine: dependencies.writeLine ?? (() => {}),
+  });
+}
+
 /**
  * preLaunch: Prepare environment before Codex starts.
- * 1. Generate runtime overlay + write session-scoped model instructions file
- * 2. Write session.json
+ * 1. Best-effort launch-safe orphan cleanup for detached OMX MCP processes
+ * 2. Generate runtime overlay + write session-scoped model instructions file
+ * 3. Write session.json
  *
- * Automatic stale-session cleanup is intentionally disabled here. Destructive
- * cleanup must be explicit via `omx cleanup` so normal launches never reap
- * files or processes from other OMX sessions.
+ * Automatic broad stale-session cleanup remains disabled here. Only detached
+ * OMX MCP processes without a live Codex ancestor are reaped so new launches
+ * do not accumulate stale processes from prior crashed/closed sessions.
  */
 async function preLaunch(
   cwd: string,
@@ -1596,7 +1625,25 @@ async function preLaunch(
   codexHomeOverride?: string,
   enableNotifyFallbackAuthority: boolean = false,
 ): Promise<void> {
-  // 1. Generate runtime overlay + write session-scoped model instructions file
+  // 1. Best-effort launch-safe orphan cleanup
+  try {
+    const cleanup = await cleanupLaunchOrphanedMcpProcesses();
+    if (cleanup.terminatedCount > 0) {
+      console.log(
+        `[omx] Reaped ${cleanup.terminatedCount} orphaned OMX MCP process(es) before launch.`,
+      );
+    }
+    if (cleanup.failedPids.length > 0) {
+      console.warn(
+        `[omx] Failed to reap ${cleanup.failedPids.length} orphaned OMX MCP process(es); continuing launch.`,
+      );
+    }
+  } catch (err) {
+    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    // Non-fatal
+  }
+
+  // 2. Generate runtime overlay + write session-scoped model instructions file
   const orchestrationMode = await resolveSessionOrchestrationMode(
     cwd,
     sessionId,
@@ -1611,11 +1658,11 @@ ${launchAppendix}`
       : overlay;
   await writeSessionModelInstructionsFile(cwd, sessionId, sessionInstructions);
 
-  // 2. Write session state
+  // 3. Write session state
   await resetSessionMetrics(cwd);
   await writeSessionStart(cwd, sessionId);
 
-  // 3. Start notify fallback watcher (best effort)
+  // 4. Start notify fallback watcher (best effort)
   try {
     await startNotifyFallbackWatcher(cwd, { codexHomeOverride, enableAuthority: enableNotifyFallbackAuthority, sessionId });
   } catch (err) {
@@ -1623,7 +1670,7 @@ ${launchAppendix}`
     // Non-fatal
   }
 
-  // 4. Start derived watcher (best effort, opt-in)
+  // 5. Start derived watcher (best effort, opt-in)
   try {
     await startHookDerivedWatcher(cwd);
   } catch (err) {
@@ -1631,7 +1678,7 @@ ${launchAppendix}`
     // Non-fatal
   }
 
-  // 5. Emit temp notification startup summary + warnings, then send session-start lifecycle notification (best effort)
+  // 6. Emit temp notification startup summary + warnings, then send session-start lifecycle notification (best effort)
   try {
     if (notifyTempContract?.active) {
       process.env[OMX_NOTIFY_TEMP_CONTRACT_ENV] =
@@ -1663,7 +1710,7 @@ ${launchAppendix}`
     // Non-fatal: notification failures must never block launch
   }
 
-  // 6. Dispatch native hook event (best effort)
+  // 7. Dispatch native hook event (best effort)
   try {
     await emitNativeHookEvent(cwd, "session-start", {
       session_id: sessionId,
@@ -1798,8 +1845,7 @@ function runCodex(
     const detachedWindowsCodexCmd = nativeWindows
       ? buildWindowsPromptCommand("codex", launchArgs)
       : null;
-    const tmuxSessionId = `omx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const sessionName = buildTmuxSessionName(cwd, tmuxSessionId);
+    const sessionName = buildDetachedTmuxSessionName(cwd, sessionId);
     let createdDetachedSession = false;
     let registeredHookTarget: string | null = null;
     let registeredHookName: string | null = null;
@@ -2239,6 +2285,103 @@ function hookDerivedWatcherPidPath(cwd: string): string {
   return join(cwd, ".omx", "state", "hook-derived-watcher.pid");
 }
 
+export function shouldDetachBackgroundHelper(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  // The long-running watcher/helper itself must stay detached so it can
+  // survive parent loss. Windows Git Bash/MSYS uses a short hidden bootstrap
+  // process so the detached helper is created without stealing focus.
+  void env;
+  void platform;
+  return true;
+}
+
+export type BackgroundHelperLaunchMode =
+  | "direct-detached"
+  | "windows-msys-bootstrap";
+
+export function resolveBackgroundHelperLaunchMode(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): BackgroundHelperLaunchMode {
+  return platform === "win32" && isMsysOrGitBash(env, platform)
+    ? "windows-msys-bootstrap"
+    : "direct-detached";
+}
+
+export function buildWindowsMsysBackgroundHelperBootstrapScript(
+  helperArgs: readonly string[],
+  cwd: string,
+): string {
+  const helperArgsLiteral = JSON.stringify(helperArgs);
+  const cwdLiteral = JSON.stringify(cwd);
+  return [
+    "const { spawn } = require('child_process');",
+    `const child = spawn(process.execPath, ${helperArgsLiteral}, { cwd: ${cwdLiteral}, detached: true, stdio: 'ignore', windowsHide: true, env: process.env });`,
+    "if (!child.pid) process.exit(1);",
+    "process.stdout.write(String(child.pid));",
+    "child.unref();",
+  ].join("");
+}
+
+async function launchBackgroundHelper(
+  helperArgs: string[],
+  options: { cwd: string; env: NodeJS.ProcessEnv },
+): Promise<number | undefined> {
+  const launchMode = resolveBackgroundHelperLaunchMode(
+    options.env,
+    process.platform,
+  );
+
+  if (launchMode === "windows-msys-bootstrap") {
+    const { spawnSync } = await import("child_process");
+    const bootstrap = spawnSync(
+      process.execPath,
+      [
+        "-e",
+        buildWindowsMsysBackgroundHelperBootstrapScript(
+          helperArgs,
+          options.cwd,
+        ),
+      ],
+      {
+        cwd: options.cwd,
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+        env: options.env,
+      },
+    );
+
+    if (bootstrap.error) {
+      throw bootstrap.error;
+    }
+
+    if (bootstrap.status !== 0) {
+      const detail = (bootstrap.stderr || bootstrap.stdout || "").trim();
+      throw new Error(
+        detail || `background helper bootstrap exited ${bootstrap.status}`,
+      );
+    }
+
+    const helperPid = Number.parseInt((bootstrap.stdout || "").trim(), 10);
+    return Number.isFinite(helperPid) && helperPid > 0
+      ? helperPid
+      : undefined;
+  }
+
+  const child = spawn(process.execPath, helperArgs, {
+    cwd: options.cwd,
+    detached: shouldDetachBackgroundHelper(options.env, process.platform),
+    stdio: "ignore",
+    windowsHide: true,
+    env: options.env,
+  });
+  child.unref();
+  return child.pid;
+}
+
 function parseWatcherPidFile(content: string): number | null {
   const trimmed = content.trim();
   if (!trimmed) return null;
@@ -2310,39 +2453,50 @@ async function startNotifyFallbackWatcher(
       );
     },
   );
-  const child = spawn(
-    process.execPath,
-    [
-      watcherScript,
-      "--cwd",
+  const watcherEnv = buildNotifyFallbackWatcherEnv(process.env, {
+    codexHomeOverride: options.codexHomeOverride,
+    enableAuthority: options.enableAuthority === true,
+    sessionId: options.sessionId,
+  });
+  let watcherPid: number | undefined;
+  try {
+    watcherPid = await launchBackgroundHelper(
+      [
+        watcherScript,
+        "--cwd",
+        cwd,
+        "--notify-script",
+        notifyScript,
+        "--pid-file",
+        pidPath,
+        "--parent-pid",
+        String(process.pid),
+        ...(process.env.OMX_NOTIFY_FALLBACK_MAX_LIFETIME_MS
+          ? [
+            "--max-lifetime-ms",
+            process.env.OMX_NOTIFY_FALLBACK_MAX_LIFETIME_MS,
+          ]
+          : []),
+      ],
+      {
+        cwd,
+        env: watcherEnv,
+      },
+    );
+  } catch (error: unknown) {
+    console.warn("[omx] warning: failed to launch notify fallback watcher", {
       cwd,
-      "--notify-script",
-      notifyScript,
-      "--pid-file",
-      pidPath,
-      "--parent-pid",
-      String(process.pid),
-      ...(process.env.OMX_NOTIFY_FALLBACK_MAX_LIFETIME_MS
-        ? ["--max-lifetime-ms", process.env.OMX_NOTIFY_FALLBACK_MAX_LIFETIME_MS]
-        : []),
-    ],
-    {
-      cwd,
-      detached: true,
-      stdio: "ignore",
-      env: buildNotifyFallbackWatcherEnv(process.env, {
-        codexHomeOverride: options.codexHomeOverride,
-        enableAuthority: options.enableAuthority === true,
-        sessionId: options.sessionId,
-      }),
-    },
-  );
-  child.unref();
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
+
+  if (!watcherPid) return;
 
   await writeFile(
     pidPath,
     JSON.stringify(
-      { pid: child.pid, started_at: new Date().toISOString() },
+      { pid: watcherPid, started_at: new Date().toISOString() },
       null,
       2,
     ),
@@ -2393,18 +2547,26 @@ async function startHookDerivedWatcher(cwd: string): Promise<void> {
       );
     },
   );
-  const child = spawn(process.execPath, [watcherScript, "--cwd", cwd], {
-    cwd,
-    detached: true,
-    stdio: "ignore",
-    env: process.env,
-  });
-  child.unref();
+  let watcherPid: number | undefined;
+  try {
+    watcherPid = await launchBackgroundHelper([watcherScript, "--cwd", cwd], {
+      cwd,
+      env: process.env,
+    });
+  } catch (error: unknown) {
+    console.warn("[omx] warning: failed to launch hook-derived watcher", {
+      cwd,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
+
+  if (!watcherPid) return;
 
   await writeFile(
     pidPath,
     JSON.stringify(
-      { pid: child.pid, started_at: new Date().toISOString() },
+      { pid: watcherPid, started_at: new Date().toISOString() },
       null,
       2,
     ),
@@ -2498,6 +2660,7 @@ async function flushNotifyFallbackOnce(
       cwd,
       stdio: "ignore",
       timeout: 3000,
+      windowsHide: true,
       env: buildNotifyFallbackWatcherEnv(process.env, {
         codexHomeOverride: options.codexHomeOverride,
         enableAuthority: options.enableAuthority === true,
@@ -2517,6 +2680,7 @@ async function flushHookDerivedWatcherOnce(cwd: string): Promise<void> {
     cwd,
     stdio: "ignore",
     timeout: 3000,
+    windowsHide: true,
     env: {
       ...process.env,
       OMX_HOOK_DERIVED_SIGNALS: "1",

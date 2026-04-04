@@ -39,6 +39,10 @@ import { isLeaderStale, resolveLeaderStalenessThresholdMs, maybeNudgeTeamLeader 
 import { drainPendingTeamDispatch } from './notify-hook/team-dispatch.js';
 import { handleTmuxInjection } from './notify-hook/tmux-injection.js';
 import { maybeAutoNudge, resolveNudgePaneTarget, isDeepInterviewStateActive } from './notify-hook/auto-nudge.js';
+import { isManagedOmxSession } from './notify-hook/managed-tmux.js';
+import { logNotifyHookEvent } from './notify-hook/log.js';
+import { reconcileRalphSessionResume } from './notify-hook/ralph-session-resume.js';
+import { sendPaneInput } from './notify-hook/team-tmux-guard.js';
 import {
   buildOperationalContext,
   deriveAssistantSignalEvents,
@@ -68,6 +72,79 @@ const RALPH_ACTIVE_PROGRESS_PHASES = new Set([
   'fixing',
 ]);
 
+const IDLE_NOTIFICATION_SUMMARY_MAX_LENGTH = 240;
+
+function summarizeIdleNotificationMessage(message: unknown): string {
+  const source = safeString(message)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const preferred = source.at(-1) || '';
+  const normalized = preferred.replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+  return normalized.length > IDLE_NOTIFICATION_SUMMARY_MAX_LENGTH
+    ? `${normalized.slice(0, IDLE_NOTIFICATION_SUMMARY_MAX_LENGTH - 1)}…`
+    : normalized;
+}
+
+function classifyIdleNotificationPhase(message: unknown): 'idle' | 'progress' | 'finished' | 'failed' {
+  const lower = safeString(message).toLowerCase();
+  if (!lower) return 'idle';
+
+  if (/(error|failed|exception|invalid|timed out|timeout)/i.test(lower)) {
+    return 'failed';
+  }
+
+  if ([
+    'all tests pass',
+    'build succeeded',
+    'completed',
+    'complete',
+    'done',
+    'final summary',
+    'summary',
+  ].some((pattern) => lower.includes(pattern))) {
+    return 'finished';
+  }
+
+  if ([
+    'verify',
+    'verified',
+    'verification',
+    'review',
+    'reviewed',
+    'diagnostic',
+    'typecheck',
+    'test',
+    'implement',
+    'implemented',
+    'apply patch',
+    'change',
+    'fix',
+    'update',
+    'refactor',
+    'resume',
+    'resumed',
+    'progress',
+    'continue',
+    'continued',
+  ].some((pattern) => lower.includes(pattern))) {
+    return 'progress';
+  }
+
+  return 'idle';
+}
+
+function buildIdleNotificationFingerprint(payload: Record<string, unknown>): string {
+  const lastAssistantMessage = safeString(payload['last-assistant-message'] || payload.last_assistant_message || '');
+  const summary = summarizeIdleNotificationMessage(lastAssistantMessage);
+  const phase = classifyIdleNotificationPhase(lastAssistantMessage);
+  return JSON.stringify({
+    phase,
+    ...(summary ? { summary } : {}),
+  });
+}
+
 async function main() {
   const rawPayload = process.argv[process.argv.length - 1];
   if (!rawPayload || rawPayload.startsWith('-')) {
@@ -83,6 +160,9 @@ async function main() {
 
   const cwd = payload.cwd || payload['cwd'] || process.cwd();
   const payloadSessionId = safeString(payload.session_id || payload['session-id'] || '');
+  const payloadThreadId = safeString(payload['thread-id'] || payload.thread_id || '');
+  const inputMessages = normalizeInputMessages(payload);
+  const latestUserInput = safeString(inputMessages.length > 0 ? inputMessages[inputMessages.length - 1] : '');
 
   // Team worker detection via environment variable
   const teamWorkerEnv = process.env.OMX_TEAM_WORKER; // e.g., "fix-ts/worker-1"
@@ -94,6 +174,7 @@ async function main() {
     : join(cwd, '.omx', 'state');
   const logsDir = join(cwd, '.omx', 'logs');
   const omxDir = join(cwd, '.omx');
+  let currentOmxSessionId = '';
 
   // Ensure directories exist
   await mkdir(logsDir, { recursive: true }).catch(() => {});
@@ -158,11 +239,45 @@ async function main() {
   const logFile = join(logsDir, `turns-${new Date().toISOString().split('T')[0]}.jsonl`);
   await appendFile(logFile, JSON.stringify(logEntry) + '\n').catch(() => {});
 
+  // Reconcile Ralph ownership for same-Codex-session continuation before
+  // lifecycle counters or injection read the active scope.
+  if (!isTeamWorker) {
+    try {
+      const resumeResult = await reconcileRalphSessionResume({
+        stateDir,
+        payloadSessionId,
+        payloadThreadId,
+      });
+      currentOmxSessionId = resumeResult.currentOmxSessionId;
+      if (resumeResult.resumed || resumeResult.updatedCurrentOwner) {
+        await logNotifyHookEvent(logsDir, {
+          timestamp: new Date().toISOString(),
+          type: 'ralph_session_resume',
+          reason: resumeResult.reason,
+          current_omx_session_id: resumeResult.currentOmxSessionId || null,
+          payload_codex_session_id: payloadSessionId || null,
+          source_path: resumeResult.sourcePath || null,
+          target_path: resumeResult.targetPath || null,
+          owner_updated: resumeResult.updatedCurrentOwner,
+          resumed: resumeResult.resumed,
+        });
+      }
+    } catch (error) {
+      await logNotifyHookEvent(logsDir, {
+        timestamp: new Date().toISOString(),
+        level: 'warn',
+        type: 'ralph_session_resume_failure',
+        payload_codex_session_id: payloadSessionId || null,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   // 2. Update active mode state (increment iteration)
   // GUARD: Skip when running inside a team worker to prevent state corruption
   if (!isTeamWorker) {
     try {
-      const scopedDirs = await getScopedStateDirsForCurrentSession(stateDir, payloadSessionId);
+      const scopedDirs = await getScopedStateDirsForCurrentSession(stateDir);
       for (const scopedDir of scopedDirs) {
         const stateFiles = await readdir(scopedDir).catch(() => []);
         for (const f of stateFiles) {
@@ -298,7 +413,9 @@ async function main() {
       if (existsSync(hudStatePath)) {
         hudState = JSON.parse(await readFile(hudStatePath, 'utf-8'));
       }
-      hudState.last_turn_at = new Date().toISOString();
+      const nowIso = new Date().toISOString();
+      hudState.last_turn_at = nowIso;
+      (hudState as any).last_progress_at = nowIso;
       hudState.turn_count = (hudState.turn_count || 0) + 1;
       (hudState as any).last_agent_output = (payload['last-assistant-message'] || payload.last_assistant_message || '')
         .slice(0, 100);
@@ -323,14 +440,12 @@ async function main() {
   // 4.45. Skill activation tracking: update skill-active-state.json before any nudge logic.
   try {
     const { recordSkillActivation } = await import('../hooks/keyword-detector.js');
-    const inputMessages = normalizeInputMessages(payload);
-    const latestUserInput = safeString(inputMessages.length > 0 ? inputMessages[inputMessages.length - 1] : '');
     if (latestUserInput) {
       await recordSkillActivation({
         stateDir,
         text: latestUserInput,
         sessionId: payloadSessionId,
-        threadId: safeString(payload['thread-id'] || payload.thread_id || ''),
+        threadId: payloadThreadId,
         turnId: safeString(payload['turn-id'] || payload.turn_id || ''),
       });
     }
@@ -443,19 +558,20 @@ async function main() {
       const { notifyLifecycle } = await import('../notifications/index.js');
       const { shouldSendIdleNotification, recordIdleNotificationSent } = await import('../notifications/idle-cooldown.js');
       const sessionJsonPath = join(stateDir, 'session.json');
+      const idleFingerprint = buildIdleNotificationFingerprint(payload);
       let notifySessionId = '';
       try {
         const sessionData = JSON.parse(await readFile(sessionJsonPath, 'utf-8'));
         notifySessionId = safeString(sessionData && sessionData.session_id ? sessionData.session_id : '');
       } catch { /* no session file */ }
 
-      if (notifySessionId && shouldSendIdleNotification(stateDir, notifySessionId)) {
+      if (notifySessionId && shouldSendIdleNotification(stateDir, notifySessionId, idleFingerprint)) {
         const idleResult = await notifyLifecycle('session-idle', {
           sessionId: notifySessionId,
           projectPath: cwd,
         });
         if (idleResult && idleResult.anySuccess) {
-          recordIdleNotificationSent(stateDir, notifySessionId);
+          recordIdleNotificationSent(stateDir, notifySessionId, idleFingerprint);
         }
         try {
           const { buildNativeHookEvent } = await import('../hooks/extensibility/events.js');
@@ -506,7 +622,7 @@ async function main() {
         payload,
         stateDir,
         logsDir,
-        sessionId: payloadSessionId,
+        sessionId: currentOmxSessionId || payloadSessionId,
         turnId: safeString(payload['turn-id'] || payload.turn_id || ''),
       });
     } catch (err) {
@@ -531,23 +647,36 @@ async function main() {
       const { processCodeSimplifier } = await import('../hooks/code-simplifier/index.js');
       const csResult = processCodeSimplifier(cwd, stateDir);
       if (csResult.triggered) {
-        const csPaneId = await resolveNudgePaneTarget(stateDir);
-        if (csPaneId) {
-          const csText = `${csResult.message} ${DEFAULT_MARKER}`;
-          const { runProcess } = await import('./notify-hook/process-runner.js');
-          await runProcess('tmux', ['send-keys', '-t', csPaneId, '-l', csText], 3000);
-          await new Promise(r => setTimeout(r, 100));
-          await runProcess('tmux', ['send-keys', '-t', csPaneId, 'C-m'], 3000);
-          await new Promise(r => setTimeout(r, 100));
-          await runProcess('tmux', ['send-keys', '-t', csPaneId, 'C-m'], 3000);
-
+        const managedSession = await isManagedOmxSession(cwd, payload, { allowTeamWorker: false });
+        if (!managedSession) {
           const { logTmuxHookEvent } = await import('./notify-hook/log.js');
           await logTmuxHookEvent(logsDir, {
             timestamp: new Date().toISOString(),
-            type: 'code_simplifier_triggered',
-            pane_id: csPaneId,
-            file_count: csResult.message.split('\n').filter(l => l.trimStart().startsWith('- ')).length,
+            type: 'code_simplifier_skipped',
+            reason: 'unmanaged_session',
           });
+        } else {
+          const csPaneId = await resolveNudgePaneTarget(stateDir, cwd, payload);
+          if (csPaneId) {
+            const csText = `${csResult.message} ${DEFAULT_MARKER}`;
+            const sendResult = await sendPaneInput({
+              paneTarget: csPaneId,
+              prompt: csText,
+              submitKeyPresses: 2,
+              submitDelayMs: 100,
+            });
+            if (!sendResult.ok) {
+              throw new Error(sendResult.error || sendResult.reason || 'send_failed');
+            }
+
+            const { logTmuxHookEvent } = await import('./notify-hook/log.js');
+            await logTmuxHookEvent(logsDir, {
+              timestamp: new Date().toISOString(),
+              type: 'code_simplifier_triggered',
+              pane_id: csPaneId,
+              file_count: csResult.message.split('\n').filter(l => l.trimStart().startsWith('- ')).length,
+            });
+          }
         }
       }
     } catch {

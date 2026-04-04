@@ -74,6 +74,40 @@ describe('runtime-cli helpers', () => {
     assert.equal(liveBehavior.fixingWithNoWorkers, false);
   });
 
+  it('reads task results from explicit OMX_TEAM_STATE_ROOT during shutdown collection', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-cli-env-root-cwd-'));
+    const explicitStateRoot = await mkdtemp(join(tmpdir(), 'omx-runtime-cli-env-root-state-'));
+    const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+    process.env.OMX_TEAM_STATE_ROOT = explicitStateRoot;
+    try {
+      await initTeamState('env-root-results', 'task', 'executor', 1, cwd);
+      await createTask('env-root-results', {
+        subject: 'completed task',
+        description: 'stored under explicit state root',
+        status: 'completed',
+        owner: 'worker-1',
+        result: 'PASS: explicit root task result',
+      }, cwd);
+
+      const runtimeCli = await loadRuntimeCliModule();
+      const stateRoot = runtimeCli.resolveRuntimeCliStateRoot(cwd);
+      assert.equal(stateRoot, explicitStateRoot);
+      assert.deepEqual(
+        runtimeCli.collectTaskResults(stateRoot, 'env-root-results'),
+        [{
+          taskId: '1',
+          status: 'completed',
+          summary: 'PASS: explicit root task result',
+        }],
+      );
+    } finally {
+      if (typeof previousTeamStateRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = previousTeamStateRoot;
+      else delete process.env.OMX_TEAM_STATE_ROOT;
+      await rm(explicitStateRoot, { recursive: true, force: true });
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('gracefully shuts down only when the leader explicitly requests shutdown', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-cli-shutdown-'));
     const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;

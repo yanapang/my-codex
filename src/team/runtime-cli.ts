@@ -10,8 +10,9 @@ import { readdirSync, readFileSync } from 'fs';
 import { writeFile, rename } from 'fs/promises';
 import { join } from 'path';
 import { startTeam, monitorTeam, shutdownTeam } from './runtime.js';
-import type { TeamRuntime } from './runtime.js';
+import type { TeamRuntime, TeamShutdownSummary } from './runtime.js';
 import { teamReadConfig as readTeamConfig } from './team-ops.js';
+import { resolveCanonicalTeamStateRoot } from './state-root.js';
 
 interface CliInput {
   teamName: string;
@@ -70,15 +71,15 @@ export async function loadLivePaneState(teamName: string, cwd: string): Promise<
   };
 }
 
-export async function shutdownWithForceFallback(teamName: string, cwd: string): Promise<void> {
+export async function shutdownWithForceFallback(teamName: string, cwd: string): Promise<TeamShutdownSummary> {
   try {
-    await shutdownTeam(teamName, cwd);
+    return await shutdownTeam(teamName, cwd);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (!message.includes('shutdown_gate_blocked') && !message.includes('shutdown_rejected')) {
       throw error;
     }
-    await shutdownTeam(teamName, cwd, { force: true });
+    return await shutdownTeam(teamName, cwd, { force: true });
   }
 }
 
@@ -95,7 +96,11 @@ export function detectDeadWorkerFailure(
   };
 }
 
-function collectTaskResults(stateRoot: string, teamName: string): TaskResult[] {
+export function resolveRuntimeCliStateRoot(cwd: string, env: NodeJS.ProcessEnv = process.env): string {
+  return resolveCanonicalTeamStateRoot(cwd, env);
+}
+
+export function collectTaskResults(stateRoot: string, teamName: string): TaskResult[] {
   const tasksDir = join(stateRoot, 'team', teamName, 'tasks');
   try {
     const files = readdirSync(tasksDir).filter(f => f.endsWith('.json'));
@@ -167,7 +172,7 @@ async function main(): Promise<void> {
   } = input;
 
   const workerCount = input.workerCount ?? agentTypes.length;
-  const stateRoot = join(cwd, '.omx', 'state');
+  const stateRoot = resolveRuntimeCliStateRoot(cwd);
 
   let runtime: TeamRuntime | null = null;
   let finalStatus: 'completed' | 'failed' = 'failed';
@@ -185,17 +190,23 @@ async function main(): Promise<void> {
     const taskResults = collectTaskResults(stateRoot, teamName);
 
     // 2. Shutdown team
+    let shutdownSummary: TeamShutdownSummary | null = null;
     if (runtime) {
       try {
         if (status === 'failed') {
           // Failure/cancellation path must force cleanup to bypass shutdown gate.
-          await shutdownTeam(runtime.teamName, runtime.cwd, { force: true });
+          shutdownSummary = await shutdownTeam(runtime.teamName, runtime.cwd, { force: true });
         } else {
-          await shutdownWithForceFallback(runtime.teamName, runtime.cwd);
+          shutdownSummary = await shutdownWithForceFallback(runtime.teamName, runtime.cwd);
         }
       } catch (err) {
         process.stderr.write(`[runtime-cli] shutdownTeam error: ${err}\n`);
       }
+    }
+
+    if (shutdownSummary?.commitHygieneArtifacts) {
+      process.stderr.write(`[runtime-cli] commit_hygiene_context_json=${shutdownSummary.commitHygieneArtifacts.jsonPath}\n`);
+      process.stderr.write(`[runtime-cli] commit_hygiene_context_md=${shutdownSummary.commitHygieneArtifacts.markdownPath}\n`);
     }
 
     const duration = (Date.now() - startTime) / 1000;

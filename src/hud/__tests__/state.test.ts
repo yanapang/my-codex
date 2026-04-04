@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join, relative } from 'node:path';
 import {
   buildGitBranchLabel,
   readGitBranch,
@@ -23,6 +23,18 @@ function gitRunnerFromMap(map: Record<string, string | Error>) {
   };
 }
 
+async function withWindowsPlatform(run: () => Promise<void> | void): Promise<void> {
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  try {
+    await run();
+  } finally {
+    if (originalPlatform) {
+      Object.defineProperty(process, 'platform', originalPlatform);
+    }
+  }
+}
+
 async function withTempRepo(prefix: string, run: (cwd: string) => Promise<void>): Promise<void> {
   const cwd = await mkdtemp(join(tmpdir(), prefix));
   try {
@@ -36,6 +48,23 @@ async function writeModeState(cwd: string, mode: string, state: unknown): Promis
   const stateDir = join(cwd, '.omx', 'state');
   await mkdir(stateDir, { recursive: true });
   await writeFile(join(stateDir, mode + '-state.json'), JSON.stringify(state));
+}
+
+async function createWorktreePointerFixture(cwd: string, options: { withOrigin?: boolean } = {}): Promise<void> {
+  const gitDir = join(cwd, '.git-admin', 'worktrees', 'feature');
+  const commonDir = join(cwd, '.git-admin');
+  await mkdir(commonDir, { recursive: true });
+  await mkdir(join(gitDir, 'logs', 'refs', 'heads'), { recursive: true });
+  await writeFile(join(cwd, '.git'), `gitdir: ${relative(cwd, gitDir)}\n`);
+  await writeFile(join(gitDir, 'HEAD'), 'ref: refs/heads/worktree-branch\n');
+  await writeFile(join(gitDir, 'commondir'), '../..\n');
+  if (options.withOrigin !== false) {
+    await writeFile(join(commonDir, 'config'), [
+      '[remote "origin"]',
+      '  url = git@github.com:acme/worktree-repo.git',
+      '',
+    ].join('\n'));
+  }
 }
 
 describe('readGitBranch', () => {
@@ -62,6 +91,15 @@ describe('readGitBranch', () => {
     }
 
     assert.equal(stderrChunks.join('').includes('not a git repository'), false);
+  });
+
+  it('uses the Windows fast path for worktree .git file pointers', async () => {
+    await withTempRepo('omx-hud-worktree-branch-', async (cwd) => {
+      await createWorktreePointerFixture(cwd);
+      await withWindowsPlatform(() => {
+        assert.equal(readGitBranch(cwd), 'worktree-branch');
+      });
+    });
   });
 });
 
@@ -143,6 +181,24 @@ describe('buildGitBranchLabel', () => {
       git: { display: 'repo-branch', repoLabel: 'manual' },
     }, gitRunner), 'manual/feature/test');
   });
+
+  it('resolves remote config from the git common dir for worktree pointers on Windows', async () => {
+    await withTempRepo('omx-hud-worktree-remote-', async (cwd) => {
+      await createWorktreePointerFixture(cwd);
+      await withWindowsPlatform(() => {
+        assert.equal(buildGitBranchLabel(cwd), 'worktree-repo/worktree-branch');
+      });
+    });
+  });
+
+  it('keeps the worktree root for --show-toplevel fallback on Windows worktrees', async () => {
+    await withTempRepo('omx-hud-worktree-top-', async (cwd) => {
+      await createWorktreePointerFixture(cwd, { withOrigin: false });
+      await withWindowsPlatform(() => {
+        assert.equal(buildGitBranchLabel(cwd), `${basename(cwd)}/worktree-branch`);
+      });
+    });
+  });
 });
 
 describe('readRalphState scope precedence', () => {
@@ -185,6 +241,25 @@ describe('readRalphState scope precedence', () => {
       await writeFile(join(rootStateDir, 'session.json'), JSON.stringify({ session_id: sessionId }));
       await writeFile(join(rootStateDir, 'ralph-state.json'), JSON.stringify({ active: true, iteration: 8, max_iterations: 10 }));
       await writeFile(join(sessionStateDir, 'ralph-state.json'), JSON.stringify({ active: false, current_phase: 'cancelled' }));
+
+      const state = await readRalphState(cwd);
+      assert.equal(state, null);
+    });
+  });
+
+  it('does not treat another session-scoped Ralph state as active for the current session', async () => {
+    await withTempRepo('omx-hud-ralph-other-session-', async (cwd) => {
+      const rootStateDir = join(cwd, '.omx', 'state');
+      const currentSessionId = 'sess-current';
+      const otherSessionId = 'sess-other';
+      await mkdir(join(rootStateDir, 'sessions', currentSessionId), { recursive: true });
+      await mkdir(join(rootStateDir, 'sessions', otherSessionId), { recursive: true });
+      await writeFile(join(rootStateDir, 'session.json'), JSON.stringify({ session_id: currentSessionId }));
+      await writeFile(join(rootStateDir, 'sessions', otherSessionId, 'ralph-state.json'), JSON.stringify({
+        active: true,
+        iteration: 7,
+        max_iterations: 10,
+      }));
 
       const state = await readRalphState(cwd);
       assert.equal(state, null);

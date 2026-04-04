@@ -113,6 +113,13 @@ import { hasStructuredVerificationEvidence } from '../verification/verifier.js';
 import { buildRebalanceDecisions } from './rebalance-policy.js';
 import { readModeState, updateModeState } from '../modes/base.js';
 import {
+  appendTeamCommitHygieneEntries,
+  buildTeamCommitHygieneContext,
+  writeTeamCommitHygieneContext,
+  type TeamCommitHygieneArtifactPaths,
+  type TeamOperationalCommitEntry,
+} from './commit-hygiene.js';
+import {
   assertCleanLeaderWorkspaceForWorkerWorktrees,
   ensureWorktree,
   isGitRepository,
@@ -204,6 +211,10 @@ interface ShutdownOptions {
   force?: boolean;
 }
 
+export interface TeamShutdownSummary {
+  commitHygieneArtifacts: TeamCommitHygieneArtifactPaths | null;
+}
+
 function collectProvisionedShutdownWorktrees(config: TeamConfig): EnsureWorktreeResult[] {
   const seenWorktreePaths = new Set<string>();
   const worktrees: EnsureWorktreeResult[] = [];
@@ -250,6 +261,8 @@ interface WorkerShutdownMergeReport {
   summaryText: string | null;
   mergeOutcome: 'merged' | 'conflict' | 'noop' | 'skipped';
   mergeDetail: string;
+  leaderHeadBefore: string | null;
+  leaderHeadAfter: string | null;
 }
 
 function runCommand(command: string, args: string[], cwd: string): CommandResult {
@@ -380,6 +393,16 @@ function appendIntegrationReport(
   appendFileSync(reportPath, existsSync(reportPath) ? line : `# Integration Report\n\n${line}`);
 }
 
+function resolveWorkerMergeRef(branchResult: CommandResult, workerHead: string): string {
+  const branchRef = branchResult.ok ? branchResult.stdout.trim() : '';
+  if (!branchRef || branchRef === 'HEAD') return workerHead;
+  return branchRef;
+}
+
+function leaderContainsCommit(repoRoot: string, cwd: string, commit: string): boolean {
+  return runGitCommand(repoRoot, ['merge-base', '--is-ancestor', commit, 'HEAD'], cwd).ok;
+}
+
 async function integrateWorkerCommitsIntoLeader(params: {
   teamName: string;
   config: TeamConfig;
@@ -390,6 +413,8 @@ async function integrateWorkerCommitsIntoLeader(params: {
   const next: Record<string, TeamWorkerIntegrationState> = { ...(previous?.integrationByWorker ?? {}) };
   const leaderHeadAtCycleStart = resolveLeaderHead(resolve(config.workers[0]?.worktree_repo_root ?? cwd), cwd);
   const integratedWorkerNames = new Set<string>();
+  const commitHygieneEntries: TeamOperationalCommitEntry[] = [];
+  const artifactCwd = config.leader_cwd ?? cwd;
 
   // ── Phase A: Auto-commit dirty worktrees ──
   for (const worker of config.workers) {
@@ -402,6 +427,16 @@ async function integrateWorkerCommitsIntoLeader(params: {
         worktree_path: resolve(worker.worktree_path),
         summary: `auto-committed dirty worktree for ${worker.name}`,
       }, cwd);
+      commitHygieneEntries.push({
+        recorded_at: new Date().toISOString(),
+        operation: 'auto_checkpoint',
+        worker_name: worker.name,
+        task_id: worker.assigned_tasks[0],
+        status: 'applied',
+        operational_commit: commitHash,
+        worktree_path: resolve(worker.worktree_path),
+        detail: 'Dirty worker worktree checkpointed before runtime integration.',
+      });
     }
   }
 
@@ -435,27 +470,69 @@ async function integrateWorkerCommitsIntoLeader(params: {
     if (workerIsAheadOfLeader) {
       // Worker is cleanly ahead → merge --no-ff -X theirs
       const workerBranch = runGitCommand(repoRoot, ['rev-parse', '--abbrev-ref', 'HEAD'], worktreePath);
-      const branchRef = workerBranch.ok && workerBranch.stdout ? workerBranch.stdout : workerHead;
+      const branchRef = resolveWorkerMergeRef(workerBranch, workerHead);
       const merge = runGitCommand(repoRoot, ['merge', '--no-ff', '-X', 'theirs', '-m', `omx(team): merge ${worker.name}`, branchRef], cwd);
 
       if (merge.ok) {
         const newLeaderHead = resolveLeaderHead(repoRoot, cwd) ?? leaderHead;
-        state.last_integrated_head = workerHead;
-        state.last_leader_head = newLeaderHead;
-        state.status = 'integrated';
-        state.conflict_commit = undefined;
-        state.conflict_files = undefined;
-        state.updated_at = new Date().toISOString();
-        integratedWorkerNames.add(worker.name);
-        await appendIntegrationEvent(teamName, 'worker_merge_applied', worker, {
-          worker_name: worker.name,
-          worker_head: workerHead,
-          leader_head_before: leaderHead,
-          leader_head_after: newLeaderHead,
-          worktree_path: worktreePath,
-          summary: `merged ${worker.name} into leader via --no-ff -X theirs`,
-        }, cwd);
-        await sendIntegrationMessageToLeader(teamName, worker, `INTEGRATED: merged ${worker.name} (${workerHead.slice(0, 12)}) into leader HEAD ${newLeaderHead.slice(0, 12)} via merge --no-ff.`, cwd);
+        const workerIntegrated = leaderContainsCommit(repoRoot, cwd, workerHead);
+        const leaderAdvanced = newLeaderHead !== leaderHead;
+        if (workerIntegrated && leaderAdvanced) {
+          state.last_integrated_head = workerHead;
+          state.last_leader_head = newLeaderHead;
+          state.status = 'integrated';
+          state.conflict_commit = undefined;
+          state.conflict_files = undefined;
+          state.updated_at = new Date().toISOString();
+          integratedWorkerNames.add(worker.name);
+          await appendIntegrationEvent(teamName, 'worker_merge_applied', worker, {
+            worker_name: worker.name,
+            worker_head: workerHead,
+            leader_head_before: leaderHead,
+            leader_head_after: newLeaderHead,
+            worktree_path: worktreePath,
+            summary: `merged ${worker.name} into leader via --no-ff -X theirs`,
+          }, cwd);
+          await sendIntegrationMessageToLeader(teamName, worker, `INTEGRATED: merged ${worker.name} (${workerHead.slice(0, 12)}) into leader HEAD ${newLeaderHead.slice(0, 12)} via merge --no-ff.`, cwd);
+          commitHygieneEntries.push({
+            recorded_at: new Date().toISOString(),
+            operation: 'integration_merge',
+            worker_name: worker.name,
+            task_id: worker.assigned_tasks[0],
+            status: 'applied',
+            operational_commit: newLeaderHead,
+            source_commit: workerHead,
+            leader_head_before: leaderHead,
+            leader_head_after: newLeaderHead,
+            worktree_path: worktreePath,
+            detail: 'Leader created a runtime merge commit to integrate worker history.',
+          });
+        } else {
+          state.last_leader_head = newLeaderHead;
+          state.status = 'idle';
+          state.updated_at = new Date().toISOString();
+          appendIntegrationReport(teamName, {
+            workerName: worker.name,
+            operation: 'merge',
+            strategy: '-X theirs',
+            files: [],
+            detail: `merge reported success but leader HEAD did not advance cleanly (leader_before=${leaderHead.slice(0, 12)}, leader_after=${newLeaderHead.slice(0, 12)}, worker_integrated=${workerIntegrated}, merge_ref=${branchRef}).`,
+          }, cwd);
+          await sendIntegrationMessageToLeader(teamName, worker, `INTEGRATION NO-OP: merge for ${worker.name} using ${branchRef.slice(0, 12)} reported success but leader HEAD stayed ${newLeaderHead.slice(0, 12)}. Inspect ${worktreePath}.`, cwd);
+          commitHygieneEntries.push({
+            recorded_at: new Date().toISOString(),
+            operation: 'integration_merge',
+            worker_name: worker.name,
+            task_id: worker.assigned_tasks[0],
+            status: 'skipped',
+            operational_commit: newLeaderHead,
+            source_commit: workerHead,
+            leader_head_before: leaderHead,
+            leader_head_after: newLeaderHead,
+            worktree_path: worktreePath,
+            detail: 'Merge command reported success but leader HEAD did not advance or contain the worker commit; runtime refused to report false integration.',
+          });
+        }
       } else {
         // Merge failed even with -X theirs (e.g. binary conflict) — abort and log
         const conflictFiles = listConflictFiles(repoRoot, cwd);
@@ -550,6 +627,19 @@ async function integrateWorkerCommitsIntoLeader(params: {
           summary: `cherry-picked ${commit.slice(0, 12)} from ${worker.name} with -X theirs`,
         }, cwd);
         await sendIntegrationMessageToLeader(teamName, worker, `INTEGRATED: cherry-picked ${commit.slice(0, 12)} from ${worker.name} into leader HEAD ${newLeaderHead.slice(0, 12)} (-X theirs).`, cwd);
+        commitHygieneEntries.push({
+          recorded_at: new Date().toISOString(),
+          operation: 'integration_cherry_pick',
+          worker_name: worker.name,
+          task_id: worker.assigned_tasks[0],
+          status: 'applied',
+          operational_commit: newLeaderHead,
+          source_commit: commit,
+          leader_head_before: leaderHead,
+          leader_head_after: newLeaderHead,
+          worktree_path: worktreePath,
+          detail: 'Leader created a runtime cherry-pick commit while integrating diverged worker history.',
+        });
       }
 
       if (allPicked) {
@@ -599,8 +689,10 @@ async function integrateWorkerCommitsIntoLeader(params: {
       }
 
       // Rebase with -X ours (in rebase context, "ours" = upstream = leader wins)
+      const workerHeadBeforeRebase = resolveWorkerHead(worktreePath);
       const rebase = runGitCommand(repoRoot, ['rebase', '-X', 'ours', newLeaderHead], worktreePath);
       if (rebase.ok) {
+        const workerHeadAfterRebase = resolveWorkerHead(worktreePath);
         const state = next[worker.name] ?? {};
         state.last_rebased_leader_head = newLeaderHead;
         state.status = 'idle';
@@ -614,6 +706,19 @@ async function integrateWorkerCommitsIntoLeader(params: {
           worktree_path: worktreePath,
           summary: `cross-rebased ${worker.name} onto ${newLeaderHead.slice(0, 12)} (-X ours)`,
         }, cwd);
+        commitHygieneEntries.push({
+          recorded_at: new Date().toISOString(),
+          operation: 'cross_rebase',
+          worker_name: worker.name,
+          task_id: worker.assigned_tasks[0],
+          status: 'applied',
+          operational_commit: workerHeadAfterRebase,
+          leader_head_after: newLeaderHead,
+          worker_head_before: workerHeadBeforeRebase,
+          worker_head_after: workerHeadAfterRebase,
+          worktree_path: worktreePath,
+          detail: 'Runtime rebase rewrote worker history onto the updated leader head.',
+        });
       } else {
         // Rebase failed — abort to restore worktree, log for retry next cycle
         const conflictFiles = listConflictFiles(repoRoot, worktreePath);
@@ -638,6 +743,10 @@ async function integrateWorkerCommitsIntoLeader(params: {
     }
   }
 
+  if (commitHygieneEntries.length > 0) {
+    await appendTeamCommitHygieneEntries(teamName, commitHygieneEntries, artifactCwd)
+  }
+
   return next;
 }
 
@@ -651,6 +760,8 @@ function renderWorktreeMergeReport(report: WorkerShutdownMergeReport): string {
     `- synthetic_commit: ${report.syntheticCommit ?? 'none'}`,
     `- merge_outcome: ${report.mergeOutcome}`,
     `- merge_detail: ${report.mergeDetail}`,
+    `- leader_head_before: ${report.leaderHeadBefore ?? 'none'}`,
+    `- leader_head_after: ${report.leaderHeadAfter ?? 'none'}`,
     '',
     '## Summary',
     report.summaryText ?? 'sparkshell summary unavailable; using raw diff fallback.',
@@ -689,6 +800,8 @@ async function prepareShutdownMergeReport(
         summaryText: null,
         mergeOutcome: 'skipped',
         mergeDetail: addResult.stderr || 'git add -A failed',
+        leaderHeadBefore: resolveLeaderHead(repoRoot, leaderCwd),
+        leaderHeadAfter: resolveLeaderHead(repoRoot, leaderCwd),
       };
     }
     const commitResult = runGitCommand(
@@ -710,6 +823,8 @@ async function prepareShutdownMergeReport(
         summaryText: null,
         mergeOutcome: 'skipped',
         mergeDetail: commitResult.stderr || 'git commit failed',
+        leaderHeadBefore: resolveLeaderHead(repoRoot, leaderCwd),
+        leaderHeadAfter: resolveLeaderHead(repoRoot, leaderCwd),
       };
     }
   }
@@ -719,9 +834,11 @@ async function prepareShutdownMergeReport(
   const diffText = getWorktreeDiffText(worktreePath);
   const summaryText = summarizeWorktreeDiffWithSparkShell(worktreePath);
   const reportPath = join(worktreePath, '.omx', 'diff.md');
+  const leaderHeadBefore = resolveLeaderHead(repoRoot, leaderCwd);
 
   let mergeOutcome: WorkerShutdownMergeReport['mergeOutcome'] = 'skipped';
   let mergeDetail = 'worktree merge skipped';
+  let leaderHeadAfter = leaderHeadBefore;
   if (sourceRef) {
     const alreadyMerged = runGitCommand(repoRoot, ['merge-base', '--is-ancestor', sourceRef, 'HEAD'], leaderCwd);
     if (alreadyMerged.ok) {
@@ -732,10 +849,12 @@ async function prepareShutdownMergeReport(
       if (mergeResult.ok) {
         mergeOutcome = 'merged';
         mergeDetail = mergeResult.stdout || 'merged successfully';
+        leaderHeadAfter = resolveLeaderHead(repoRoot, leaderCwd) ?? leaderHeadBefore;
       } else {
         mergeOutcome = 'conflict';
         mergeDetail = mergeResult.stderr || mergeResult.stdout || 'merge failed';
         runGitCommand(repoRoot, ['merge', '--abort'], leaderCwd);
+        leaderHeadAfter = resolveLeaderHead(repoRoot, leaderCwd) ?? leaderHeadBefore;
       }
     }
   }
@@ -750,6 +869,8 @@ async function prepareShutdownMergeReport(
     summaryText,
     mergeOutcome,
     mergeDetail,
+    leaderHeadBefore,
+    leaderHeadAfter,
   };
 
   await mkdir(join(worktreePath, '.omx'), { recursive: true });
@@ -758,11 +879,13 @@ async function prepareShutdownMergeReport(
   return report;
 }
 
-async function prepareWorkerWorktreeShutdownReports(config: TeamConfig, leaderCwd: string): Promise<void> {
+async function prepareWorkerWorktreeShutdownReports(config: TeamConfig, leaderCwd: string): Promise<WorkerShutdownMergeReport[]> {
+  const reports: WorkerShutdownMergeReport[] = []
   for (const worker of config.workers) {
     if (!worker.worktree_path || !worker.worktree_repo_root) continue;
     try {
-      await prepareShutdownMergeReport(worker, leaderCwd);
+      const report = await prepareShutdownMergeReport(worker, leaderCwd);
+      if (report) reports.push(report);
     } catch (error) {
       const worktreePath = resolve(worker.worktree_path);
       const reportPath = join(worktreePath, '.omx', 'diff.md');
@@ -780,6 +903,7 @@ async function prepareWorkerWorktreeShutdownReports(config: TeamConfig, leaderCw
       process.stdout.write(`${fallback}\n`);
     }
   }
+  return reports
 }
 
 export interface TeamStartOptions {
@@ -834,6 +958,7 @@ const STARTUP_EVIDENCE_POLL_MS = 100;
 interface PromptWorkerHandle {
   child: ChildProcessByStdio<Writable, null, null>;
   pid: number;
+  processGroupId: number | null;
 }
 
 const promptWorkerRegistry = new Map<string, Map<string, PromptWorkerHandle>>();
@@ -991,12 +1116,20 @@ function registerPromptWorkerHandle(
   }
   const processPid = pid as number;
   const existingTeamHandles = promptWorkerRegistry.get(teamName) ?? new Map<string, PromptWorkerHandle>();
-  existingTeamHandles.set(workerName, { child, pid: processPid });
+  existingTeamHandles.set(workerName, {
+    child,
+    pid: processPid,
+    processGroupId: process.platform !== 'win32' ? processPid : null,
+  });
   promptWorkerRegistry.set(teamName, existingTeamHandles);
 
   child.on('exit', () => {
     const teamHandles = promptWorkerRegistry.get(teamName);
     if (!teamHandles) return;
+    const handle = teamHandles.get(workerName);
+    if (handle?.processGroupId && isProcessGroupAlive(handle.processGroupId)) {
+      return;
+    }
     teamHandles.delete(workerName);
     if (teamHandles.size === 0) promptWorkerRegistry.delete(teamName);
   });
@@ -1025,14 +1158,17 @@ function isPidAlive(pid: number): boolean {
   }
 }
 
-async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> {
-  if (!isPidAlive(pid)) return true;
-  const deadline = Date.now() + Math.max(0, timeoutMs);
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, PROMPT_WORKER_EXIT_POLL_MS));
-    if (!isPidAlive(pid)) return true;
+function isProcessGroupAlive(processGroupId: number): boolean {
+  if (process.platform === 'win32') return false;
+  if (!Number.isFinite(processGroupId) || processGroupId <= 0) return false;
+  try {
+    process.kill(-processGroupId, 0);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ESRCH') return false;
+    process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+    return false;
   }
-  return !isPidAlive(pid);
 }
 
 interface PromptWorkerTeardownResult {
@@ -1040,6 +1176,186 @@ interface PromptWorkerTeardownResult {
   forcedKill: boolean;
   pid: number | null;
   error?: string;
+}
+
+interface ProcessTreeEntry {
+  pid: number;
+  ppid: number;
+}
+
+function listProcessTreeEntries(): ProcessTreeEntry[] {
+  if (process.platform === 'win32') return [];
+  const result = spawnSync('ps', ['axww', '-o', 'pid=,ppid='], {
+    encoding: 'utf-8',
+    windowsHide: true,
+  });
+  if (result.status !== 0 || typeof result.stdout !== 'string') return [];
+
+  return result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^(\d+)\s+(\d+)$/);
+      if (!match) return null;
+      const pid = Number.parseInt(match[1], 10);
+      const ppid = Number.parseInt(match[2], 10);
+      if (!Number.isFinite(pid) || pid <= 0) return null;
+      if (!Number.isFinite(ppid) || ppid < 0) return null;
+      return { pid, ppid } satisfies ProcessTreeEntry;
+    })
+    .filter((entry): entry is ProcessTreeEntry => entry !== null);
+}
+
+function collectProcessTreePids(rootPid: number): number[] {
+  if (!Number.isFinite(rootPid) || rootPid <= 0) return [];
+
+  const childrenByPid = new Map<number, number[]>();
+  for (const entry of listProcessTreeEntries()) {
+    const siblings = childrenByPid.get(entry.ppid) ?? [];
+    siblings.push(entry.pid);
+    childrenByPid.set(entry.ppid, siblings);
+  }
+
+  const ordered: number[] = [];
+  const stack = [rootPid];
+  const seen = new Set<number>();
+  while (stack.length > 0) {
+    const pid = stack.pop()!;
+    if (seen.has(pid)) continue;
+    seen.add(pid);
+    ordered.push(pid);
+    for (const childPid of childrenByPid.get(pid) ?? []) {
+      if (!seen.has(childPid)) stack.push(childPid);
+    }
+  }
+
+  return ordered.reverse();
+}
+
+async function waitForTrackedPidsExit(pids: readonly number[], timeoutMs: number): Promise<boolean> {
+  const tracked = [...new Set(pids.filter((pid) => Number.isFinite(pid) && pid > 0))];
+  if (tracked.length === 0) return true;
+
+  const deadline = Date.now() + Math.max(0, timeoutMs);
+  while (Date.now() < deadline) {
+    if (tracked.every((pid) => !isPidAlive(pid))) return true;
+    await new Promise((resolve) => setTimeout(resolve, PROMPT_WORKER_EXIT_POLL_MS));
+  }
+
+  return tracked.every((pid) => !isPidAlive(pid));
+}
+
+async function terminateTrackedProcessTree(
+  rootPid: number,
+  processGroupId: number | null = null,
+  graceMs: number = PROMPT_WORKER_SIGTERM_WAIT_MS,
+  killWaitMs: number = PROMPT_WORKER_SIGKILL_WAIT_MS,
+): Promise<{ terminated: boolean; forcedKill: boolean; trackedPids: number[] }> {
+  if (processGroupId && process.platform !== 'win32') {
+    const trackedPids = collectProcessTreePids(rootPid);
+    try {
+      process.kill(-processGroupId, 'SIGTERM');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+        process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+      }
+    }
+    for (const pid of trackedPids) {
+      if (pid === rootPid) continue;
+      try {
+        process.kill(pid, 'SIGTERM');
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+          process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+        }
+      }
+    }
+
+    const groupDeadline = Date.now() + Math.max(0, graceMs);
+    while (Date.now() < groupDeadline) {
+      const groupAlive = isProcessGroupAlive(processGroupId);
+      const descendantsAlive = trackedPids.some((pid) => isPidAlive(pid));
+      if (!groupAlive && !descendantsAlive) {
+        return { terminated: true, forcedKill: false, trackedPids };
+      }
+      await new Promise((resolve) => setTimeout(resolve, PROMPT_WORKER_EXIT_POLL_MS));
+    }
+
+    try {
+      process.kill(-processGroupId, 'SIGKILL');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+        process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+      }
+    }
+    for (const pid of trackedPids) {
+      if (!isPidAlive(pid)) continue;
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+          process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+        }
+      }
+    }
+
+    const killDeadline = Date.now() + Math.max(0, killWaitMs);
+    while (Date.now() < killDeadline) {
+      const groupAlive = isProcessGroupAlive(processGroupId);
+      const descendantsAlive = trackedPids.some((pid) => isPidAlive(pid));
+      if (!groupAlive && !descendantsAlive) {
+        return { terminated: true, forcedKill: true, trackedPids };
+      }
+      await new Promise((resolve) => setTimeout(resolve, PROMPT_WORKER_EXIT_POLL_MS));
+    }
+
+    return {
+      terminated: !isProcessGroupAlive(processGroupId) && trackedPids.every((pid) => !isPidAlive(pid)),
+      forcedKill: true,
+      trackedPids,
+    };
+  }
+
+  const trackedPids = collectProcessTreePids(rootPid);
+  if (trackedPids.length === 0) {
+    return {
+      terminated: !isPidAlive(rootPid),
+      forcedKill: false,
+      trackedPids: [],
+    };
+  }
+
+  for (const pid of trackedPids) {
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+        process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+      }
+    }
+  }
+
+  if (await waitForTrackedPidsExit(trackedPids, graceMs)) {
+    return { terminated: true, forcedKill: false, trackedPids };
+  }
+
+  for (const pid of trackedPids) {
+    if (!isPidAlive(pid)) continue;
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+        process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+      }
+    }
+  }
+
+  return {
+    terminated: await waitForTrackedPidsExit(trackedPids, killWaitMs),
+    forcedKill: true,
+    trackedPids,
+  };
 }
 
 async function teardownPromptWorker(
@@ -1051,32 +1367,21 @@ async function teardownPromptWorker(
 ): Promise<PromptWorkerTeardownResult> {
   const handle = getPromptWorkerHandle(teamName, workerName);
   const handlePid = handle?.pid;
+  const processGroupId = handle?.processGroupId ?? null;
   const pid = (typeof handlePid === 'number' && Number.isFinite(handlePid))
     ? handlePid
     : (Number.isFinite(fallbackPid) && (fallbackPid ?? 0) > 0 ? (fallbackPid as number) : null);
 
-  if (pid === null) {
+  if (pid === null && processGroupId === null) {
     removePromptWorkerHandle(teamName, workerName);
     return { terminated: true, forcedKill: false, pid: null };
   }
 
-  try {
-    if (handle && handle.child.exitCode === null && !handle.child.killed) {
-      handle.child.kill('SIGTERM');
-    } else {
-      process.kill(pid, 'SIGTERM');
-    }
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
-      process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
-    }
-    // Best effort.
-  }
-
-  const exitedOnTerm = await waitForPidExit(pid, PROMPT_WORKER_SIGTERM_WAIT_MS);
-  if (exitedOnTerm) {
+  const teardown = await terminateTrackedProcessTree(pid ?? 0, processGroupId);
+  const processGone = processGroupId ? !isProcessGroupAlive(processGroupId) : !isPidAlive(pid!);
+  if (teardown.terminated && processGone) {
     removePromptWorkerHandle(teamName, workerName);
-    return { terminated: true, forcedKill: false, pid };
+    return { terminated: true, forcedKill: teardown.forcedKill, pid };
   }
 
   await appendTeamEvent(
@@ -1088,22 +1393,7 @@ async function teardownPromptWorker(
     },
     cwd,
   ).catch(() => {});
-
-  try {
-    if (handle && handle.child.exitCode === null) {
-      handle.child.kill('SIGKILL');
-    } else {
-      process.kill(pid, 'SIGKILL');
-    }
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
-      process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
-    }
-    // Best effort.
-  }
-
-  const exitedOnKill = await waitForPidExit(pid, PROMPT_WORKER_SIGKILL_WAIT_MS);
-  if (!exitedOnKill) {
+  if (!teardown.terminated) {
     await appendTeamEvent(
       teamName,
       {
@@ -1115,19 +1405,21 @@ async function teardownPromptWorker(
     ).catch(() => {});
     return {
       terminated: false,
-      forcedKill: true,
+      forcedKill: teardown.forcedKill,
       pid,
       error: 'still_alive_after_sigkill',
     };
   }
 
   removePromptWorkerHandle(teamName, workerName);
-  return { terminated: true, forcedKill: true, pid };
+  return { terminated: true, forcedKill: teardown.forcedKill, pid };
 }
 
 function isPromptWorkerAlive(config: TeamConfig, worker: WorkerInfo): boolean {
   const handle = getPromptWorkerHandle(config.name, worker.name);
   if (handle?.child.exitCode === null && !handle.child.killed) return true;
+  if (handle?.processGroupId && isProcessGroupAlive(handle.processGroupId)) return true;
+  if (process.platform !== 'win32' && isProcessGroupAlive(worker.pid as number)) return true;
   return isPidAlive(worker.pid as number);
 }
 
@@ -1159,6 +1451,7 @@ function spawnPromptWorker(
     processSpec.args,
     {
       cwd: workerCwd,
+      detached: process.platform !== 'win32',
       env: { ...process.env, ...processSpec.env },
       stdio: ['pipe', 'ignore', 'ignore'],
     },
@@ -1688,7 +1981,11 @@ export async function startTeam(
 
       // In split-pane topology, we must not kill the entire tmux session; kill only created panes.
       if (sessionName.includes(':')) {
-        for (const paneId of createdWorkerPaneIds) {
+        for (const [index, paneId] of createdWorkerPaneIds.entries()) {
+          const panePid = getWorkerPanePid(sessionName, index + 1, paneId);
+          if (panePid) {
+            await terminateTrackedProcessTree(panePid);
+          }
           try {
             await killWorkerByPaneIdAsync(paneId, createdLeaderPaneId);
           } catch (err) {
@@ -2152,7 +2449,7 @@ export async function reassignTask(
 /**
  * Graceful shutdown: send shutdown inbox to all workers, wait, force kill, cleanup.
  */
-export async function shutdownTeam(teamName: string, cwd: string, options: ShutdownOptions = {}): Promise<void> {
+export async function shutdownTeam(teamName: string, cwd: string, options: ShutdownOptions = {}): Promise<TeamShutdownSummary> {
   const force = options.force === true;
   const sanitized = sanitizeTeamName(teamName);
   const config = await readTeamConfig(sanitized, cwd);
@@ -2165,7 +2462,7 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
     }
     await cleanupTeamState(sanitized, cwd);
     restoreTeamModelInstructionsFile(sanitized);
-    return;
+    return { commitHygieneArtifacts: null };
   }
   const manifest = await readTeamManifestV2(sanitized, cwd);
   const governance = resolveGovernancePolicy(
@@ -2293,6 +2590,13 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
   const leaderPaneId = config.leader_pane_id;
   const hudPaneId = config.hud_pane_id;
   if (config.worker_launch_mode === 'interactive') {
+    const workerPanePids = config.workers
+      .map((w) => getWorkerPanePid(sessionName, w.index, w.pane_id))
+      .filter((pid): pid is number => typeof pid === 'number' && Number.isFinite(pid) && pid > 0);
+    for (const panePid of workerPanePids) {
+      await terminateTrackedProcessTree(panePid);
+    }
+
     let resizeHookWarning: string | null = null;
     if (config.resize_hook_name && config.resize_hook_target) {
       const resizeHookName = config.resize_hook_name;
@@ -2355,7 +2659,53 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
     }
   }
 
-  await prepareWorkerWorktreeShutdownReports(config, cwd);
+  const shutdownReports = await prepareWorkerWorktreeShutdownReports(config, cwd);
+
+  const commitHygieneEntries: TeamOperationalCommitEntry[] = [];
+  for (const report of shutdownReports) {
+    const worker = config.workers.find((entry) => entry.name === report.workerName);
+    if (report.syntheticCommit) {
+      commitHygieneEntries.push({
+        recorded_at: new Date().toISOString(),
+        operation: 'shutdown_checkpoint',
+        worker_name: report.workerName,
+        task_id: worker?.assigned_tasks[0],
+        status: 'applied',
+        operational_commit: report.syntheticCommit,
+        source_commit: report.sourceRef,
+        worktree_path: report.worktreePath,
+        report_path: report.reportPath,
+        detail: 'Runtime created a shutdown checkpoint commit to preserve worker worktree changes.',
+      });
+    }
+
+    if (report.sourceRef && report.mergeOutcome !== 'skipped') {
+      commitHygieneEntries.push({
+        recorded_at: new Date().toISOString(),
+        operation: 'shutdown_merge',
+        worker_name: report.workerName,
+        task_id: worker?.assigned_tasks[0],
+        status: report.mergeOutcome === 'merged' ? 'applied' : report.mergeOutcome,
+        operational_commit: report.mergeOutcome === 'merged' ? report.leaderHeadAfter : null,
+        source_commit: report.sourceRef,
+        leader_head_before: report.leaderHeadBefore,
+        leader_head_after: report.leaderHeadAfter,
+        worktree_path: report.worktreePath,
+        report_path: report.reportPath,
+        detail: report.mergeDetail,
+      });
+    }
+  }
+
+  const artifactCwd = config.leader_cwd ?? cwd;
+  const ledger = await appendTeamCommitHygieneEntries(sanitized, commitHygieneEntries, artifactCwd)
+  const taskView = await listTasks(sanitized, cwd).catch(() => [])
+  const commitHygieneContext = buildTeamCommitHygieneContext({
+    teamName: sanitized,
+    tasks: taskView,
+    ledger,
+  })
+  const commitHygieneArtifacts = await writeTeamCommitHygieneContext(sanitized, commitHygieneContext, artifactCwd)
 
   // 5. Remove worker worktree-root instructions and team-scoped fallback instructions.
   for (const worker of config.workers) {
@@ -2400,6 +2750,8 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
   if (cleanupErrors.length > 0) {
     throw new Error(cleanupErrors.join(' | '));
   }
+
+  return { commitHygieneArtifacts }
 }
 
 /**
@@ -3118,7 +3470,7 @@ export async function sendWorkerMessage(
   toWorker: string,
   body: string,
   cwd: string,
-): Promise<void> {
+): Promise<DispatchOutcome> {
   const sanitized = sanitizeTeamName(teamName);
   const config = await readTeamConfig(sanitized, cwd);
   if (!config) throw new Error(`Team ${sanitized} not found`);
@@ -3183,7 +3535,7 @@ export async function sendWorkerMessage(
       });
     }
     if (!finalOutcome.ok) throw new Error(`mailbox_notify_failed:${finalOutcome.reason}`);
-    return;
+    return finalOutcome;
   }
 
   const recipient = config.workers.find((w) => w.name === toWorker);
@@ -3235,6 +3587,7 @@ export async function sendWorkerMessage(
     });
   }
   if (!finalOutcome.ok) throw new Error(`mailbox_notify_failed:${finalOutcome.reason}`);
+  return finalOutcome;
 }
 
 export async function broadcastWorkerMessage(

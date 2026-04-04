@@ -8,6 +8,7 @@ import {
   detectPrimaryKeyword,
   recordSkillActivation,
   SKILL_ACTIVE_STATE_FILE,
+  DEEP_INTERVIEW_STATE_FILE,
   DEEP_INTERVIEW_BLOCKED_APPROVAL_INPUTS,
   DEEP_INTERVIEW_INPUT_LOCK_MESSAGE,
 } from '../keyword-detector.js';
@@ -256,6 +257,17 @@ describe('keyword detector skill-active-state lifecycle', () => {
       assert.deepEqual(result.input_lock?.blocked_inputs, [...DEEP_INTERVIEW_BLOCKED_APPROVAL_INPUTS]);
       assert.equal(result.input_lock?.blocked_inputs.includes('next i should'), true);
       assert.equal(result.input_lock?.message, DEEP_INTERVIEW_INPUT_LOCK_MESSAGE);
+
+      const modeState = JSON.parse(await readFile(join(stateDir, DEEP_INTERVIEW_STATE_FILE), 'utf-8')) as {
+        mode: string;
+        active: boolean;
+        current_phase: string;
+        input_lock?: { active: boolean };
+      };
+      assert.equal(modeState.mode, 'deep-interview');
+      assert.equal(modeState.active, true);
+      assert.equal(modeState.current_phase, 'intent-first');
+      assert.equal(modeState.input_lock?.active, true);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
@@ -284,6 +296,18 @@ describe('keyword detector skill-active-state lifecycle', () => {
       assert.equal(result.phase, 'completing');
       assert.equal(result.input_lock?.active, false);
       assert.equal(result.input_lock?.released_at, '2026-02-25T00:05:00.000Z');
+
+      const modeState = JSON.parse(await readFile(join(stateDir, DEEP_INTERVIEW_STATE_FILE), 'utf-8')) as {
+        active: boolean;
+        current_phase: string;
+        completed_at?: string;
+        input_lock?: { active: boolean; released_at?: string };
+      };
+      assert.equal(modeState.active, false);
+      assert.equal(modeState.current_phase, 'completing');
+      assert.equal(modeState.completed_at, '2026-02-25T00:05:00.000Z');
+      assert.equal(modeState.input_lock?.active, false);
+      assert.equal(modeState.input_lock?.released_at, '2026-02-25T00:05:00.000Z');
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
