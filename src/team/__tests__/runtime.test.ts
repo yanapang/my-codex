@@ -2138,6 +2138,86 @@ process.on('SIGTERM', () => process.exit(0));
     }
   });
 
+  it('monitorTeam integrates detached worker worktree by commit sha instead of merging leader HEAD into itself', async () => {
+    const repo = await initRepo();
+    let workerPath = '';
+    try {
+      workerPath = await addWorktree(repo, 'wk1-detached-merge-branch', 'omx-runtime-wk1-detached-merge-');
+
+      await writeFile(join(workerPath, 'detached-feature.txt'), 'detached worker feature\n', 'utf-8');
+      execFileSync('git', ['add', 'detached-feature.txt'], { cwd: workerPath, stdio: 'ignore' });
+      execFileSync('git', ['commit', '-m', 'detached worker feature'], { cwd: workerPath, stdio: 'ignore' });
+      execFileSync('git', ['checkout', '--detach', 'HEAD'], { cwd: workerPath, stdio: 'ignore' });
+
+      const workerHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: workerPath, encoding: 'utf-8' }).trim();
+      const detachedName = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: workerPath, encoding: 'utf-8' }).trim();
+      assert.equal(detachedName, 'HEAD');
+
+      const leaderHeadBefore = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf-8' }).trim();
+
+      await initTeamState('team-merge-detached', 'merge detached head test', 'executor', 1, repo);
+      const cfg = await readTeamConfig('team-merge-detached', repo);
+      assert.ok(cfg);
+      if (!cfg) throw new Error('missing config');
+      cfg.leader_pane_id = '';
+      cfg.workers[0] = {
+        ...cfg.workers[0],
+        assigned_tasks: ['1'],
+        worktree_repo_root: repo,
+        worktree_path: workerPath,
+        worktree_branch: undefined,
+        worktree_detached: true,
+        worktree_created: false,
+      };
+      await saveTeamConfig(cfg, repo);
+
+      await monitorTeam('team-merge-detached', repo);
+
+      const leaderHeadAfter = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf-8' }).trim();
+      assert.notEqual(leaderHeadAfter, leaderHeadBefore, 'leader HEAD should advance for detached worker integration');
+      assert.equal(await readFile(join(repo, 'detached-feature.txt'), 'utf-8'), 'detached worker feature\n');
+
+      const commitObj = execFileSync('git', ['cat-file', '-p', leaderHeadAfter], { cwd: repo, encoding: 'utf-8' });
+      const parentCount = commitObj.split('\n').filter((l: string) => l.startsWith('parent ')).length;
+      assert.equal(parentCount, 2, 'detached worker integration should still produce a merge commit');
+
+      const workerMerged = execFileSync('git', ['merge-base', '--is-ancestor', workerHead, 'HEAD'], { cwd: repo, encoding: 'utf-8' });
+      assert.equal(workerMerged.length >= 0, true);
+
+      const leaderMailbox = await listMailboxMessages('team-merge-detached', 'leader-fixed', repo);
+      assert.equal(
+        leaderMailbox.some((message) =>
+          message.body.includes(`INTEGRATED: merged worker-1 (${workerHead.slice(0, 12)})`)
+          && message.body.includes(leaderHeadAfter.slice(0, 12))),
+        true,
+      );
+
+      const ledgerPath = join(repo, '.omx', 'reports', 'team-commit-hygiene', 'team-merge-detached.ledger.json');
+      const ledger = JSON.parse(await readFile(ledgerPath, 'utf-8')) as {
+        entries: Array<{
+          operation: string;
+          status: string;
+          source_commit?: string;
+          leader_head_before?: string;
+          leader_head_after?: string;
+        }>;
+      };
+      assert.equal(
+        ledger.entries.some((entry) =>
+          entry.operation === 'integration_merge'
+          && entry.status === 'applied'
+          && entry.source_commit === workerHead
+          && entry.leader_head_before !== entry.leader_head_after),
+        true,
+      );
+    } finally {
+      if (workerPath) {
+        await rm(workerPath, { recursive: true, force: true });
+      }
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
   it('monitorTeam uses cherry-pick for diverged worker (hybrid cherry-pick path)', async () => {
     const repo = await initRepo();
     let workerPath = '';

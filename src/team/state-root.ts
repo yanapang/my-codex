@@ -1,9 +1,16 @@
-import { join, resolve } from 'path';
+import { resolve } from 'path';
+import { omxStateDir } from '../utils/paths.js';
 
 /**
  * Resolve the canonical OMX team state root for a leader working directory.
  */
-export function resolveCanonicalTeamStateRoot(leaderCwd: string): string {
-  return resolve(join(leaderCwd, '.omx', 'state'));
+export function resolveCanonicalTeamStateRoot(
+  leaderCwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const explicit = env.OMX_TEAM_STATE_ROOT;
+  if (typeof explicit === 'string' && explicit.trim() !== '') {
+    return resolve(leaderCwd, explicit.trim());
+  }
+  return resolve(omxStateDir(leaderCwd));
 }
-

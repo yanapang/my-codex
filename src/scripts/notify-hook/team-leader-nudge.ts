@@ -770,7 +770,12 @@ export async function maybeNudgeTeamLeader({
       continue;
     }
 
-    const paneGuard = await evaluatePaneInjectionReadiness(tmuxTarget, { skipIfScrolling: true });
+    const paneGuard = await evaluatePaneInjectionReadiness(tmuxTarget, {
+      skipIfScrolling: true,
+      requireRunningAgent: true,
+      requireReady: false,
+      requireIdle: false,
+    });
     if (!paneGuard.ok) {
       const deferredReason = paneGuard.reason === 'pane_running_shell'
         ? LEADER_PANE_SHELL_NO_INJECTION_REASON
