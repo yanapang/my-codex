@@ -1497,16 +1497,16 @@ function buildDetachedSessionLeaderCommand(
   sessionName: string,
   codexCmd: string,
 ): string {
-  const cleanupTrap = [
+  const wrapped = [
+    buildTmuxExtendedKeysAcquireShellSnippet(cwd),
+    "omx_detached_session_cleanup() {",
     "status=$?;",
     "trap - 0 INT TERM HUP;",
     buildTmuxExtendedKeysReleaseShellSnippet(cwd),
     `tmux kill-session -t "${escapeShellDoubleQuotedValue(sessionName)}" >/dev/null 2>&1 || true;`,
     "exit $status;",
-  ].join(" ");
-  const wrapped = [
-    buildTmuxExtendedKeysAcquireShellSnippet(cwd),
-    `trap '${cleanupTrap}' 0 INT TERM HUP;`,
+    "};",
+    "trap omx_detached_session_cleanup 0 INT TERM HUP;",
     codexCmd,
   ].join(" ");
   return `/bin/sh -lc ${quoteShellArg(wrapped)}`;
