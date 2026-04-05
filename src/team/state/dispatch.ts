@@ -1,9 +1,13 @@
 import { randomUUID } from 'crypto';
 import { getDefaultBridge, isBridgeEnabled, resolveBridgeStateDir, type DispatchRecord, type RuntimeCommand } from '../../runtime/bridge.js';
 import { appendTeamDeliveryLogForCwd } from '../delivery-log.js';
+import {
+  canTransitionTeamDispatchRequestStatus,
+  isTeamDispatchRequestStatus,
+  type TeamDispatchRequestStatus,
+} from '../contracts.js';
 
 export type TeamDispatchRequestKind = 'inbox' | 'mailbox' | 'nudge';
-export type TeamDispatchRequestStatus = 'pending' | 'notified' | 'delivered' | 'failed';
 export type TeamDispatchTransportPreference = 'hook_preferred_with_fallback' | 'transport_direct' | 'prompt_stdin';
 
 export interface TeamDispatchRequest {
@@ -54,8 +58,32 @@ function isDispatchKind(value: unknown): value is TeamDispatchRequestKind {
   return value === 'inbox' || value === 'mailbox' || value === 'nudge';
 }
 
-function isDispatchStatus(value: unknown): value is TeamDispatchRequestStatus {
-  return value === 'pending' || value === 'notified' || value === 'delivered' || value === 'failed';
+function sanitizeDispatchRequestForStatus(record: TeamDispatchRequest): TeamDispatchRequest {
+  if (record.status === 'pending') {
+    return {
+      ...record,
+      notified_at: undefined,
+      delivered_at: undefined,
+      failed_at: undefined,
+    };
+  }
+  if (record.status === 'notified') {
+    return {
+      ...record,
+      delivered_at: undefined,
+      failed_at: undefined,
+    };
+  }
+  if (record.status === 'delivered') {
+    return {
+      ...record,
+      failed_at: undefined,
+    };
+  }
+  return {
+    ...record,
+    delivered_at: undefined,
+  };
 }
 
 export function normalizeDispatchRequest(
@@ -67,8 +95,8 @@ export function normalizeDispatchRequest(
   if (typeof raw.to_worker !== 'string' || raw.to_worker.trim() === '') return null;
   if (typeof raw.trigger_message !== 'string' || raw.trigger_message.trim() === '') return null;
 
-  const status = isDispatchStatus(raw.status) ? raw.status : 'pending';
-  return {
+  const status = isTeamDispatchRequestStatus(raw.status) ? raw.status : 'pending';
+  return sanitizeDispatchRequestForStatus({
     request_id: typeof raw.request_id === 'string' && raw.request_id.trim() !== '' ? raw.request_id : randomUUID(),
     kind: raw.kind,
     team_name: teamName,
@@ -92,7 +120,7 @@ export function normalizeDispatchRequest(
     delivered_at: typeof raw.delivered_at === 'string' && raw.delivered_at !== '' ? raw.delivered_at : undefined,
     failed_at: typeof raw.failed_at === 'string' && raw.failed_at !== '' ? raw.failed_at : undefined,
     last_reason: typeof raw.last_reason === 'string' && raw.last_reason !== '' ? raw.last_reason : undefined,
-  };
+  });
 }
 
 function equivalentPendingDispatch(existing: TeamDispatchRequest, input: TeamDispatchRequestInput): boolean {
@@ -113,10 +141,7 @@ function equivalentPendingDispatch(existing: TeamDispatchRequest, input: TeamDis
 
 function canTransitionDispatchStatus(from: TeamDispatchRequestStatus, to: TeamDispatchRequestStatus): boolean {
   if (from === to) return true;
-  if (from === 'pending' && (to === 'notified' || to === 'failed')) return true;
-  if (from === 'notified' && (to === 'delivered' || to === 'failed')) return true;
-  if (from === 'failed' && to === 'notified') return true;
-  return false;
+  return canTransitionTeamDispatchRequestStatus(from, to);
 }
 
 function buildDispatchMetadata(teamName: string, requestInput: TeamDispatchRequestInput): Record<string, unknown> {
@@ -307,13 +332,13 @@ export async function transitionDispatchRequest(
         : (existing.status === to ? existing.attempt_count : existing.attempt_count + 1),
     );
 
-    const next: TeamDispatchRequest = {
+    const next = sanitizeDispatchRequestForStatus({
       ...existing,
       ...patch,
       status: to,
       attempt_count: Math.max(0, nextAttemptCount),
       updated_at: nowIso,
-    };
+    });
     if (to === 'notified') {
       next.notified_at = patch.notified_at ?? nowIso;
       next.failed_at = patch.failed_at;

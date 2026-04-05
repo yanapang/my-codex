@@ -42,8 +42,10 @@ import {
   markDispatchRequestDelivered,
   transitionDispatchRequest,
   readDispatchRequest,
+  readMonitorSnapshot,
   resolveDispatchLockTimeoutMs,
 } from '../state.js';
+import { normalizeDispatchRequest } from '../state/dispatch.js';
 
 const ORIGINAL_OMX_TEAM_STATE_ROOT = process.env.OMX_TEAM_STATE_ROOT;
 
@@ -491,7 +493,7 @@ exit 1
     }
   });
 
-  it('dispatch request store allows failed reason patches and fallback recovery to notified', async () => {
+  it('dispatch request store keeps failed requests failed while allowing reason patches', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-team-dispatch-store-failed-'));
     try {
       await initTeamState('team-dispatch-failed', 't', 'executor', 1, cwd);
@@ -519,22 +521,21 @@ exit 1
         { last_reason: 'fallback_confirmed:tmux_send_keys_sent', failed_at: undefined },
         cwd,
       );
-      assert.equal(recovered?.status, 'notified');
-      assert.equal(recovered?.last_reason, 'fallback_confirmed:tmux_send_keys_sent');
-      assert.equal(recovered?.failed_at, undefined);
+      assert.equal(recovered, null);
 
       const patched = await transitionDispatchRequest(
         'team-dispatch-failed',
         queued.request.request_id,
-        'notified',
-        'notified',
+        'failed',
+        'failed',
         { last_reason: 'fallback_confirmed_after_failed_receipt:tmux_send_keys_sent' },
         cwd,
       );
-      assert.equal(patched?.status, 'notified');
+      assert.equal(patched?.status, 'failed');
       assert.equal(patched?.last_reason, 'fallback_confirmed_after_failed_receipt:tmux_send_keys_sent');
       const reread = await readDispatchRequest('team-dispatch-failed', queued.request.request_id, cwd);
-      assert.equal(reread?.status, 'notified');
+      assert.equal(reread?.status, 'failed');
+      assert.equal(reread?.failed_at, patched?.failed_at);
       assert.equal(reread?.last_reason, 'fallback_confirmed_after_failed_receipt:tmux_send_keys_sent');
     } finally {
       await rm(cwd, { recursive: true, force: true });
@@ -1975,6 +1976,99 @@ exit 1
         }
         await rm(lockDir, { recursive: true, force: true });
       }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('treats dispatch status as authoritative over incompatible timestamps', () => {
+    const pending = normalizeDispatchRequest('team-contract-dispatch', {
+      kind: 'inbox',
+      to_worker: 'worker-1',
+      trigger_message: 'ping',
+      status: 'pending',
+      notified_at: '2026-04-04T00:00:00.000Z',
+      delivered_at: '2026-04-04T00:01:00.000Z',
+      failed_at: '2026-04-04T00:02:00.000Z',
+    });
+    assert.equal(pending?.status, 'pending');
+    assert.equal(pending?.notified_at, undefined);
+    assert.equal(pending?.delivered_at, undefined);
+    assert.equal(pending?.failed_at, undefined);
+
+    const notified = normalizeDispatchRequest('team-contract-dispatch', {
+      kind: 'inbox',
+      to_worker: 'worker-1',
+      trigger_message: 'ping',
+      status: 'notified',
+      notified_at: '2026-04-04T00:00:00.000Z',
+      delivered_at: '2026-04-04T00:01:00.000Z',
+      failed_at: '2026-04-04T00:02:00.000Z',
+    });
+    assert.equal(notified?.status, 'notified');
+    assert.equal(notified?.notified_at, '2026-04-04T00:00:00.000Z');
+    assert.equal(notified?.delivered_at, undefined);
+    assert.equal(notified?.failed_at, undefined);
+
+    const delivered = normalizeDispatchRequest('team-contract-dispatch', {
+      kind: 'inbox',
+      to_worker: 'worker-1',
+      trigger_message: 'ping',
+      status: 'delivered',
+      notified_at: '2026-04-04T00:00:00.000Z',
+      delivered_at: '2026-04-04T00:01:00.000Z',
+      failed_at: '2026-04-04T00:02:00.000Z',
+    });
+    assert.equal(delivered?.status, 'delivered');
+    assert.equal(delivered?.notified_at, '2026-04-04T00:00:00.000Z');
+    assert.equal(delivered?.delivered_at, '2026-04-04T00:01:00.000Z');
+    assert.equal(delivered?.failed_at, undefined);
+
+    const failed = normalizeDispatchRequest('team-contract-dispatch', {
+      kind: 'inbox',
+      to_worker: 'worker-1',
+      trigger_message: 'ping',
+      status: 'failed',
+      notified_at: '2026-04-04T00:00:00.000Z',
+      delivered_at: '2026-04-04T00:01:00.000Z',
+      failed_at: '2026-04-04T00:02:00.000Z',
+    });
+    assert.equal(failed?.status, 'failed');
+    assert.equal(failed?.notified_at, '2026-04-04T00:00:00.000Z');
+    assert.equal(failed?.delivered_at, undefined);
+    assert.equal(failed?.failed_at, '2026-04-04T00:02:00.000Z');
+  });
+
+  it('sanitizes persisted integration snapshot statuses to the contract', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-team-monitor-contract-'));
+    try {
+      await initTeamState('team-monitor-contract', 't', 'executor', 1, cwd);
+      const monitorPath = join(cwd, '.omx', 'state', 'team', 'team-monitor-contract', 'monitor-snapshot.json');
+      await writeFile(monitorPath, JSON.stringify({
+        taskStatusById: {},
+        workerAliveByName: {},
+        workerStateByName: {},
+        workerTurnCountByName: {},
+        workerTaskIdByName: {},
+        mailboxNotifiedByMessageId: {},
+        completedEventTaskIds: {},
+        integrationByWorker: {
+          'worker-1': {
+            status: 'integrated',
+            last_integrated_head: 'abc123',
+          },
+          'worker-2': {
+            status: 'mystery_state',
+            last_integrated_head: 'def456',
+          },
+        },
+      }, null, 2));
+
+      const snapshot = await readMonitorSnapshot('team-monitor-contract', cwd);
+      assert.equal(snapshot?.integrationByWorker?.['worker-1']?.status, 'integrated');
+      assert.equal(snapshot?.integrationByWorker?.['worker-1']?.last_integrated_head, 'abc123');
+      assert.equal(snapshot?.integrationByWorker?.['worker-2']?.status, undefined);
+      assert.equal(snapshot?.integrationByWorker?.['worker-2']?.last_integrated_head, 'def456');
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
