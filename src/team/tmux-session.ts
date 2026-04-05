@@ -98,6 +98,18 @@ function runTmux(args: string[]): { ok: true; stdout: string } | { ok: false; st
   return { ok: true, stdout: (result.stdout || '').trim() };
 }
 
+export function hasCurrentTmuxClientContext(): boolean {
+  const tmuxPaneTarget = process.env.TMUX_PANE?.trim();
+  const displayArgs = tmuxPaneTarget
+    ? ['display-message', '-p', '-t', tmuxPaneTarget, '#S:#I #{pane_id}']
+    : ['display-message', '-p', '#S:#I #{pane_id}'];
+  const context = runTmux(displayArgs);
+  if (!context.ok) return false;
+  const [sessionAndWindow = '', detectedLeaderPaneId = ''] = context.stdout.split(' ');
+  const [sessionName, windowIndex] = sessionAndWindow.split(':');
+  return Boolean(sessionName && windowIndex && detectedLeaderPaneId.startsWith('%'));
+}
+
 export function isMsysOrGitBash(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): boolean {
   if (platform !== 'win32') return false;
   const msystem = String(env.MSYSTEM ?? '').trim();
@@ -803,7 +815,7 @@ export function createTeamSession(
   if (!Number.isInteger(workerCount) || workerCount < 1) {
     throw new Error(`workerCount must be >= 1 (got ${workerCount})`);
   }
-  if (!process.env.TMUX) {
+  if (!hasCurrentTmuxClientContext()) {
     throw new Error('team mode requires running inside tmux leader pane');
   }
   const normalizedWorkerLaunchArgs = resolveWorkerLaunchArgs(workerLaunchArgs, cwd);

@@ -7,6 +7,7 @@ import type { Writable } from 'stream';
 import {
   sanitizeTeamName,
   isTmuxAvailable,
+  hasCurrentTmuxClientContext,
   createTeamSession,
   buildWorkerProcessLaunchSpec,
   resolveTeamWorkerCli,
@@ -1650,7 +1651,7 @@ export async function startTeam(
     if (!isTmuxAvailable()) {
       throw new Error('Team mode requires tmux. Install with: apt install tmux / brew install tmux');
     }
-    if (!process.env.TMUX) {
+    if (!hasCurrentTmuxClientContext()) {
       throw new Error('Team mode requires running inside tmux current leader pane');
     }
   }
