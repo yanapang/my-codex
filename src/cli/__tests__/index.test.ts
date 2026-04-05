@@ -42,6 +42,7 @@ import {
   resolveNotifyFallbackWatcherScript,
   resolveHookDerivedWatcherScript,
   resolveNotifyHookScript,
+  withTmuxExtendedKeys,
 } from "../index.js";
 import { HUD_TMUX_HEIGHT_LINES } from "../../hud/constants.js";
 import {
@@ -1149,11 +1150,84 @@ describe("detached tmux new-session sequencing", () => {
     const leaderCmd = steps[0]?.args.at(-1);
     assert.equal(typeof leaderCmd, "string");
     assert.match(leaderCmd!, /^\/bin\/sh -lc '/);
+    assert.match(leaderCmd!, /show-options -sv extended-keys/);
+    assert.match(leaderCmd!, /set-option -sq extended-keys always/);
     assert.match(leaderCmd!, /trap '/);
     assert.match(leaderCmd!, /0 INT TERM HUP/);
+    assert.match(leaderCmd!, /OMX_TMUX_PREV_EXTENDED_KEYS/);
     assert.match(leaderCmd!, /tmux kill-session -t/);
     assert.match(leaderCmd!, /"omx-demo"/);
     assert.match(leaderCmd!, /exit \$status/);
+  });
+
+  it("withTmuxExtendedKeys enables tmux extended keys during codex launch and restores them afterwards", () => {
+    const calls: string[][] = [];
+    const result = withTmuxExtendedKeys(
+      () => {
+        calls.push(["run"]);
+        return "ok";
+      },
+      (_file, args) => {
+        calls.push([...args]);
+        if (args[0] === "show-options") return "off\n";
+        return "";
+      },
+    );
+
+    assert.equal(result, "ok");
+    assert.deepEqual(calls, [
+      ["show-options", "-sv", "extended-keys"],
+      ["set-option", "-sq", "extended-keys", "always"],
+      ["run"],
+      ["set-option", "-sq", "extended-keys", "off"],
+    ]);
+  });
+
+  it("withTmuxExtendedKeys restores tmux extended keys when codex launch throws", () => {
+    const calls: string[][] = [];
+    assert.throws(
+      () =>
+        withTmuxExtendedKeys(
+          () => {
+            calls.push(["run"]);
+            throw new Error("boom");
+          },
+          (_file, args) => {
+            calls.push([...args]);
+            if (args[0] === "show-options") return "on\n";
+            return "";
+          },
+        ),
+      /boom/,
+    );
+
+    assert.deepEqual(calls, [
+      ["show-options", "-sv", "extended-keys"],
+      ["set-option", "-sq", "extended-keys", "always"],
+      ["run"],
+      ["set-option", "-sq", "extended-keys", "on"],
+    ]);
+  });
+
+  it("withTmuxExtendedKeys degrades cleanly when tmux option probing fails", () => {
+    const calls: string[][] = [];
+    const result = withTmuxExtendedKeys(
+      () => {
+        calls.push(["run"]);
+        return "ok";
+      },
+      (_file, args) => {
+        calls.push([...args]);
+        if (args[0] === "show-options") throw new Error("tmux unavailable");
+        return "";
+      },
+    );
+
+    assert.equal(result, "ok");
+    assert.deepEqual(calls, [
+      ["show-options", "-sv", "extended-keys"],
+      ["run"],
+    ]);
   });
 
   it("buildDetachedSessionFinalizeSteps keeps schedule after split-capture and before attach", () => {

@@ -217,6 +217,8 @@ const ALLOWED_SHELLS = new Set([
 ]);
 const WINDOWS_DETACHED_BOOTSTRAP_DELAY_MS = 2500;
 const CODEX_VERSION_FLAGS = new Set(["--version", "-V"]);
+const TMUX_EXTENDED_KEYS_MODE = "always";
+const TMUX_EXTENDED_KEYS_FALLBACK_MODE = "off";
 
 type CliCommand =
   | "launch"
@@ -1378,6 +1380,19 @@ function escapeShellDoubleQuotedValue(value: string): string {
   return value.replace(/["\\$`]/g, "\\$&");
 }
 
+// tmux collapses Shift+Enter back to plain Enter unless extended keys are
+// enabled for the duration of the Codex TUI session.
+function buildTmuxExtendedKeysSetupSnippet(): string {
+  return [
+    `OMX_TMUX_PREV_EXTENDED_KEYS=$(tmux show-options -sv extended-keys 2>/dev/null || printf ${quoteShellArg(TMUX_EXTENDED_KEYS_FALLBACK_MODE)});`,
+    `tmux set-option -sq extended-keys ${TMUX_EXTENDED_KEYS_MODE} >/dev/null 2>&1 || true;`,
+  ].join(" ");
+}
+
+function buildTmuxExtendedKeysRestoreSnippet(): string {
+  return 'tmux set-option -sq extended-keys "${OMX_TMUX_PREV_EXTENDED_KEYS:-off}" >/dev/null 2>&1 || true;';
+}
+
 function buildDetachedSessionLeaderCommand(
   sessionName: string,
   codexCmd: string,
@@ -1385,11 +1400,65 @@ function buildDetachedSessionLeaderCommand(
   const cleanupTrap = [
     "status=$?;",
     "trap - 0 INT TERM HUP;",
+    buildTmuxExtendedKeysRestoreSnippet(),
     `tmux kill-session -t "${escapeShellDoubleQuotedValue(sessionName)}" >/dev/null 2>&1 || true;`,
     "exit $status;",
   ].join(" ");
-  const wrapped = [`trap '${cleanupTrap}' 0 INT TERM HUP;`, codexCmd].join(" ");
+  const wrapped = [
+    buildTmuxExtendedKeysSetupSnippet(),
+    `trap '${cleanupTrap}' 0 INT TERM HUP;`,
+    codexCmd,
+  ].join(" ");
   return `/bin/sh -lc ${quoteShellArg(wrapped)}`;
+}
+
+type TmuxExecSync = (file: string, args: readonly string[]) => string;
+
+function execTmuxSync(
+  args: readonly string[],
+  execFileSyncImpl: TmuxExecSync = (file, tmuxArgs) =>
+    execFileSync(file, tmuxArgs, {
+      encoding: "utf-8",
+    }) as string,
+): string {
+  return execFileSyncImpl("tmux", [...args]).trim();
+}
+
+export function withTmuxExtendedKeys<T>(
+  run: () => T,
+  execFileSyncImpl: TmuxExecSync = (file, tmuxArgs) =>
+    execFileSync(file, tmuxArgs, {
+      encoding: "utf-8",
+    }) as string,
+): T {
+  let previousMode = TMUX_EXTENDED_KEYS_FALLBACK_MODE;
+  let enabled = false;
+  try {
+    previousMode =
+      execTmuxSync(["show-options", "-sv", "extended-keys"], execFileSyncImpl) ||
+      TMUX_EXTENDED_KEYS_FALLBACK_MODE;
+    execTmuxSync(
+      ["set-option", "-sq", "extended-keys", TMUX_EXTENDED_KEYS_MODE],
+      execFileSyncImpl,
+    );
+    enabled = true;
+  } catch (err) {
+    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+  }
+  try {
+    return run();
+  } finally {
+    if (enabled) {
+      try {
+        execTmuxSync(
+          ["set-option", "-sq", "extended-keys", previousMode],
+          execFileSyncImpl,
+        );
+      } catch (err) {
+        process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+      }
+    }
+  }
 }
 
 export function buildDetachedSessionBootstrapSteps(
@@ -1835,7 +1904,9 @@ function runCodex(
     }
 
     try {
-      runCodexBlocking(cwd, launchArgs, codexEnvWithNotify);
+      withTmuxExtendedKeys(() => {
+        runCodexBlocking(cwd, launchArgs, codexEnvWithNotify);
+      });
     } finally {
       const cleanupPaneIds = buildHudPaneCleanupTargets(
         listHudWatchPaneIdsInCurrentWindow(currentPaneId),
