@@ -42,6 +42,9 @@ import {
   resolveNotifyFallbackWatcherScript,
   resolveHookDerivedWatcherScript,
   resolveNotifyHookScript,
+  acquireTmuxExtendedKeysLease,
+  releaseTmuxExtendedKeysLease,
+  withTmuxExtendedKeys,
 } from "../index.js";
 import { HUD_TMUX_HEIGHT_LINES } from "../../hud/constants.js";
 import {
@@ -1149,11 +1152,107 @@ describe("detached tmux new-session sequencing", () => {
     const leaderCmd = steps[0]?.args.at(-1);
     assert.equal(typeof leaderCmd, "string");
     assert.match(leaderCmd!, /^\/bin\/sh -lc '/);
+    assert.match(leaderCmd!, /acquireTmuxExtendedKeysLease/);
     assert.match(leaderCmd!, /trap '/);
     assert.match(leaderCmd!, /0 INT TERM HUP/);
+    assert.match(leaderCmd!, /releaseTmuxExtendedKeysLease/);
     assert.match(leaderCmd!, /tmux kill-session -t/);
     assert.match(leaderCmd!, /"omx-demo"/);
     assert.match(leaderCmd!, /exit \$status/);
+  });
+
+  it("withTmuxExtendedKeys enables tmux extended keys during codex launch and restores them afterwards", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-tmux-lease-wrapper-"));
+    const calls: string[][] = [];
+    const result = withTmuxExtendedKeys(
+      cwd,
+      () => {
+        calls.push(["run"]);
+        return "ok";
+      },
+      (_file, args) => {
+        calls.push([...args]);
+        if (args[0] === "show-options") return "off\n";
+        return "";
+      },
+    );
+    await rm(cwd, { recursive: true, force: true });
+
+    assert.equal(result, "ok");
+    assert.deepEqual(calls, [
+      ["display-message", "-p", "#{socket_path}"],
+      ["show-options", "-sv", "extended-keys"],
+      ["set-option", "-sq", "extended-keys", "always"],
+      ["run"],
+      ["set-option", "-sq", "extended-keys", "off"],
+    ]);
+  });
+
+  it("overlapping tmux extended-keys leases restore only after the last holder exits", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-tmux-lease-overlap-"));
+    const calls: string[][] = [];
+    const execStub = (_file: string, args: readonly string[]) => {
+      calls.push([...args]);
+      if (args[0] === "display-message") return "/tmp/tmux-test.sock\n";
+      if (args[0] === "show-options") return "off\n";
+      return "";
+    };
+
+    const leaseA = acquireTmuxExtendedKeysLease(cwd, execStub);
+    const leaseB = acquireTmuxExtendedKeysLease(cwd, execStub);
+
+    assert.equal(typeof leaseA, "string");
+    assert.equal(typeof leaseB, "string");
+
+    releaseTmuxExtendedKeysLease(cwd, leaseA!, execStub);
+
+    const leaseDir = join(cwd, ".omx", "state", "tmux-extended-keys");
+    const leaseFilesAfterFirstRelease = await readFile(
+      join(leaseDir, "tmp-tmux-test-sock.json"),
+      "utf-8",
+    );
+    assert.match(leaseFilesAfterFirstRelease, /holders/);
+
+    releaseTmuxExtendedKeysLease(cwd, leaseB!, execStub);
+
+    await assert.rejects(
+      readFile(join(leaseDir, "tmp-tmux-test-sock.json"), "utf-8"),
+      /ENOENT/,
+    );
+    await rm(cwd, { recursive: true, force: true });
+
+    assert.deepEqual(calls, [
+      ["display-message", "-p", "#{socket_path}"],
+      ["show-options", "-sv", "extended-keys"],
+      ["set-option", "-sq", "extended-keys", "always"],
+      ["display-message", "-p", "#{socket_path}"],
+      ["set-option", "-sq", "extended-keys", "off"],
+    ]);
+  });
+
+  it("withTmuxExtendedKeys degrades cleanly when tmux option probing fails", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-tmux-lease-fail-"));
+    const calls: string[][] = [];
+    const result = withTmuxExtendedKeys(
+      cwd,
+      () => {
+        calls.push(["run"]);
+        return "ok";
+      },
+      (_file, args) => {
+        calls.push([...args]);
+        if (args[0] === "show-options") throw new Error("tmux unavailable");
+        return "";
+      },
+    );
+    await rm(cwd, { recursive: true, force: true });
+
+    assert.equal(result, "ok");
+    assert.deepEqual(calls, [
+      ["display-message", "-p", "#{socket_path}"],
+      ["show-options", "-sv", "extended-keys"],
+      ["run"],
+    ]);
   });
 
   it("buildDetachedSessionFinalizeSteps keeps schedule after split-capture and before attach", () => {
