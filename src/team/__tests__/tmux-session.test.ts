@@ -51,6 +51,7 @@ import {
 } from '../tmux-session.js';
 import { HUD_RESIZE_RECONCILE_DELAY_SECONDS, HUD_TMUX_TEAM_HEIGHT_LINES } from '../../hud/constants.js';
 import * as tmuxSessionModule from '../tmux-session.js';
+import { OMX_ENTRY_PATH_ENV, OMX_STARTUP_CWD_ENV } from '../../utils/paths.js';
 
 function withEmptyPath<T>(fn: () => T): T {
   const prev = process.env.PATH;
@@ -2094,6 +2095,61 @@ esac
       if (typeof prevWslInterop === 'string') process.env.WSL_INTEROP = prevWslInterop;
       else delete process.env.WSL_INTEROP;
       await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('restores standalone HUD panes with an absolute OMX entry path after cwd drift', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-standalone-relative-hud-'));
+    const startupCwd = await mkdtemp(join(tmpdir(), 'omx-standalone-relative-start-'));
+    const previousEntryPath = process.env[OMX_ENTRY_PATH_ENV];
+    const previousStartupCwd = process.env[OMX_STARTUP_CWD_ENV];
+    const previousArgv = process.argv;
+
+    try {
+      const launcherDir = join(startupCwd, 'dist', 'cli');
+      const launcherPath = join(launcherDir, 'omx.js');
+      await mkdir(launcherDir, { recursive: true });
+      await writeFile(launcherPath, '#!/usr/bin/env node\n');
+
+      await withMockTmuxFixture(
+        'omx-tmux-relative-standalone-hud-',
+        (logPath) => `#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >> "${logPath}"
+case "\${1:-}" in
+  split-window)
+    echo "%44"
+    exit 0
+    ;;
+  run-shell|select-pane|resize-pane|set-hook)
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`,
+        async ({ logPath }) => {
+          delete process.env[OMX_ENTRY_PATH_ENV];
+          process.env[OMX_STARTUP_CWD_ENV] = startupCwd;
+          process.argv = [previousArgv[0] || 'node', 'dist/cli/omx.js'];
+
+          const paneId = restoreStandaloneHudPane('%11', cwd);
+          assert.equal(paneId, '%44');
+
+          const tmuxLog = await readFile(logPath, 'utf-8');
+          assert.match(tmuxLog, new RegExp(escapeRegExp(launcherPath)));
+          assert.doesNotMatch(tmuxLog, /'dist\/cli\/omx\.js' hud --watch/);
+        },
+      );
+    } finally {
+      process.argv = previousArgv;
+      if (typeof previousEntryPath === 'string') process.env[OMX_ENTRY_PATH_ENV] = previousEntryPath;
+      else delete process.env[OMX_ENTRY_PATH_ENV];
+      if (typeof previousStartupCwd === 'string') process.env[OMX_STARTUP_CWD_ENV] = previousStartupCwd;
+      else delete process.env[OMX_STARTUP_CWD_ENV];
+      await rm(cwd, { recursive: true, force: true });
+      await rm(startupCwd, { recursive: true, force: true });
     }
   });
 });

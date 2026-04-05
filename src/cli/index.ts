@@ -75,9 +75,11 @@ import {
   isTmuxAvailable,
 } from "../team/tmux-session.js";
 import { getPackageRoot } from "../utils/package.js";
-import { codexConfigPath } from "../utils/paths.js";
+import { codexConfigPath, rememberOmxLaunchContext, resolveOmxEntryPath } from "../utils/paths.js";
 import { repairConfigIfNeeded } from "../config/generator.js";
 import { HUD_TMUX_HEIGHT_LINES } from "../hud/constants.js";
+
+rememberOmxLaunchContext();
 import {
   classifySpawnError,
   spawnPlatformCommandSync,
@@ -2003,7 +2005,10 @@ function runCodex(
     sessionModelInstructionsPath(cwd, sessionId),
   );
   const nativeWindows = isNativeWindows();
-  const omxBin = process.argv[1];
+  const omxBin = resolveOmxEntryPath();
+  if (!omxBin) {
+    throw new Error("Unable to resolve OMX launcher path for tmux HUD bootstrap");
+  }
   const hudCmd = nativeWindows
     ? buildWindowsPromptCommand("node", [omxBin, "hud", "--watch"])
     : buildTmuxPaneCommand("node", [omxBin, "hud", "--watch"]);
