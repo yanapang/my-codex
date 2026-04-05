@@ -145,6 +145,11 @@ function buildIdleNotificationFingerprint(payload: Record<string, unknown>): str
   });
 }
 
+function isTurnCompletePayload(payload: Record<string, unknown>): boolean {
+  const type = safeString(payload.type || '').trim().toLowerCase();
+  return type === '' || type === 'agent-turn-complete' || type === 'turn-complete';
+}
+
 async function main() {
   const rawPayload = process.argv[process.argv.length - 1];
   if (!rawPayload || rawPayload.startsWith('-')) {
@@ -163,6 +168,7 @@ async function main() {
   const payloadThreadId = safeString(payload['thread-id'] || payload.thread_id || '');
   const inputMessages = normalizeInputMessages(payload);
   const latestUserInput = safeString(inputMessages.length > 0 ? inputMessages[inputMessages.length - 1] : '');
+  const isTurnComplete = isTurnCompletePayload(payload);
 
   // Team worker detection via environment variable
   const teamWorkerEnv = process.env.OMX_TEAM_WORKER; // e.g., "fix-ts/worker-1"
@@ -238,6 +244,10 @@ async function main() {
 
   const logFile = join(logsDir, `turns-${new Date().toISOString().split('T')[0]}.jsonl`);
   await appendFile(logFile, JSON.stringify(logEntry) + '\n').catch(() => {});
+
+  if (!isTurnComplete) {
+    return;
+  }
 
   // Reconcile Ralph ownership for same-Codex-session continuation before
   // lifecycle counters or injection read the active scope.
