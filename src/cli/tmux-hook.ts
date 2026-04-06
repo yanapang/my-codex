@@ -63,6 +63,7 @@ Usage:
   omx tmux-hook test       Run a synthetic notify-hook turn (end-to-end)
 
 Notes:
+  - Team runtime / legacy workflow only.
   - Non-team tmux-hook usage is deprecated. Native Codex hooks in .codex/hooks.json now own non-team automation.
   - This command remains for team-runtime / legacy tmux injection workflows only.
 `;
