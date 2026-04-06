@@ -61,6 +61,10 @@ Usage:
   omx tmux-hook status     Show config + runtime state summary
   omx tmux-hook validate   Validate config and tmux target reachability
   omx tmux-hook test       Run a synthetic notify-hook turn (end-to-end)
+
+Notes:
+  - Team runtime / legacy workflow only.
+  - Non-team OMX automation uses Codex native hooks via \`omx setup\` + \`omx hooks\`.
 `;
 
 export async function tmuxHookCommand(args: string[]): Promise<void> {
