@@ -1717,6 +1717,91 @@ exit 0
     }
   });
 
+  it('suppresses Ralph continue steer while tracked native subagents are still active', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-ralph-subagents-active-'));
+    const fakeBinDir = join(wd, 'fake-bin');
+    const stateDir = join(wd, '.omx', 'state');
+    const tmuxLogPath = join(wd, 'tmux.log');
+    const statePath = join(stateDir, 'notify-fallback-state.json');
+    const omxSessionId = 'sess-current';
+    const codexSessionId = 'codex-session-1';
+    try {
+      await mkdir(join(stateDir, 'sessions', omxSessionId), { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+      await writeSessionStart(wd, omxSessionId);
+      await writeFile(join(stateDir, 'sessions', omxSessionId, 'ralph-state.json'), JSON.stringify({
+        active: true,
+        current_phase: 'executing',
+        tmux_pane_id: '%42',
+        owner_omx_session_id: omxSessionId,
+        owner_codex_session_id: codexSessionId,
+      }, null, 2));
+      await writeFile(join(stateDir, 'hud-state.json'), JSON.stringify({
+        last_progress_at: new Date(Date.now() - 61_000).toISOString(),
+      }, null, 2));
+      await writeFile(statePath, JSON.stringify({
+        ralph_continue_steer: {
+          last_sent_at: new Date(Date.now() - 61_000).toISOString(),
+        },
+      }, null, 2));
+      await writeFile(join(stateDir, 'subagent-tracking.json'), JSON.stringify({
+        schemaVersion: 1,
+        sessions: {
+          [codexSessionId]: {
+            session_id: codexSessionId,
+            leader_thread_id: 'leader-thread',
+            updated_at: new Date(Date.now() - 15_000).toISOString(),
+            threads: {
+              'leader-thread': {
+                thread_id: 'leader-thread',
+                kind: 'leader',
+                first_seen_at: new Date(Date.now() - 30_000).toISOString(),
+                last_seen_at: new Date(Date.now() - 15_000).toISOString(),
+                turn_count: 1,
+                mode: 'ralph',
+              },
+              'sub-thread-1': {
+                thread_id: 'sub-thread-1',
+                kind: 'subagent',
+                first_seen_at: new Date(Date.now() - 30_000).toISOString(),
+                last_seen_at: new Date(Date.now() - 15_000).toISOString(),
+                turn_count: 1,
+                mode: 'ralph',
+              },
+            },
+          },
+        },
+      }, null, 2));
+
+      const watcherScript = new URL('../../../dist/scripts/notify-fallback-watcher.js', import.meta.url).pathname;
+      const notifyHook = new URL('../../../dist/scripts/notify-hook.js', import.meta.url).pathname;
+      const env = {
+        ...buildCleanNotifyEnv(),
+        PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+      };
+
+      const run = spawnSync(
+        process.execPath,
+        [watcherScript, '--once', '--cwd', wd, '--notify-script', notifyHook, '--poll-ms', '50'],
+        { encoding: 'utf-8', env },
+      );
+      assert.equal(run.status, 0, run.stderr || run.stdout);
+
+      const tmuxLog = await readFile(tmuxLogPath, 'utf8').catch(() => '');
+      const sends = tmuxLog.match(/send-keys -t %42 -l Ralph loop active continue \[OMX_TMUX_INJECT\]/g) || [];
+      assert.equal(sends.length, 0, 'active native subagents should block fallback continue steer');
+
+      const watcherState = JSON.parse(await readFile(statePath, 'utf-8'));
+      assert.equal(watcherState.ralph_continue_steer?.last_reason, 'subagents_active');
+      assert.equal(watcherState.ralph_continue_steer?.subagent_session_id, codexSessionId);
+      assert.deepEqual(watcherState.ralph_continue_steer?.active_subagent_thread_ids, ['sub-thread-1']);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it('fails closed when Ralph hud progress is missing or invalid', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-ralph-progress-guard-'));
     const fakeBinDir = join(wd, 'fake-bin');
