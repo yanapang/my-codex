@@ -786,7 +786,7 @@ describe('notify-fallback watcher', () => {
       assert.equal(result.status, 0, result.stderr || result.stdout);
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf8');
-      assert.match(tmuxLog, /send-keys -t %42 -l Team dispatch-team: leader stale/);
+      assert.match(tmuxLog, /send-keys -t %42 -l Team dispatch-team: leader stale, \d+ worker pane\(s\) still active\./);
 
       const watcherStatePath = join(wd, '.omx', 'state', 'notify-fallback-state.json');
       const watcherState = JSON.parse(await readFile(watcherStatePath, 'utf-8'));
@@ -1056,7 +1056,7 @@ exit 0
       assert.equal(result.status, 0, result.stderr || result.stdout);
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf8');
-      assert.match(tmuxLog, /send-keys -t %42 -l Team dispatch-team: worker panes stalled, no progress 3m/);
+      assert.match(tmuxLog, /send-keys -t %42 -l Team dispatch-team: worker panes stalled, no progress 3m\./);
       assert.doesNotMatch(tmuxLog, /leader stale/);
 
       const watcherStatePath = join(wd, '.omx', 'state', 'notify-fallback-state.json');

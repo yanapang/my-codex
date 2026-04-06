@@ -66,12 +66,16 @@ export function resolveWorkerTurnStallThresholdMs() {
   return 30_000;
 }
 
+function buildLeaderDecisionReminder(teamName) {
+  return 'Read worker messages, then choose by worker status: continue, steer, or shut down if done.';
+}
+
 function buildStatusCheckReminder(teamName) {
-  return `Next: check messages; keep orchestrating; if done, gracefully shut down: omx team shutdown ${teamName}.`;
+  return buildLeaderDecisionReminder(teamName);
 }
 
 function buildMailboxCheckReminder(teamName) {
-  return `Next: read messages; keep orchestrating; if done, gracefully shut down: omx team shutdown ${teamName}.`;
+  return buildLeaderDecisionReminder(teamName);
 }
 
 function buildWorkerStartEvidenceReminder(teamName, workerName) {
@@ -99,7 +103,11 @@ function classifyLeaderActionState({
   return 'still_actionable';
 }
 
-function buildLeaderActionGuidance(teamName, {
+function buildLeaderActionGuidance(teamName) {
+  return buildStatusCheckReminder(teamName);
+}
+
+function buildIdleContextText(teamName, {
   allWorkersIdle = false,
   workerPanesAlive = false,
   taskCounts = {},
@@ -112,16 +120,16 @@ function buildLeaderActionGuidance(teamName, {
 
   if (pendingFollowUpTasks) {
     return workerPanesAlive
-      ? 'Next: assign the next follow-up task to this idle team.'
-      : 'Next: launch a new team for the next task set.';
+      ? ` Team ${teamName} has idle workers ready.`
+      : ` Team ${teamName} has follow-up work ready.`;
   }
   if (leaderActionState === 'done_waiting_on_leader') {
-    return `Next: decide whether to reconcile/merge results or gracefully shut down: omx team shutdown ${teamName}.`;
+    return ` Team ${teamName} looks complete.`;
   }
   if (leaderActionState === 'stuck_waiting_on_leader') {
-    return `Next: omx team status ${teamName}; read worker messages; unblock/reassign or shutdown.`;
+    return ` Team ${teamName} needs leader review.`;
   }
-  return buildStatusCheckReminder(teamName);
+  return '';
 }
 
 export async function checkWorkerPanesAlive(tmuxTarget, workerPaneIds = []) {
@@ -718,11 +726,12 @@ export async function maybeNudgeTeamLeader({
           ? 'stuck_waiting_on_leader'
           : 'all_workers_idle';
       const N = workerNames.length;
-      const waitingText = leaderActionState === 'done_waiting_on_leader'
-        ? ` Team ${teamName} is complete and waiting on leader action.`
-        : leaderActionState === 'stuck_waiting_on_leader'
-          ? ` Team ${teamName} is stuck and waiting on leader action.`
-          : '';
+      const waitingText = buildIdleContextText(teamName, {
+        allWorkersIdle,
+        workerPanesAlive: paneStatus.alive,
+        taskCounts: progressSnapshot.taskCounts,
+        leaderActionState,
+      });
       text = `[OMX] All ${N} worker${N === 1 ? '' : 's'} idle.${waitingText} ${leaderActionGuidance}`;
     } else if (ackWithoutStartEvidence) {
       nudgeReason = ACK_WITHOUT_START_EVIDENCE_REASON;
@@ -732,15 +741,10 @@ export async function maybeNudgeTeamLeader({
         + buildWorkerStartEvidenceReminder(teamName, ackWithoutStartEvidence.worker);
     } else if (stalledTeamNudge) {
       nudgeReason = 'stuck_waiting_on_leader';
-      const { pending, in_progress, blocked } = progressSnapshot.taskCounts;
-      const missingSignals = progressSnapshot.missingSignalWorkers > 0
-        ? `; ${progressSnapshot.missingSignalWorkers} signal${progressSnapshot.missingSignalWorkers === 1 ? '' : 's'} missing`
-        : '';
       const stallPrefix = leaderStale ? 'leader stale, ' : 'worker panes stalled, ';
       text =
         `Team ${teamName}: ${stallPrefix}no progress ${formatDurationMs(stalledForMs)}. `
-        + `${leaderActionGuidance} `
-        + `(p:${pending} ip:${in_progress} b:${blocked}${missingSignals})`;
+        + leaderActionGuidance;
     } else if (stalePanesNudge && hasActionableNewMessage) {
       nudgeReason = 'stale_leader_with_messages';
       text =
