@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const hooksExtensionDoc = readFileSync(join(__dirname, '../../../docs/hooks-extension.md'), 'utf-8');
 const readme = readFileSync(join(__dirname, '../../../README.md'), 'utf-8');
-const hooksCli = readFileSync(join(__dirname, '../../cli/hooks.ts'), 'utf-8');
-const tmuxHookCli = readFileSync(join(__dirname, '../../cli/tmux-hook.ts'), 'utf-8');
+const hooksCli = readFileSync(join(__dirname, '../../../src/cli/hooks.ts'), 'utf-8');
+const tmuxHookCli = readFileSync(join(__dirname, '../../../src/cli/tmux-hook.ts'), 'utf-8');
 
 describe('native hooks documentation contract', () => {
   it('documents native-hook-first non-team ownership and tmux team-only positioning', () => {
