@@ -17,7 +17,7 @@ describe('tmuxHookCommand help', () => {
     }
 
     const output = logs.join('\n');
-    assert.match(output, /Team runtime \/ legacy workflow only\./);
-    assert.match(output, /Non-team OMX automation uses Codex native hooks via `omx setup` \+ `omx hooks`\./);
+    assert.match(output, /Non-team tmux-hook usage is deprecated\. Native Codex hooks in \.codex\/hooks\.json now own non-team automation\./);
+    assert.match(output, /This command remains for team-runtime \/ legacy tmux injection workflows only\./);
   });
 });

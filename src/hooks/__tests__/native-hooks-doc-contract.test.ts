@@ -23,8 +23,9 @@ describe('native hooks documentation contract', () => {
   });
 
   it('keeps CLI help aligned with the ownership contract', () => {
-    assert.match(hooksCli, /Non-team OMX automation is native-hook-first\./);
-    assert.match(tmuxHookCli, /Team runtime \/ legacy workflow only\./);
+    assert.match(hooksCli, /Native Codex hook ownership now lives in \\`\.codex\/hooks\.json\\` and is managed by \\`omx setup\\`\./);
+    assert.match(hooksCli, /This command manages OMX plugin extensions under \\`\.omx\/hooks\/\*\.mjs\\`; it does not own native Codex registration\./);
+    assert.match(tmuxHookCli, /This command remains for team-runtime \/ legacy tmux injection workflows only\./);
     assert.doesNotMatch(hooksCli, /Existing `omx tmux-hook` behavior is unchanged/);
   });
 });
