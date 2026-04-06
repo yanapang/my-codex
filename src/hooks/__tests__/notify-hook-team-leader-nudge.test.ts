@@ -431,8 +431,8 @@ describe('notify-hook team leader nudge', () => {
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
       assert.match(tmuxLog, /\[OMX\] All 2 workers idle\./);
-      assert.match(tmuxLog, /Team idle-shutdown is complete and waiting on leader action/);
-      assert.match(tmuxLog, /Next: decide whether to reconcile\/merge results or gracefully shut down: omx team shutdown/);
+      assert.match(tmuxLog, /Team idle-shutdown looks complete\./);
+      assert.match(tmuxLog, /Read worker messages, then choose by worker status: continue, steer, or shut down if done\./);
       assert.doesNotMatch(tmuxLog, /keep polling/);
     });
   });
@@ -497,9 +497,9 @@ describe('notify-hook team leader nudge', () => {
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
       assert.match(tmuxLog, /\[OMX\] All 2 workers idle/);
-      assert.match(tmuxLog, /Next: assign the next follow-up task to this idle team/);
+      assert.match(tmuxLog, /Team idle-followup-reuse has idle workers ready\./);
+      assert.match(tmuxLog, /Read worker messages, then choose by worker status: continue, steer, or shut down if done\./);
       assert.doesNotMatch(tmuxLog, /launch a new team/);
-      assert.doesNotMatch(tmuxLog, /omx team shutdown/);
     });
   });
 
@@ -563,8 +563,9 @@ describe('notify-hook team leader nudge', () => {
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
       assert.match(tmuxLog, /\[OMX\] All 2 workers idle/);
-      assert.match(tmuxLog, /Next: launch a new team for the next task set/);
-      assert.doesNotMatch(tmuxLog, /assign the next follow-up task to this idle team/);
+      assert.match(tmuxLog, /Team idle-followup-relaunch has follow-up work ready\./);
+      assert.match(tmuxLog, /Read worker messages, then choose by worker status: continue, steer, or shut down if done\./);
+      assert.doesNotMatch(tmuxLog, /idle workers ready/);
     });
   });
 
@@ -928,8 +929,8 @@ exit 0
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
       assert.doesNotMatch(tmuxLog, /no start evidence/);
-      assert.match(tmuxLog, /Team ack-with-start: 1 msg\(s\) for leader/);
-      assert.match(tmuxLog, /Next: read messages; keep orchestrating; if done, gracefully shut down: omx team shutdown ack-with-start/);
+      assert.match(tmuxLog, /Team ack-with-start: 1 msg\(s\) for leader\./);
+      assert.match(tmuxLog, /Read worker messages, then choose by worker status: continue, steer, or shut down if done\./);
 
       const eventsPath = join(teamDir, 'events', 'events.ndjson');
       const events = (await readFile(eventsPath, 'utf-8')).trim().split('\n').map(line => JSON.parse(line));
@@ -995,7 +996,7 @@ exit 0
       assert.equal(second.status, 0, `notify-hook failed: ${second.stderr || second.stdout}`);
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
-      const sends = tmuxLog.match(/send-keys -t %97 -l Team fresh-mailbox-bounded: 1 msg\(s\) for leader/g) || [];
+      const sends = tmuxLog.match(/send-keys -t %97 -l Team fresh-mailbox-bounded: 1 msg\(s\) for leader\./g) || [];
       assert.equal(sends.length, 1, 'same mailbox message should not trigger repeated non-stale nudges');
     });
   });
@@ -1585,9 +1586,8 @@ exit 0
       const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
       assert.match(tmuxLog, /send-keys/);
       assert.match(tmuxLog, /Team beta:/);
-      assert.match(tmuxLog, /leader stale/);
-      assert.match(tmuxLog, /pane\(s\) still active/);
-      assert.match(tmuxLog, /Next: check messages; keep orchestrating; if done, gracefully shut down: omx team shutdown beta/);
+      assert.match(tmuxLog, /leader stale, \d+ worker pane\(s\) still active\./);
+      assert.match(tmuxLog, /Read worker messages, then choose by worker status: continue, steer, or shut down if done\./);
       assert.doesNotMatch(tmuxLog, /keep polling/);
       assert.match(tmuxLog, /\[OMX_TMUX_INJECT\]/, 'should include injection marker');
     });
@@ -1706,8 +1706,8 @@ exit 0
       assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
-      assert.match(tmuxLog, /Team stalled-progress: leader stale, no progress 3m/);
-      assert.match(tmuxLog, /Next: omx team status stalled-progress; read worker messages; unblock\/reassign or shutdown\./);
+      assert.match(tmuxLog, /Team stalled-progress: leader stale, no progress 3m\./);
+      assert.match(tmuxLog, /Read worker messages, then choose by worker status: continue, steer, or shut down if done\./);
       assert.doesNotMatch(tmuxLog, /keep polling/);
       assert.match(tmuxLog, /\[OMX_TMUX_INJECT\]/);
 
@@ -1832,8 +1832,8 @@ exit 0
       assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
-      assert.match(tmuxLog, /Team stalled-before-stale: worker panes stalled, no progress 3m/);
-      assert.match(tmuxLog, /Next: omx team status stalled-before-stale; read worker messages; unblock\/reassign or shutdown\./);
+      assert.match(tmuxLog, /Team stalled-before-stale: worker panes stalled, no progress 3m\./);
+      assert.match(tmuxLog, /Read worker messages, then choose by worker status: continue, steer, or shut down if done\./);
       assert.doesNotMatch(tmuxLog, /keep polling/);
       assert.doesNotMatch(tmuxLog, /leader stale/);
 
@@ -1944,7 +1944,7 @@ exit 0
       assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
-      assert.match(tmuxLog, /Team worker-turn-stall-threshold: worker panes stalled, no progress 45s/);
+      assert.match(tmuxLog, /Team worker-turn-stall-threshold: worker panes stalled, no progress 45s\./);
     });
   });
 
@@ -2183,7 +2183,7 @@ exit 0
       const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
       const sends = tmuxLog.match(/send-keys -t %88 -l Team stalled-before-stale-bounded: worker panes stalled, no progress/g) || [];
       assert.equal(sends.length, 1, 'cooldown should keep repeated stalled-team nudges bounded');
-      assert.match(tmuxLog, /Next: omx team status stalled-before-stale-bounded; read worker messages; unblock\/reassign or shutdown\./);
+      assert.match(tmuxLog, /Read worker messages, then choose by worker status: continue, steer, or shut down if done\./);
     });
   });
 
@@ -2230,7 +2230,7 @@ exit 0
       assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
-      assert.doesNotMatch(tmuxLog, /send-keys -t %92 -l Team stale-no-workers: leader stale/);
+      assert.doesNotMatch(tmuxLog, /send-keys -t %92 -l Team stale-no-workers: leader stale,/);
     });
   });
 
@@ -2345,7 +2345,7 @@ exit 0
 
       const finalLog = await readFile(tmuxLogPath, 'utf-8');
       assert.match(finalLog, /Team stale-cadence:/);
-      assert.match(finalLog, /leader stale/);
+      assert.match(finalLog, /Team stale-cadence: leader stale, \d+ worker pane\(s\) still active\./);
     });
   });
 
@@ -2624,9 +2624,8 @@ exit 0
       assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
-      assert.match(tmuxLog, /leader stale/);
-      assert.match(tmuxLog, /msg\(s\) pending/);
-      assert.match(tmuxLog, /Next: read messages; keep orchestrating; if done, gracefully shut down: omx team shutdown delta/);
+      assert.match(tmuxLog, /Team delta: leader stale, \d+ pane\(s\) active, 1 msg\(s\) pending\./);
+      assert.match(tmuxLog, /Read worker messages, then choose by worker status: continue, steer, or shut down if done\./);
       assert.doesNotMatch(tmuxLog, /keep polling/);
       assert.match(tmuxLog, /\[OMX_TMUX_INJECT\]/, 'should include injection marker');
 
