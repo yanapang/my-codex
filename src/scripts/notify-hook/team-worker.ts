@@ -9,7 +9,7 @@ import { join, resolve as resolvePath } from 'path';
 import { asNumber, safeString, isTerminalPhase } from './utils.js';
 import { readJsonIfExists } from './state-io.js';
 import { logTmuxHookEvent } from './log.js';
-import { checkPaneReadyForTeamSendKeys, sendPaneInput } from './team-tmux-guard.js';
+import { evaluatePaneInjectionReadiness, sendPaneInput } from './team-tmux-guard.js';
 import { resolvePaneTarget } from './tmux-injection.js';
 import { DEFAULT_MARKER } from '../tmux-hook-engine.js';
 const LEADER_PANE_SHELL_NO_INJECTION_REASON = 'leader_pane_shell_no_injection';
@@ -273,6 +273,18 @@ async function resolveCanonicalLeaderPaneId(_tmuxSession, leaderPaneId) {
   return '';
 }
 
+async function checkLeaderPaneReadyForWorkerStateReminder(paneTarget) {
+  return evaluatePaneInjectionReadiness(paneTarget, {
+    skipIfScrolling: true,
+    // Worker-state reminders are their own trigger path. They should still
+    // queue into a live Codex pane even while the leader is busy or not
+    // visibly input-ready; only shell/copy-mode style safety guards remain.
+    requireRunningAgent: true,
+    requireReady: false,
+    requireIdle: false,
+  });
+}
+
 async function emitLeaderPaneMissingDeferred({
   stateDir,
   logsDir,
@@ -406,7 +418,7 @@ export async function maybeNotifyLeaderAllWorkersIdle({ cwd, stateDir, logsDir, 
   const nextAction = `Next: run omx team status ${teamName}, read unread worker messages, then decide whether to assign the next concrete task, reconcile results, or shut the team down.`;
   const message = `[OMX] All ${N} worker${N === 1 ? '' : 's'} idle. ${nextAction} ${DEFAULT_MARKER}`;
   const tmuxTarget = canonicalLeaderPaneId;
-  const paneGuard = await checkPaneReadyForTeamSendKeys(tmuxTarget);
+  const paneGuard = await checkLeaderPaneReadyForWorkerStateReminder(tmuxTarget);
   if (!paneGuard.ok) {
     const nextIdleState = {
       ...idleState,
@@ -580,7 +592,7 @@ export async function maybeNotifyLeaderWorkerIdle({ cwd, stateDir, logsDir, pars
     return;
   }
   const tmuxTarget = canonicalLeaderPaneId;
-  const paneGuard = await checkPaneReadyForTeamSendKeys(tmuxTarget);
+  const paneGuard = await checkLeaderPaneReadyForWorkerStateReminder(tmuxTarget);
   if (!paneGuard.ok) {
     try {
       const tmpPath = cooldownPath + '.tmp.' + process.pid;

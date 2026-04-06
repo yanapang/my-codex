@@ -278,6 +278,98 @@ exit 0
     });
   });
 
+  it('injects worker-idle notification even while the leader pane has an active task', async () => {
+    await withTempWorkingDir(async (cwd) => {
+      const stateDir = join(cwd, '.omx', 'state');
+      const logsDir = join(cwd, '.omx', 'logs');
+      const teamName = 'busy-leader-worker-idle';
+      const teamDir = join(stateDir, 'team', teamName);
+      const workersDir = join(teamDir, 'workers');
+      const fakeBinDir = join(cwd, 'fake-bin');
+      const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const tmuxLogPath = join(cwd, 'tmux.log');
+
+      await mkdir(logsDir, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+
+      await writeJson(join(teamDir, 'config.json'), {
+        name: teamName,
+        tmux_session: 'busy-worker-idle:0',
+        leader_pane_id: '%81',
+        workers: [
+          { name: 'worker-1', index: 1, role: 'executor', assigned_tasks: [] },
+        ],
+      });
+
+      await writeJson(join(workersDir, 'worker-1', 'status.json'), {
+        state: 'idle',
+        current_task_id: 'task-42',
+        reason: 'task complete',
+        updated_at: new Date().toISOString(),
+      });
+      await writeJson(join(workersDir, 'worker-1', 'prev-notify-state.json'), {
+        state: 'working',
+        updated_at: new Date(Date.now() - 5000).toISOString(),
+      });
+
+      const fakeTmux = `#!/usr/bin/env bash
+set -eu
+echo "$@" >> "${tmuxLogPath}"
+cmd="$1"
+shift || true
+if [[ "$cmd" == "display-message" ]]; then
+  target=""
+  format=""
+  while (($#)); do
+    case "$1" in
+      -p) shift ;;
+      -t) target="$2"; shift 2 ;;
+      *) format="$1"; shift ;;
+    esac
+  done
+  if [[ "$format" == "#{pane_in_mode}" && "$target" == "%81" ]]; then
+    echo "0"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_current_command}" && "$target" == "%81" ]]; then
+    echo "codex"
+    exit 0
+  fi
+  exit 0
+fi
+if [[ "$cmd" == "capture-pane" ]]; then
+  printf "• Running tests (2m 10s • esc to interrupt)\\n"
+  exit 0
+fi
+if [[ "$cmd" == "send-keys" ]]; then
+  exit 0
+fi
+if [[ "$cmd" == "list-panes" ]]; then
+  echo "%1 12345"
+  exit 0
+fi
+exit 0
+`;
+      await writeFile(fakeTmuxPath, fakeTmux);
+      await chmod(fakeTmuxPath, 0o755);
+
+      const result = runNotifyHookAsWorker(cwd, fakeBinDir, `${teamName}/worker-1`);
+      assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
+
+      const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
+      assert.match(tmuxLog, /capture-pane/, 'busy-pane reminders should still inspect pane state');
+      assert.match(tmuxLog, /send-keys -t %81/, 'worker-state transition reminder should still inject into a busy leader pane');
+
+      const eventsPath = join(teamDir, 'events', 'events.ndjson');
+      if (existsSync(eventsPath)) {
+        const events = (await readFile(eventsPath, 'utf-8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
+        const deferred = events.find((entry: { type?: string; reason?: string }) =>
+          entry.type === 'leader_notification_deferred' && entry.reason === 'pane_has_active_task');
+        assert.equal(deferred, undefined, 'busy leader panes must not suppress worker-state transition reminders');
+      }
+    });
+  });
+
   it('does not fire when worker was already idle (idle->idle)', async () => {
     await withTempWorkingDir(async (cwd) => {
       const stateDir = join(cwd, '.omx', 'state');
