@@ -2003,7 +2003,6 @@ async function deriveLeaderStopAttentionState(
   const attentionReasons = new Set(existing?.attention_reasons ?? []);
   const leaderAttentionPending =
     leaderDecisionState !== 'still_actionable'
-    || workRemaining
     || unreadLeaderMessageCount > 0
     || existing?.leader_attention_pending === true;
   if (leaderAttentionPending) {

@@ -162,7 +162,7 @@ describe('dispatchHookEventRuntime', () => {
       assert.equal(attention?.leader_session_active, false);
       assert.equal(attention?.leader_attention_pending, false);
       assert.equal(attention?.leader_decision_state, 'still_actionable');
-      assert.equal(attention?.work_remaining, true);
+      assert.equal(attention?.work_remaining, false);
       assert.equal(attention?.leader_attention_reason, null);
       assert.deepEqual(attention?.attention_reasons, []);
     } finally {

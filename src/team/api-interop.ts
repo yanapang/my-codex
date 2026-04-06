@@ -15,7 +15,6 @@ import {
 import { readTeamEvents, waitForTeamEvent } from './state/events.js';
 import { queueDirectMailboxMessage } from './mcp-comm.js';
 import { appendTeamDeliveryLogForCwd } from './delivery-log.js';
-import { readLatestLeaderActivityMsFromStateDir } from './leader-activity.js';
 import { isTerminalPhase } from './orchestrator.js';
 import { resolveCanonicalTeamStateRoot } from './state-root.js';
 import { buildLeaderMailboxTriggerDirective, buildMailboxTriggerDirective } from './worker-bootstrap.js';
@@ -296,6 +295,20 @@ function buildIdleState(
       recent_event_count: recentEvents.length,
     },
   };
+}
+
+function readLatestLeaderRuntimeActivityMs(cwd: string): number {
+  const path = join(cwd, '.omx', 'state', 'leader-runtime-activity.json');
+  if (!existsSync(path)) return Number.NaN;
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as { last_activity_at?: string };
+    const lastActivityAt = typeof parsed.last_activity_at === 'string' ? parsed.last_activity_at.trim() : '';
+    if (!lastActivityAt) return Number.NaN;
+    const ms = Date.parse(lastActivityAt);
+    return Number.isFinite(ms) ? ms : Number.NaN;
+  } catch {
+    return Number.NaN;
+  }
 }
 
 function buildStallState(
@@ -1027,7 +1040,7 @@ export async function executeTeamApiOperation(
           teamReadLeaderAttention(teamName, cwd),
           listMailboxMessages(teamName, 'leader-fixed', cwd).catch(() => []),
           teamListDispatchRequests(teamName, cwd, { to_worker: 'leader-fixed', limit: 200 }).catch(() => []),
-          readLatestLeaderActivityMsFromStateDir(join(cwd, '.omx', 'state')).catch(() => Number.NaN),
+          readLatestLeaderRuntimeActivityMs(cwd),
         ]);
         if (!summary) {
           return { ok: false, operation, error: { code: 'team_not_found', message: 'team_not_found' } };
@@ -1049,7 +1062,7 @@ export async function executeTeamApiOperation(
           && latestLeaderActivityMs > leaderStoppedAtMs;
         const leaderStopObserved =
           leaderAttention?.leader_session_active === false
-          && (leaderAttention?.source === 'native_stop' || leaderAttention?.source === 'native_session_end')
+          && leaderAttention?.source === 'native_stop'
           && !leaderActivityAfterStop;
         return {
           ok: true,
