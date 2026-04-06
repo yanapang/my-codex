@@ -15,7 +15,8 @@ Usage:
   omx hooks test       Dispatch synthetic turn-complete event to plugins
 
 Notes:
-  - This command is additive. Existing \`omx tmux-hook\` behavior is unchanged.
+  - Non-team OMX automation is native-hook-first.
+  - \`omx tmux-hook\` is reserved for team runtime and legacy tmux troubleshooting.
   - Plugins are enabled by default. Disable with OMX_HOOK_PLUGINS=0.
 `;
 
