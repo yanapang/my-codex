@@ -660,6 +660,7 @@ describe('stripOmxFeatureFlags', () => {
       '[features]',
       'multi_agent = true',
       'child_agents_md = true',
+      'codex_hooks = true',
       'web_search = true',
       '',
     ].join('\n');
@@ -667,6 +668,7 @@ describe('stripOmxFeatureFlags', () => {
     const result = stripOmxFeatureFlags(config);
     assert.doesNotMatch(result, /multi_agent/);
     assert.doesNotMatch(result, /child_agents_md/);
+    assert.doesNotMatch(result, /codex_hooks/);
     assert.match(result, /web_search = true/);
     assert.match(result, /\[features\]/);
   });
@@ -678,12 +680,14 @@ describe('stripOmxFeatureFlags', () => {
       '[features]',
       'multi_agent = true',
       'child_agents_md = true',
+      'codex_hooks = true',
       '',
     ].join('\n');
 
     const result = stripOmxFeatureFlags(config);
     assert.doesNotMatch(result, /\[features\]/);
     assert.doesNotMatch(result, /multi_agent/);
+    assert.doesNotMatch(result, /codex_hooks/);
   });
 
   it('handles config without [features] section', async () => {
