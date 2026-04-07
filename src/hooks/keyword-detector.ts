@@ -11,8 +11,8 @@
  * to an external hook handler.
  */
 
-import { readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { classifyTaskSize, isHeavyMode, type TaskSizeResult, type TaskSizeThresholds } from './task-size-detector.js';
 import { isApprovedExecutionFollowupShortcut, type FollowupMode } from '../team/followup-planner.js';
 import { isPlanningComplete, readPlanningArtifacts } from '../planning/artifacts.js';
@@ -22,6 +22,10 @@ export interface KeywordMatch {
   keyword: string;
   skill: string;
   priority: number;
+}
+
+function safeString(value: unknown): string {
+  return typeof value === 'string' ? value : '';
 }
 
 export type SkillActivePhase = 'planning' | 'executing' | 'reviewing' | 'completing';
@@ -49,6 +53,8 @@ export interface SkillActiveState {
   thread_id?: string;
   turn_id?: string;
   input_lock?: DeepInterviewInputLock;
+  initialized_mode?: string;
+  initialized_state_path?: string;
 }
 
 export interface RecordSkillActivationInput {
@@ -64,6 +70,23 @@ export const SKILL_ACTIVE_STATE_FILE = 'skill-active-state.json';
 export const DEEP_INTERVIEW_STATE_FILE = 'deep-interview-state.json';
 export const DEEP_INTERVIEW_BLOCKED_APPROVAL_INPUTS = ['yes', 'y', 'proceed', 'continue', 'ok', 'sure', 'go ahead', 'next i should'] as const;
 export const DEEP_INTERVIEW_INPUT_LOCK_MESSAGE = 'Deep interview is active; auto-approval shortcuts are blocked until the interview finishes.';
+
+type StatefulSkillMode = 'deep-interview' | 'autopilot' | 'ralph' | 'ralplan' | 'ultrawork' | 'ultraqa';
+
+interface StatefulSkillSeedConfig {
+  mode: StatefulSkillMode;
+  initialPhase: string;
+  includeIteration?: boolean;
+}
+
+const STATEFUL_SKILL_SEED_CONFIG: Record<StatefulSkillMode, StatefulSkillSeedConfig> = {
+  'deep-interview': { mode: 'deep-interview', initialPhase: 'intent-first' },
+  autopilot: { mode: 'autopilot', initialPhase: 'planning' },
+  ralph: { mode: 'ralph', initialPhase: 'starting', includeIteration: true },
+  ralplan: { mode: 'ralplan', initialPhase: 'planning' },
+  ultrawork: { mode: 'ultrawork', initialPhase: 'planning' },
+  ultraqa: { mode: 'ultraqa', initialPhase: 'planning' },
+};
 
 interface DeepInterviewModeState {
   active: boolean;
@@ -120,6 +143,15 @@ async function readExistingDeepInterviewState(statePath: string): Promise<DeepIn
   }
 }
 
+async function readJsonStateIfExists(path: string): Promise<Record<string, unknown> | null> {
+  try {
+    const raw = await readFile(path, 'utf-8');
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 async function persistDeepInterviewModeState(
   stateDir: string,
   nextSkill: SkillActiveState | null,
@@ -163,6 +195,75 @@ async function persistDeepInterviewModeState(
     ...(releasedInputLock ? { input_lock: releasedInputLock } : {}),
   };
   await writeFile(statePath, JSON.stringify(nextState, null, 2));
+}
+
+function resolveSeedStateFilePath(stateDir: string, mode: StatefulSkillMode, sessionId?: string): {
+  absolutePath: string;
+  relativePath: string;
+} {
+  if (sessionId?.trim()) {
+    return {
+      absolutePath: join(stateDir, 'sessions', sessionId, `${mode}-state.json`),
+      relativePath: `.omx/state/sessions/${sessionId}/${mode}-state.json`,
+    };
+  }
+
+  return {
+    absolutePath: join(stateDir, `${mode}-state.json`),
+    relativePath: `.omx/state/${mode}-state.json`,
+  };
+}
+
+async function persistStatefulSkillSeedState(
+  stateDir: string,
+  nextSkill: SkillActiveState,
+  nowIso: string,
+  previousSkill: SkillActiveState | null,
+): Promise<SkillActiveState> {
+  const config = STATEFUL_SKILL_SEED_CONFIG[nextSkill.skill as StatefulSkillMode];
+  if (!config) return nextSkill;
+
+  const { absolutePath, relativePath } = resolveSeedStateFilePath(
+    stateDir,
+    config.mode,
+    nextSkill.session_id,
+  );
+  const existingModeState = await readJsonStateIfExists(absolutePath);
+  const sameActiveSkill = previousSkill?.skill === nextSkill.skill && previousSkill.active;
+  const preserveExistingModeState = sameActiveSkill
+    && safeString(existingModeState?.mode).trim() === config.mode
+    && safeString(existingModeState?.current_phase).trim() !== '';
+  const startedAt = previousSkill?.skill === nextSkill.skill && previousSkill.active
+    ? safeString(existingModeState?.started_at).trim() || previousSkill.activated_at || nowIso
+    : nowIso;
+
+  const baseState: Record<string, unknown> = {
+    ...(preserveExistingModeState ? existingModeState : {}),
+    active: true,
+    mode: config.mode,
+    current_phase: preserveExistingModeState
+      ? safeString(existingModeState?.current_phase).trim() || config.initialPhase
+      : config.initialPhase,
+    started_at: startedAt,
+    updated_at: nowIso,
+    session_id: nextSkill.session_id || safeString(existingModeState?.session_id).trim() || undefined,
+    thread_id: nextSkill.thread_id || safeString(existingModeState?.thread_id).trim() || undefined,
+    turn_id: nextSkill.turn_id || safeString(existingModeState?.turn_id).trim() || undefined,
+  };
+
+  if (config.includeIteration) {
+    baseState.iteration = typeof existingModeState?.iteration === 'number' ? existingModeState.iteration : 0;
+    baseState.max_iterations = typeof existingModeState?.max_iterations === 'number' ? existingModeState.max_iterations : 50;
+  }
+
+  await mkdir(dirname(absolutePath), { recursive: true });
+  await writeFile(absolutePath, JSON.stringify(baseState, null, 2));
+
+  return {
+    ...nextSkill,
+    initialized_mode: config.mode,
+    initialized_state_path: relativePath,
+  };
 }
 
 function escapeRegex(text: string): string {
@@ -357,8 +458,10 @@ export async function recordSkillActivation(input: RecordSkillActivationInput): 
   };
 
   try {
-    await writeFile(statePath, JSON.stringify(state, null, 2));
-    await persistDeepInterviewModeState(input.stateDir, state, nowIso, previous, input);
+    const nextState = await persistStatefulSkillSeedState(input.stateDir, state, nowIso, previous);
+    await writeFile(statePath, JSON.stringify(nextState, null, 2));
+    await persistDeepInterviewModeState(input.stateDir, nextState, nowIso, previous, input);
+    return nextState;
   } catch (error) {
     console.warn('[omx] warning: failed to persist keyword activation state', error);
   }

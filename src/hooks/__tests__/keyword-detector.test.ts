@@ -226,15 +226,56 @@ describe('keyword detector skill-active-state lifecycle', () => {
       assert.equal(result.skill, 'autopilot');
       assert.equal(result.phase, 'planning');
       assert.equal(result.active, true);
+      assert.equal(result.initialized_mode, 'autopilot');
+      assert.equal(result.initialized_state_path, '.omx/state/sessions/sess-1/autopilot-state.json');
 
       const persisted = JSON.parse(await readFile(join(stateDir, SKILL_ACTIVE_STATE_FILE), 'utf-8')) as {
         skill: string;
         phase: string;
         active: boolean;
+        initialized_mode?: string;
       };
       assert.equal(persisted.skill, 'autopilot');
       assert.equal(persisted.phase, 'planning');
       assert.equal(persisted.active, true);
+      assert.equal(persisted.initialized_mode, 'autopilot');
+
+      const modeState = JSON.parse(await readFile(join(stateDir, 'sessions', 'sess-1', 'autopilot-state.json'), 'utf-8')) as {
+        mode: string;
+        active: boolean;
+        current_phase: string;
+      };
+      assert.equal(modeState.mode, 'autopilot');
+      assert.equal(modeState.active, true);
+      assert.equal(modeState.current_phase, 'planning');
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('seeds first-class state for ralplan prompt-submit activation', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-ralplan-'));
+    const stateDir = join(cwd, '.omx', 'state');
+    try {
+      await mkdir(stateDir, { recursive: true });
+      const result = await recordSkillActivation({
+        stateDir,
+        text: '$ralplan tighten the plan',
+        sessionId: 'sess-ralplan',
+        nowIso: '2026-02-25T00:00:00.000Z',
+      });
+
+      assert.ok(result);
+      assert.equal(result.skill, 'ralplan');
+      assert.equal(result.initialized_mode, 'ralplan');
+      assert.equal(result.initialized_state_path, '.omx/state/sessions/sess-ralplan/ralplan-state.json');
+
+      const modeState = JSON.parse(
+        await readFile(join(stateDir, 'sessions', 'sess-ralplan', 'ralplan-state.json'), 'utf-8'),
+      ) as { mode: string; active: boolean; current_phase: string };
+      assert.equal(modeState.mode, 'ralplan');
+      assert.equal(modeState.active, true);
+      assert.equal(modeState.current_phase, 'planning');
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
@@ -328,6 +369,25 @@ describe('keyword detector skill-active-state lifecycle', () => {
     }
   });
 
+  it('does not seed non-stateful skill mode state on keyword activation', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-non-stateful-'));
+    const stateDir = join(cwd, '.omx', 'state');
+    try {
+      await mkdir(stateDir, { recursive: true });
+      const result = await recordSkillActivation({
+        stateDir,
+        text: 'please do a code review before merge',
+      });
+
+      assert.ok(result);
+      assert.equal(result.skill, 'code-review');
+      assert.equal(result.initialized_mode, undefined);
+      assert.equal(result.initialized_state_path, undefined);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('emits a warning when skill-active-state persistence fails', async () => {
     const warnings: unknown[][] = [];
     mock.method(console, 'warn', (...args: unknown[]) => {
@@ -375,6 +435,111 @@ describe('keyword detector skill-active-state lifecycle', () => {
       assert.ok(result);
       assert.equal(result.activated_at, '2026-02-25T00:00:00.000Z');
       assert.equal(result.updated_at, '2026-02-26T00:00:00.000Z');
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves seeded mode progress for same-skill continuation', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-seed-continuation-'));
+    const stateDir = join(cwd, '.omx', 'state');
+    const statePath = join(stateDir, SKILL_ACTIVE_STATE_FILE);
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await mkdir(join(stateDir, 'sessions', 'sess-autopilot'), { recursive: true });
+      await writeFile(
+        statePath,
+        JSON.stringify({
+          version: 1,
+          active: true,
+          skill: 'autopilot',
+          keyword: 'autopilot',
+          phase: 'planning',
+          activated_at: '2026-02-25T00:00:00.000Z',
+          updated_at: '2026-02-25T00:10:00.000Z',
+          source: 'keyword-detector',
+          session_id: 'sess-autopilot',
+        }),
+      );
+      await writeFile(
+        join(stateDir, 'sessions', 'sess-autopilot', 'autopilot-state.json'),
+        JSON.stringify({
+          active: true,
+          mode: 'autopilot',
+          current_phase: 'execution',
+          started_at: '2026-02-25T00:00:00.000Z',
+          updated_at: '2026-02-25T00:10:00.000Z',
+          session_id: 'sess-autopilot',
+          state: { context_snapshot_path: '.omx/context/existing.md' },
+        }),
+      );
+
+      const result = await recordSkillActivation({
+        stateDir,
+        text: 'autopilot keep going',
+        sessionId: 'sess-autopilot',
+        nowIso: '2026-02-26T00:00:00.000Z',
+      });
+
+      assert.ok(result);
+      const modeState = JSON.parse(
+        await readFile(join(stateDir, 'sessions', 'sess-autopilot', 'autopilot-state.json'), 'utf-8'),
+      ) as { current_phase: string; started_at: string; state?: { context_snapshot_path?: string } };
+      assert.equal(modeState.current_phase, 'execution');
+      assert.equal(modeState.started_at, '2026-02-25T00:00:00.000Z');
+      assert.equal(modeState.state?.context_snapshot_path, '.omx/context/existing.md');
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves Ralph iteration counters for same-skill continuation', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-ralph-continuation-'));
+    const stateDir = join(cwd, '.omx', 'state');
+    const statePath = join(stateDir, SKILL_ACTIVE_STATE_FILE);
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        statePath,
+        JSON.stringify({
+          version: 1,
+          active: true,
+          skill: 'ralph',
+          keyword: 'ralph',
+          phase: 'executing',
+          activated_at: '2026-02-25T00:00:00.000Z',
+          updated_at: '2026-02-25T00:10:00.000Z',
+          source: 'keyword-detector',
+        }),
+      );
+      await writeFile(
+        join(stateDir, 'ralph-state.json'),
+        JSON.stringify({
+          active: true,
+          mode: 'ralph',
+          current_phase: 'verifying',
+          started_at: '2026-02-25T00:00:00.000Z',
+          updated_at: '2026-02-25T00:10:00.000Z',
+          iteration: 3,
+          max_iterations: 10,
+        }),
+      );
+
+      const result = await recordSkillActivation({
+        stateDir,
+        text: 'ralph keep going',
+        nowIso: '2026-02-26T00:00:00.000Z',
+      });
+
+      assert.ok(result);
+      const modeState = JSON.parse(await readFile(join(stateDir, 'ralph-state.json'), 'utf-8')) as {
+        current_phase: string;
+        iteration: number;
+        max_iterations: number;
+      };
+      assert.equal(modeState.current_phase, 'verifying');
+      assert.equal(modeState.iteration, 3);
+      assert.equal(modeState.max_iterations, 10);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

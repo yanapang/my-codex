@@ -1,7 +1,7 @@
 import { execFileSync } from "child_process";
 import { existsSync, readFileSync } from "fs";
 import { mkdir, readFile, readdir, writeFile } from "fs/promises";
-import { join } from "path";
+import { join, resolve } from "path";
 import { readModeState } from "../modes/base.js";
 import { getReadScopedStateDirs } from "../mcp/state-paths.js";
 import { readSubagentSessionSummary } from "../subagents/tracker.js";
@@ -53,6 +53,7 @@ export interface NativeHookDispatchResult {
 const TERMINAL_RALPH_PHASES = new Set(["complete", "failed", "cancelled"]);
 const TERMINAL_MODE_PHASES = new Set(["complete", "failed", "cancelled"]);
 const SKILL_STOP_BLOCKERS = new Set(["ralplan", "deep-interview"]);
+const TEAM_TERMINAL_TASK_STATUSES = new Set(["completed", "failed"]);
 
 function safeString(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -420,12 +421,116 @@ async function buildSessionStartContext(
   return sections.join("\n\n");
 }
 
-function buildAdditionalContextMessage(prompt: string): string | null {
+function buildAdditionalContextMessage(prompt: string, skillState?: SkillActiveState | null): string | null {
   if (!prompt) return null;
   const match = detectPrimaryKeyword(prompt);
   if (!match) return null;
 
+  if (skillState?.initialized_mode && skillState.initialized_state_path) {
+    return [
+      `OMX native UserPromptSubmit detected workflow keyword "${match.keyword}" -> ${match.skill}.`,
+      `skill: ${skillState.initialized_mode} activated and initial state initialized at ${skillState.initialized_state_path}; write subsequent updates via omx_state MCP.`,
+      "Follow AGENTS.md routing and preserve ralplan/ralph execution gates.",
+    ].join(" ");
+  }
+
   return `OMX native UserPromptSubmit detected workflow keyword "${match.keyword}" -> ${match.skill}. Follow AGENTS.md routing and preserve ralplan/ralph execution gates.`;
+}
+
+function parseTeamWorkerEnv(rawValue: string): { teamName: string; workerName: string } | null {
+  const match = /^([a-z0-9][a-z0-9-]{0,29})\/(worker-\d+)$/.exec(rawValue.trim());
+  if (!match) return null;
+  return {
+    teamName: match[1] || "",
+    workerName: match[2] || "",
+  };
+}
+
+async function readTeamStateRootFromJson(path: string): Promise<string | null> {
+  const parsed = await readJsonIfExists(path);
+  const value = safeString(parsed?.team_state_root).trim();
+  return value || null;
+}
+
+async function resolveTeamStateDirForWorkerContext(
+  cwd: string,
+  workerContext: { teamName: string; workerName: string },
+): Promise<string> {
+  const explicitStateRoot = safeString(process.env.OMX_TEAM_STATE_ROOT).trim();
+  if (explicitStateRoot) {
+    return resolve(cwd, explicitStateRoot);
+  }
+
+  const leaderCwd = safeString(process.env.OMX_TEAM_LEADER_CWD).trim();
+  const candidateStateDirs = [
+    ...(leaderCwd ? [join(resolve(leaderCwd), ".omx", "state")] : []),
+    join(cwd, ".omx", "state"),
+  ];
+
+  for (const candidateStateDir of candidateStateDirs) {
+    const teamRoot = join(candidateStateDir, "team", workerContext.teamName);
+    if (!existsSync(teamRoot)) continue;
+
+    const identityRoot = await readTeamStateRootFromJson(
+      join(teamRoot, "workers", workerContext.workerName, "identity.json"),
+    );
+    if (identityRoot) return resolve(cwd, identityRoot);
+
+    const manifestRoot = await readTeamStateRootFromJson(join(teamRoot, "manifest.v2.json"));
+    if (manifestRoot) return resolve(cwd, manifestRoot);
+
+    const configRoot = await readTeamStateRootFromJson(join(teamRoot, "config.json"));
+    if (configRoot) return resolve(cwd, configRoot);
+
+    return candidateStateDir;
+  }
+
+  return join(cwd, ".omx", "state");
+}
+
+async function buildTeamWorkerStopOutput(
+  cwd: string,
+): Promise<Record<string, unknown> | null> {
+  const workerContext = parseTeamWorkerEnv(safeString(process.env.OMX_TEAM_WORKER));
+  if (!workerContext) return null;
+
+  const stateDir = await resolveTeamStateDirForWorkerContext(cwd, workerContext);
+  const workerRoot = join(stateDir, "team", workerContext.teamName, "workers", workerContext.workerName);
+  const [identity, status] = await Promise.all([
+    readJsonIfExists(join(workerRoot, "identity.json")),
+    readJsonIfExists(join(workerRoot, "status.json")),
+  ]);
+
+  const candidateTaskIds = new Set<string>();
+  const currentTaskId = safeString(status?.current_task_id).trim();
+  if (currentTaskId) candidateTaskIds.add(currentTaskId);
+  const assignedTasks = Array.isArray(identity?.assigned_tasks) ? identity?.assigned_tasks : [];
+  for (const taskId of assignedTasks) {
+    const normalized = safeString(taskId).trim();
+    if (normalized) candidateTaskIds.add(normalized);
+  }
+
+  for (const taskId of candidateTaskIds) {
+    const task = await readJsonIfExists(
+      join(stateDir, "team", workerContext.teamName, "tasks", `task-${taskId}.json`),
+    );
+    const statusValue = safeString(task?.status).trim().toLowerCase();
+    if (!statusValue || TEAM_TERMINAL_TASK_STATUSES.has(statusValue)) continue;
+    return {
+      decision: "block",
+      reason:
+        `OMX team worker ${workerContext.workerName} is still assigned non-terminal task ${taskId} (${statusValue}); continue the current assigned task or report a concrete blocker before stopping.`,
+      stopReason: `team_worker_${workerContext.workerName}_${taskId}_${statusValue}`,
+      systemMessage:
+        `OMX team worker ${workerContext.workerName} is still assigned task ${taskId} (${statusValue}).`,
+    };
+  }
+
+  return null;
+}
+
+function hasTeamWorkerContext(): boolean {
+  return parseTeamWorkerEnv(safeString(process.env.OMX_TEAM_WORKER)) !== null;
 }
 
 function isStopExempt(payload: CodexHookPayload): boolean {
@@ -513,9 +618,16 @@ async function findCanonicalActiveTeamForSession(
 async function buildSkillStopOutput(
   cwd: string,
   sessionId: string,
+  threadId: string,
 ): Promise<Record<string, unknown> | null> {
   const state = await readScopedJsonState("skill-active-state.json", cwd, sessionId);
   if (!state || state.active !== true) return null;
+  const stateSessionId = safeString(state.session_id).trim();
+  const stateThreadId = safeString(state.thread_id).trim();
+  if (sessionId && stateSessionId && stateSessionId !== sessionId) return null;
+  if (sessionId && !stateSessionId && threadId && stateThreadId && stateThreadId !== threadId) {
+    return null;
+  }
   const skill = safeString(state.skill).trim();
   const phase = formatPhase(state.phase, "planning");
   if (!SKILL_STOP_BLOCKERS.has(skill) || phase === "completing") return null;
@@ -543,9 +655,13 @@ async function buildStopHookOutput(
   }
 
   const sessionId = safeString(payload.session_id ?? payload.sessionId).trim();
+  const threadId = safeString(payload.thread_id ?? payload.threadId).trim();
   const ralphState = await readActiveRalphState(stateDir);
   const stopHookActive = payload.stop_hook_active === true || payload.stopHookActive === true;
   if (!ralphState) {
+    const teamWorkerOutput = await buildTeamWorkerStopOutput(cwd);
+    if (!stopHookActive && hasTeamWorkerContext()) return teamWorkerOutput;
+
     const autopilotOutput = await buildModeBasedStopOutput("autopilot", cwd);
     if (!stopHookActive && autopilotOutput) return autopilotOutput;
 
@@ -569,7 +685,7 @@ async function buildStopHookOutput(
         };
       }
 
-      const skillOutput = await buildSkillStopOutput(cwd, sessionId);
+      const skillOutput = await buildSkillStopOutput(cwd, sessionId, threadId);
       if (!stopHookActive && skillOutput) return skillOutput;
     }
 
@@ -667,7 +783,7 @@ export async function dispatchCodexNativeHook(
   if (hookEventName === "SessionStart" || hookEventName === "UserPromptSubmit") {
     const additionalContext = hookEventName === "SessionStart"
       ? await buildSessionStartContext(cwd, sessionId)
-      : buildAdditionalContextMessage(readPromptText(payload));
+      : buildAdditionalContextMessage(readPromptText(payload), skillState);
     if (additionalContext) {
       outputJson = {
         hookSpecificOutput: {
