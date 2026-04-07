@@ -2,7 +2,7 @@
 
 **Minor release for native Codex hook ownership, first-party Bash pre/post guidance, runtime/team delivery hardening, and workflow-doc refresh**
 
-`0.12.0` follows `0.11.13` with a broad release train from `v0.11.13..release/0.12.0`: it promotes native Codex hook ownership into the repo/runtime contract, ships first-party Bash `PreToolUse` / `PostToolUse` guidance, hardens team/runtime delivery and operator steering, and refreshes docs/prompt guidance for the modern OMX workflow.
+`0.12.0` follows `0.11.13` with a broad minor-release train from `v0.11.13..v0.12.0`: it promotes native Codex hook ownership into the repo/runtime contract, ships first-party Bash `PreToolUse` / `PostToolUse` guidance, hardens team/runtime delivery and operator steering, and refreshes workflow/docs collateral for the modern OMX path.
 
 ## Highlights
 
@@ -11,6 +11,7 @@
 - Team runtime delivery, mailbox handling, pane-status visibility, and next-action steering are more robust.
 - Windows/tmux launch reliability and worker supervision are improved.
 - Prompt/AGENTS guidance now emphasizes quality-first, verification-heavy execution.
+- Translated README/docs collateral is reorganized under `docs/readme/`, with added Ukrainian coverage and refreshed workflow docs.
 - Release metadata and collateral are aligned to `0.12.0`.
 
 ## What’s Changed
@@ -42,7 +43,7 @@
 ## Remaining risk
 
 - This release verification is still a local release gate, not a full GitHub Actions matrix rerun.
-- The release train is intentionally broad, so post-release monitoring should keep an eye on native hook setup/uninstall behavior, stop-state continuity, and team delivery/runtime behavior.
+- The release train is intentionally broad, so post-release monitoring should keep an eye on native hook setup/uninstall behavior, stop-state continuity, team delivery/runtime behavior, and follow-up docs/readme refresh work.
 
 ## Contributors
 
