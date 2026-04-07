@@ -5,7 +5,8 @@ import { join } from "path";
 import { readModeState } from "../modes/base.js";
 import { getReadScopedStateDirs } from "../mcp/state-paths.js";
 import { readSubagentSessionSummary } from "../subagents/tracker.js";
-import { readTeamPhase } from "../team/state.js";
+import { resolveCanonicalTeamStateRoot } from "../team/state-root.js";
+import { readTeamManifestV2, readTeamPhase } from "../team/state.js";
 import { omxNotepadPath, omxProjectMemoryPath } from "../utils/paths.js";
 import {
   detectPrimaryKeyword,
@@ -477,6 +478,38 @@ async function buildTeamStopOutput(cwd: string): Promise<Record<string, unknown>
   };
 }
 
+async function findCanonicalActiveTeamForSession(
+  cwd: string,
+  sessionId: string,
+): Promise<{ teamName: string; phase: string } | null> {
+  if (!sessionId.trim()) return null;
+  const teamsRoot = join(resolveCanonicalTeamStateRoot(cwd), "team");
+  if (!existsSync(teamsRoot)) return null;
+
+  const entries = await readdir(teamsRoot, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const teamName = entry.name.trim();
+    if (!teamName) continue;
+
+    const [manifest, phaseState] = await Promise.all([
+      readTeamManifestV2(teamName, cwd),
+      readTeamPhase(teamName, cwd),
+    ]);
+    if (!manifest || !phaseState) continue;
+    const ownerSessionId = (manifest.leader?.session_id ?? "").trim();
+    if (ownerSessionId && ownerSessionId !== sessionId.trim()) continue;
+    if (!isNonTerminalPhase(phaseState.current_phase)) continue;
+
+    return {
+      teamName,
+      phase: formatPhase(phaseState.current_phase),
+    };
+  }
+
+  return null;
+}
+
 async function buildSkillStopOutput(
   cwd: string,
   sessionId: string,
@@ -526,6 +559,16 @@ async function buildStopHookOutput(
     if (!stopHookActive && teamOutput) return teamOutput;
 
     if (sessionId) {
+      const canonicalTeam = await findCanonicalActiveTeamForSession(cwd, sessionId);
+      if (!stopHookActive && canonicalTeam) {
+        return {
+          decision: "block",
+          reason: `OMX team pipeline is still active (${canonicalTeam.teamName}) at phase ${canonicalTeam.phase}; continue coordinating until the team reaches a terminal phase.`,
+          stopReason: `team_${canonicalTeam.phase}`,
+          systemMessage: `OMX team pipeline is still active at phase ${canonicalTeam.phase}.`,
+        };
+      }
+
       const skillOutput = await buildSkillStopOutput(cwd, sessionId);
       if (!stopHookActive && skillOutput) return skillOutput;
     }

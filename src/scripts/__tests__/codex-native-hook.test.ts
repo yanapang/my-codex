@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { buildManagedCodexHooksConfig } from "../../config/codex-hooks.js";
+import { initTeamState } from "../../team/state.js";
 import {
   dispatchCodexNativeHook,
   mapCodexHookEventToOmxEvent,
@@ -484,6 +485,206 @@ describe("codex native hook dispatch", () => {
         systemMessage: "OMX team pipeline is still active at phase team-verify.",
       });
     } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("returns Stop continuation output from canonical team state when coarse mode state is missing", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-team-canonical-"));
+    try {
+      await initTeamState(
+        "canonical-team",
+        "canonical stop fallback",
+        "executor",
+        1,
+        cwd,
+        undefined,
+        { ...process.env, OMX_SESSION_ID: "sess-stop-team-canonical" },
+      );
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-stop-team-canonical",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.deepEqual(result.outputJson, {
+        decision: "block",
+        reason:
+          "OMX team pipeline is still active (canonical-team) at phase team-exec; continue coordinating until the team reaches a terminal phase.",
+        stopReason: "team_team-exec",
+        systemMessage: "OMX team pipeline is still active at phase team-exec.",
+      });
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("does not block Stop from canonical team state alone when the canonical phase is terminal", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-team-terminal-"));
+    try {
+      await initTeamState(
+        "terminal-team",
+        "terminal stop fallback",
+        "executor",
+        1,
+        cwd,
+        undefined,
+        { ...process.env, OMX_SESSION_ID: "sess-stop-team-terminal" },
+      );
+      await writeJson(join(cwd, ".omx", "state", "team", "terminal-team", "phase.json"), {
+        current_phase: "complete",
+        max_fix_attempts: 3,
+        current_fix_attempt: 0,
+        transitions: [],
+        updated_at: new Date().toISOString(),
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-stop-team-terminal",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("returns Stop continuation output from canonical team state when manifest session ownership is missing", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-team-legacy-"));
+    try {
+      await initTeamState(
+        "legacy-team",
+        "legacy stop fallback",
+        "executor",
+        1,
+        cwd,
+        undefined,
+        { ...process.env, OMX_SESSION_ID: "sess-stop-team-legacy" },
+      );
+      const manifestPath = join(cwd, ".omx", "state", "team", "legacy-team", "manifest.v2.json");
+      const manifest = JSON.parse(await readFile(manifestPath, "utf-8")) as Record<string, unknown>;
+      await writeJson(manifestPath, {
+        ...manifest,
+        leader: {
+          ...(manifest.leader as Record<string, unknown> | undefined),
+          session_id: "",
+        },
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-stop-team-legacy",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.deepEqual(result.outputJson, {
+        decision: "block",
+        reason:
+          "OMX team pipeline is still active (legacy-team) at phase team-exec; continue coordinating until the team reaches a terminal phase.",
+        stopReason: "team_team-exec",
+        systemMessage: "OMX team pipeline is still active at phase team-exec.",
+      });
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+
+  it("reads canonical Stop fallback team state from OMX_TEAM_STATE_ROOT when configured", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-team-root-"));
+    const sharedRoot = join(cwd, "shared-root");
+    const priorTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+    try {
+      process.env.OMX_TEAM_STATE_ROOT = "shared-root";
+      await initTeamState(
+        "canonical-root-team",
+        "canonical stop root fallback",
+        "executor",
+        1,
+        cwd,
+        undefined,
+        { ...process.env, OMX_SESSION_ID: "sess-stop-team-root", OMX_TEAM_STATE_ROOT: "shared-root" },
+      );
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-stop-team-root",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.deepEqual(result.outputJson, {
+        decision: "block",
+        reason:
+          "OMX team pipeline is still active (canonical-root-team) at phase team-exec; continue coordinating until the team reaches a terminal phase.",
+        stopReason: "team_team-exec",
+        systemMessage: "OMX team pipeline is still active at phase team-exec.",
+      });
+      assert.equal(existsSync(join(sharedRoot, "team", "canonical-root-team", "phase.json")), true);
+    } finally {
+      if (typeof priorTeamStateRoot === "string") process.env.OMX_TEAM_STATE_ROOT = priorTeamStateRoot;
+      else delete process.env.OMX_TEAM_STATE_ROOT;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("returns Stop continuation output from canonical team state rooted via OMX_TEAM_STATE_ROOT", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-team-env-root-"));
+    const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+    try {
+      process.env.OMX_TEAM_STATE_ROOT = "shared-team-state";
+      await initTeamState(
+        "env-root-team",
+        "env root stop fallback",
+        "executor",
+        1,
+        cwd,
+        undefined,
+        {
+          ...process.env,
+          OMX_SESSION_ID: "sess-stop-team-env-root",
+          OMX_TEAM_STATE_ROOT: "shared-team-state",
+        },
+      );
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-stop-team-env-root",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.deepEqual(result.outputJson, {
+        decision: "block",
+        reason:
+          "OMX team pipeline is still active (env-root-team) at phase team-exec; continue coordinating until the team reaches a terminal phase.",
+        stopReason: "team_team-exec",
+        systemMessage: "OMX team pipeline is still active at phase team-exec.",
+      });
+    } finally {
+      if (typeof previousTeamStateRoot === "string") process.env.OMX_TEAM_STATE_ROOT = previousTeamStateRoot;
+      else delete process.env.OMX_TEAM_STATE_ROOT;
       await rm(cwd, { recursive: true, force: true });
     }
   });

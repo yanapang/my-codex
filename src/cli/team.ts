@@ -22,7 +22,7 @@ import {
   executeTeamApiOperation,
   type TeamApiOperation,
 } from '../team/api-interop.js';
-import { teamReadConfig as readTeamConfig } from '../team/team-ops.js';
+import { teamReadConfig as readTeamConfig, teamReadPhase as readTeamPhase } from '../team/team-ops.js';
 import { recordLeaderRuntimeActivity } from '../team/leader-activity.js';
 import { readTeamPaneStatus } from '../team/pane-status.js';
 
@@ -118,6 +118,11 @@ const MIN_WORKER_COUNT = 1;
 const DEFAULT_SPARKSHELL_TAIL_LINES = 400;
 const MIN_SPARKSHELL_TAIL_LINES = 100;
 const MAX_SPARKSHELL_TAIL_LINES = 1000;
+
+function isTerminalModePhase(phase: string): boolean {
+  return ['complete', 'failed', 'cancelled'].includes(phase);
+}
+
 const TEAM_HELP = `
 Usage: omx team [N:agent-type] "<task description>"
        omx team status <team-name> [--json] [--tail-lines <100-1000>]
@@ -1190,31 +1195,40 @@ async function ensureTeamModeState(
     workerCount: parsed.workerCount,
     fallbackRole,
   });
+  const currentPhase = parsed.teamName
+    ? (await readTeamPhase(parsed.teamName, process.cwd()))?.current_phase ?? 'team-exec'
+    : 'team-exec';
+  const active = !isTerminalModePhase(currentPhase);
+  const completionStamp = active ? undefined : new Date().toISOString();
 
   const existing = await readModeState('team');
   if (existing?.active) {
     await updateModeState('team', {
+      active,
       task_description: parsed.task,
-      current_phase: 'team-exec',
+      current_phase: currentPhase,
       team_name: parsed.teamName,
       agent_count: parsed.workerCount,
       agent_types: roleDistribution,
       available_agent_types: availableAgentTypes,
       staffing_summary: staffingPlan.staffingSummary,
       staffing_allocations: staffingPlan.allocations,
+      completed_at: completionStamp,
     });
     return;
   }
 
   await startMode('team', parsed.task, 50);
   await updateModeState('team', {
-    current_phase: 'team-exec',
+    active,
+    current_phase: currentPhase,
     team_name: parsed.teamName,
     agent_count: parsed.workerCount,
     agent_types: roleDistribution,
     available_agent_types: availableAgentTypes,
     staffing_summary: staffingPlan.staffingSummary,
     staffing_allocations: staffingPlan.allocations,
+    completed_at: completionStamp,
   });
 
 }

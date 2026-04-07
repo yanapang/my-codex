@@ -29,8 +29,9 @@ When user triggers `$team`, the agent must:
 1. Invoke OMX runtime directly with `omx team ...`
 2. Avoid replacing the flow with in-process `spawn_agent` fanout
 3. Verify startup and surface concrete state/pane evidence
-4. Keep team state alive until workers are terminal (unless explicit abort)
-5. Handle cleanup and stale-pane recovery when needed
+4. If active team mode state is missing, initialize/sync it from canonical team runtime state before proceeding
+5. Keep team state alive until workers are terminal (unless explicit abort)
+6. Handle cleanup and stale-pane recovery when needed
 
 If `omx team` is unavailable, stop with a hard error.
 
@@ -148,6 +149,8 @@ When `$team` is used as a follow-up mode from ralplan, carry forward the approve
 7. Wait for worker readiness (`capture-pane` polling)
 8. Write per-worker `inbox.md` and trigger via `tmux send-keys`
 9. Return control to leader; follow-up uses `status` / `resume` / `shutdown`
+
+If coarse active team mode state is missing while canonical team runtime state exists, restore/sync the active team mode state before relying on hook/mode-aware behavior.
 
 Important:
 
