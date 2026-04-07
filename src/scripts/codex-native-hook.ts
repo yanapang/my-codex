@@ -15,8 +15,10 @@ import {
 } from "../hooks/keyword-detector.js";
 import {
   detectStallPattern,
+  isDeepInterviewInputLockActive,
   isDeepInterviewStateActive,
   loadAutoNudgeConfig,
+  normalizeAutoNudgeSignatureText,
 } from "./notify-hook/auto-nudge.js";
 import {
   buildNativePostToolUseOutput,
@@ -54,6 +56,7 @@ const TERMINAL_RALPH_PHASES = new Set(["complete", "failed", "cancelled"]);
 const TERMINAL_MODE_PHASES = new Set(["complete", "failed", "cancelled"]);
 const SKILL_STOP_BLOCKERS = new Set(["ralplan", "deep-interview"]);
 const TEAM_TERMINAL_TASK_STATUSES = new Set(["completed", "failed"]);
+const NATIVE_STOP_STATE_FILE = "native-stop-state.json";
 
 function safeString(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -574,13 +577,143 @@ async function buildTeamStopOutput(cwd: string): Promise<Record<string, unknown>
   const coarsePhase = teamState.current_phase;
   const canonicalPhase = teamName ? (await readTeamPhase(teamName, cwd))?.current_phase ?? coarsePhase : coarsePhase;
   if (!isNonTerminalPhase(canonicalPhase)) return null;
-  const phase = formatPhase(canonicalPhase);
+  return buildTeamStopOutputForPhase(teamName, formatPhase(canonicalPhase));
+}
+
+function buildTeamStopReason(teamName: string, phase: string): string {
+  const teamContext = teamName ? ` (${teamName})` : "";
+  return `OMX team pipeline is still active${teamContext} at phase ${phase}; continue coordinating until the team reaches a terminal phase. If system-generated worker auto-checkpoint commits exist, rewrite them into Lore-format final commits before merge/finalization.`;
+}
+
+function buildTeamStopOutputForPhase(teamName: string, phase: string): Record<string, unknown> {
   return {
     decision: "block",
-    reason: `OMX team pipeline is still active${teamName ? ` (${teamName})` : ""} at phase ${phase}; continue coordinating until the team reaches a terminal phase.`,
+    reason: buildTeamStopReason(teamName, phase),
     stopReason: `team_${phase}`,
     systemMessage: `OMX team pipeline is still active at phase ${phase}.`,
   };
+}
+
+function readPayloadSessionId(payload: CodexHookPayload): string {
+  return safeString(payload.session_id ?? payload.sessionId).trim();
+}
+
+function readPayloadThreadId(payload: CodexHookPayload): string {
+  return safeString(payload.thread_id ?? payload.threadId).trim();
+}
+
+function readPayloadTurnId(payload: CodexHookPayload): string {
+  return safeString(payload.turn_id ?? payload.turnId).trim();
+}
+
+async function isDeepInterviewSuppressedForStop(
+  cwd: string,
+  stateDir: string,
+  sessionId: string,
+): Promise<boolean> {
+  if (await isDeepInterviewStateActive(stateDir)) return true;
+  if (await isDeepInterviewInputLockActive(stateDir)) return true;
+
+  const scopedModeState = sessionId
+    ? await readScopedJsonState("deep-interview-state.json", cwd, sessionId)
+    : null;
+  if (scopedModeState?.active === true) return true;
+
+  const scopedSkillState = sessionId
+    ? await readScopedJsonState("skill-active-state.json", cwd, sessionId)
+    : null;
+  if (!scopedSkillState || scopedSkillState.active !== true) return false;
+  return safeString(scopedSkillState.skill).trim() === "deep-interview";
+}
+
+function buildRepeatableStopSignature(
+  payload: CodexHookPayload,
+  kind: string,
+  detail = "",
+): string {
+  const sessionId = readPayloadSessionId(payload) || "no-session";
+  const threadId = readPayloadThreadId(payload) || "no-thread";
+  const turnId = readPayloadTurnId(payload);
+  const normalizedDetail = normalizeAutoNudgeSignatureText(detail) || safeString(detail).trim().toLowerCase();
+  const transcriptPath = safeString(payload.transcript_path ?? payload.transcriptPath).trim() || "no-transcript";
+  const lastAssistantMessage = normalizeAutoNudgeSignatureText(
+    payload.last_assistant_message ?? payload.lastAssistantMessage,
+  ) || "no-message";
+  if (turnId) {
+    return [
+      kind,
+      sessionId,
+      threadId,
+      turnId,
+      transcriptPath,
+      lastAssistantMessage,
+      normalizedDetail || "no-detail",
+    ].join("|");
+  }
+  return [
+    kind,
+    sessionId,
+    threadId,
+    transcriptPath,
+    lastAssistantMessage,
+    normalizedDetail || "no-detail",
+  ].join("|");
+}
+
+async function readNativeStopState(stateDir: string): Promise<Record<string, unknown>> {
+  return await readJsonIfExists(join(stateDir, NATIVE_STOP_STATE_FILE)) ?? {};
+}
+
+function readNativeStopSessionKey(payload: CodexHookPayload): string {
+  return readPayloadSessionId(payload) || readPayloadThreadId(payload) || "global";
+}
+
+function readPreviousNativeStopSignature(
+  state: Record<string, unknown>,
+  sessionKey: string,
+): string {
+  const sessions = safeObject(state.sessions);
+  const sessionState = safeObject(sessions[sessionKey]);
+  return safeString(sessionState.last_signature).trim();
+}
+
+async function persistNativeStopSignature(
+  stateDir: string,
+  payload: CodexHookPayload,
+  signature: string,
+): Promise<void> {
+  if (!signature) return;
+  const state = await readNativeStopState(stateDir);
+  const sessions = safeObject(state.sessions);
+  const sessionKey = readNativeStopSessionKey(payload);
+  sessions[sessionKey] = {
+    ...safeObject(sessions[sessionKey]),
+    last_signature: signature,
+    updated_at: new Date().toISOString(),
+  };
+  await writeFile(join(stateDir, NATIVE_STOP_STATE_FILE), JSON.stringify({
+    ...state,
+    sessions,
+  }, null, 2));
+}
+
+async function maybeReturnRepeatableStopOutput(
+  payload: CodexHookPayload,
+  stateDir: string,
+  signature: string,
+  output: Record<string, unknown> | null,
+): Promise<Record<string, unknown> | null> {
+  if (!output) return null;
+  const stopHookActive = payload.stop_hook_active === true || payload.stopHookActive === true;
+  if (stopHookActive) {
+    const state = await readNativeStopState(stateDir);
+    const previousSignature = readPreviousNativeStopSignature(state, readNativeStopSessionKey(payload));
+    if (!signature || previousSignature === signature) {
+      return null;
+    }
+  }
+  await persistNativeStopSignature(stateDir, payload, signature);
+  return output;
 }
 
 async function findCanonicalActiveTeamForSession(
@@ -654,8 +787,8 @@ async function buildStopHookOutput(
     return null;
   }
 
-  const sessionId = safeString(payload.session_id ?? payload.sessionId).trim();
-  const threadId = safeString(payload.thread_id ?? payload.threadId).trim();
+  const sessionId = readPayloadSessionId(payload);
+  const threadId = readPayloadThreadId(payload);
   const ralphState = await readActiveRalphState(stateDir);
   const stopHookActive = payload.stop_hook_active === true || payload.stopHookActive === true;
   if (!ralphState) {
@@ -672,42 +805,55 @@ async function buildStopHookOutput(
     if (!stopHookActive && ultraqaOutput) return ultraqaOutput;
 
     const teamOutput = await buildTeamStopOutput(cwd);
-    if (!stopHookActive && teamOutput) return teamOutput;
+    if (teamOutput) {
+      const teamSignature = buildRepeatableStopSignature(payload, "team-stop", safeString(teamOutput.stopReason));
+      return await maybeReturnRepeatableStopOutput(payload, stateDir, teamSignature, teamOutput);
+    }
 
     if (sessionId) {
       const canonicalTeam = await findCanonicalActiveTeamForSession(cwd, sessionId);
-      if (!stopHookActive && canonicalTeam) {
-        return {
-          decision: "block",
-          reason: `OMX team pipeline is still active (${canonicalTeam.teamName}) at phase ${canonicalTeam.phase}; continue coordinating until the team reaches a terminal phase.`,
-          stopReason: `team_${canonicalTeam.phase}`,
-          systemMessage: `OMX team pipeline is still active at phase ${canonicalTeam.phase}.`,
-        };
+      if (canonicalTeam) {
+        const canonicalTeamOutput = buildTeamStopOutputForPhase(
+          canonicalTeam.teamName,
+          canonicalTeam.phase,
+        );
+        const canonicalTeamSignature = buildRepeatableStopSignature(payload, "team-stop", `${canonicalTeam.teamName}|${canonicalTeam.phase}`);
+        const repeatedCanonicalTeamOutput = await maybeReturnRepeatableStopOutput(
+          payload,
+          stateDir,
+          canonicalTeamSignature,
+          canonicalTeamOutput,
+        );
+        if (repeatedCanonicalTeamOutput) return repeatedCanonicalTeamOutput;
       }
 
       const skillOutput = await buildSkillStopOutput(cwd, sessionId, threadId);
       if (!stopHookActive && skillOutput) return skillOutput;
     }
 
-    const deepInterviewActive = await isDeepInterviewStateActive(stateDir);
+    const deepInterviewActive = await isDeepInterviewSuppressedForStop(cwd, stateDir, sessionId);
     const lastAssistantMessage = safeString(
       payload.last_assistant_message ?? payload.lastAssistantMessage,
     );
     const autoNudgeConfig = await loadAutoNudgeConfig();
 
     if (
-      !stopHookActive
-      && !deepInterviewActive
+      !deepInterviewActive
       && autoNudgeConfig.enabled
       && detectStallPattern(lastAssistantMessage, autoNudgeConfig.patterns)
     ) {
-      return {
-        decision: "block",
-        reason: autoNudgeConfig.response,
-        stopReason: "auto_nudge",
-        systemMessage:
-          "OMX native Stop detected a stall/permission-style handoff and continued the turn automatically.",
-      };
+      return await maybeReturnRepeatableStopOutput(
+        payload,
+        stateDir,
+        buildRepeatableStopSignature(payload, "auto-nudge", lastAssistantMessage),
+        {
+          decision: "block",
+          reason: autoNudgeConfig.response,
+          stopReason: "auto_nudge",
+          systemMessage:
+            "OMX native Stop detected a stall/permission-style handoff and continued the turn automatically.",
+        },
+      );
     }
 
     return null;

@@ -13,6 +13,7 @@ import {
   resolveCliInvocation,
   commandOwnsLocalHelp,
   resolveCodexLaunchPolicy,
+  resolveLeaderLaunchPolicyOverride,
   classifyCodexExecFailure,
   resolveSignalExitCode,
   parseTmuxPaneSnapshot,
@@ -38,6 +39,7 @@ import {
   shouldEnableNotifyFallbackWatcher,
   reapStaleNotifyFallbackWatcher,
   cleanupLaunchOrphanedMcpProcesses,
+  reapPostLaunchOrphanedMcpProcesses,
   resolveBackgroundHelperLaunchMode,
   shouldDetachBackgroundHelper,
   resolveNotifyFallbackWatcherScript,
@@ -201,6 +203,43 @@ describe("normalizeCodexLaunchArgs", () => {
       "gpt-5",
     ]);
   });
+
+  it("strips --tmux from leader codex args", () => {
+    assert.deepEqual(normalizeCodexLaunchArgs(["--tmux", "--yolo"]), [
+      "--yolo",
+    ]);
+  });
+
+  it("preserves literal --tmux after -- in leader codex args", () => {
+    assert.deepEqual(normalizeCodexLaunchArgs(["--", "--tmux", "--yolo"]), [
+      "--",
+      "--tmux",
+      "--yolo",
+    ]);
+  });
+});
+
+describe("resolveLeaderLaunchPolicyOverride", () => {
+  it("detects explicit detached tmux launch requests", () => {
+    assert.equal(
+      resolveLeaderLaunchPolicyOverride(["--tmux", "--model", "gpt-5"]),
+      "detached-tmux",
+    );
+  });
+
+  it("returns undefined when no explicit policy override is present", () => {
+    assert.equal(
+      resolveLeaderLaunchPolicyOverride(["--model", "gpt-5"]),
+      undefined,
+    );
+  });
+
+  it("stops scanning for --tmux after the end-of-options marker", () => {
+    assert.equal(
+      resolveLeaderLaunchPolicyOverride(["--", "--tmux", "--model", "gpt-5"]),
+      undefined,
+    );
+  });
 });
 
 describe("resolveNotifyTempContract", () => {
@@ -321,6 +360,50 @@ describe("cleanupLaunchOrphanedMcpProcesses", () => {
       false,
       "launch-safe cleanup must preserve OMX MCP processes still attached to another live OMX launch tree",
     );
+  });
+});
+
+describe("reapPostLaunchOrphanedMcpProcesses", () => {
+  it("logs postLaunch reaped MCP orphans and keeps cleanup non-fatal", async () => {
+    const info: string[] = [];
+    const warnings: string[] = [];
+    const errors: string[] = [];
+
+    await reapPostLaunchOrphanedMcpProcesses({
+      cleanup: async () => ({
+        dryRun: false,
+        candidates: [],
+        terminatedCount: 2,
+        forceKilledCount: 0,
+        failedPids: [810],
+      }),
+      writeInfo: (line) => info.push(line),
+      writeWarn: (line) => warnings.push(line),
+      writeError: (line) => errors.push(line),
+    });
+
+    assert.deepEqual(errors, []);
+    assert.match(
+      info.join("\n"),
+      /postLaunch: reaped 2 orphaned OMX MCP process/,
+    );
+    assert.match(
+      warnings.join("\n"),
+      /postLaunch: failed to reap 1 orphaned OMX MCP process/,
+    );
+  });
+
+  it("writes a non-fatal postLaunch cleanup error when the cleanup step throws", async () => {
+    const errors: string[] = [];
+
+    await reapPostLaunchOrphanedMcpProcesses({
+      cleanup: async () => {
+        throw new Error("boom");
+      },
+      writeError: (line) => errors.push(line),
+    });
+
+    assert.match(errors.join("\n"), /postLaunch MCP cleanup failed: Error: boom/);
   });
 });
 
@@ -873,10 +956,10 @@ describe("project launch scope helpers", () => {
 });
 
 describe("resolveCodexLaunchPolicy", () => {
-  it("uses detached tmux on macOS when outside tmux and tmux is available", () => {
+  it("uses direct launch on macOS when outside tmux even if tmux is available", () => {
     assert.equal(
       resolveCodexLaunchPolicy({}, "darwin", true, false, true, true),
-      "detached-tmux",
+      "direct",
     );
   });
 
@@ -903,10 +986,10 @@ describe("resolveCodexLaunchPolicy", () => {
     );
   });
 
-  it("uses detached tmux on non-macOS hosts when outside tmux and tmux is available", () => {
+  it("uses direct launch on non-macOS hosts when outside tmux even if tmux is available", () => {
     assert.equal(
       resolveCodexLaunchPolicy({}, "linux", true, false, true, true),
-      "detached-tmux",
+      "direct",
     );
   });
 
@@ -923,6 +1006,21 @@ describe("resolveCodexLaunchPolicy", () => {
         false,
         true,
         true,
+      ),
+      "direct",
+    );
+  });
+
+  it("honors explicit detached tmux launch requests when tmux is available", () => {
+    assert.equal(
+      resolveCodexLaunchPolicy(
+        {},
+        "linux",
+        true,
+        false,
+        true,
+        true,
+        "detached-tmux",
       ),
       "detached-tmux",
     );
