@@ -4,6 +4,29 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-04-07
+
+Patch release for the `v0.12.0..v0.12.1` train: team-runtime hygiene, launch/cleanup follow-through, notify-fallback hardening, and release-collateral sync.
+
+### Fixed
+- **Machine-readable team status output** — leader mailbox pruning no longer re-issues duplicate delivered-message bridge calls, so `omx team status --json` stays parseable instead of leaking mailbox-delivery stderr noise.
+- **Interactive worker PID capture** — team startup now resolves worker PIDs from the actual pane id and persists them into worker metadata for diagnostics and cleanup.
+- **Launch-safe orphan cleanup** — stale OMX MCP cleanup preserves live launcher/session ancestry instead of reaping processes that still belong to the active tree.
+- **Notify-fallback log growth** — once-mode fallback watcher logs now rotate instead of growing silently on long-lived runs.
+
+### Changed
+- **Direct leader launch by default** — outside tmux, OMX now launches the leader directly unless the operator explicitly requests detached tmux behavior.
+- **Prompt collateral tightening** — the information-architect prompt is slimmer and the `0.12.1` release/readiness collateral now matches the actual patch scope.
+- **Release metadata sync** — Node/Cargo package metadata, lockfiles, changelog, release body, and release notes are aligned to `0.12.1`.
+
+### Verified
+- `npm run build`
+- `npx biome lint src/cli/index.ts src/cli/cleanup.ts src/cli/__tests__/index.test.ts src/cli/__tests__/cleanup.test.ts src/scripts/notify-fallback-watcher.ts src/hooks/__tests__/notify-fallback-watcher.test.ts src/team/runtime.ts src/team/state/mailbox.ts src/team/__tests__/runtime.test.ts src/team/__tests__/state.test.ts package.json`
+- `node --test dist/cli/__tests__/cleanup.test.js dist/cli/__tests__/index.test.js dist/cli/__tests__/version-sync-contract.test.js`
+- `node --test dist/hooks/__tests__/notify-fallback-watcher.test.js`
+- `node --test dist/team/__tests__/state.test.js dist/team/__tests__/runtime.test.js`
+- `npm run smoke:packed-install`
+
 ## [0.12.0] - 2026-04-06
 
 Minor release for native Codex hook ownership, first-party Bash pre/post tool guidance, runtime/team delivery hardening, and workflow-doc refresh after `0.11.13`.

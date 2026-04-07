@@ -1,52 +1,46 @@
-# oh-my-codex v0.12.0
+# oh-my-codex v0.12.1
 
-**Minor release for native Codex hook ownership, first-party Bash pre/post guidance, runtime/team delivery hardening, and workflow-doc refresh**
+**Patch release for team/runtime hygiene, launch/cleanup follow-through, notify-fallback hardening, and release collateral alignment**
 
-`0.12.0` follows `0.11.13` with a broad minor-release train from `v0.11.13..v0.12.0`: it promotes native Codex hook ownership into the repo/runtime contract, ships first-party Bash `PreToolUse` / `PostToolUse` guidance, hardens team/runtime delivery and operator steering, and refreshes workflow/docs collateral for the modern OMX path.
+`0.12.1` follows `0.12.0` with the full `v0.12.0..v0.12.1` patch train: clean machine-readable team status output, correct interactive worker PID metadata, launch-safe MCP cleanup, direct-leader launch follow-through, notify-fallback log hardening, tighter operator guidance, and synchronized `0.12.1` release collateral.
 
 ## Highlights
 
-- Native Codex hook ownership now lives in the repo/runtime contract for non-team OMX sessions.
-- First-party Bash `PreToolUse` / `PostToolUse` guidance is now supported and documented.
-- Team runtime delivery, mailbox handling, pane-status visibility, and next-action steering are more robust.
-- Windows/tmux launch reliability and worker supervision are improved.
-- Prompt/AGENTS guidance now emphasizes quality-first, verification-heavy execution.
-- Translated README/docs collateral is reorganized under `docs/readme/`, with added Ukrainian coverage and refreshed workflow docs.
-- Release metadata and collateral are aligned to `0.12.0`.
+- `omx team status --json` no longer risks stray mailbox-delivery stderr noise during stale leader-mail pruning.
+- Interactive team workers now record the PID of their actual tmux pane, not a pane-index approximation.
+- Orphaned OMX MCP cleanup now protects the live launcher tree, and notify-fallback once-mode logs no longer grow without bound.
+- OMX now defaults to direct leader launch outside tmux unless detached tmux is explicitly requested.
+- Release metadata and collateral are aligned to `0.12.1`.
 
 ## What’s Changed
 
 ### Fixes
-- harden repo-local native hook ownership, session-start continuity, and stop-state persistence
-- strengthen team/runtime delivery, mailbox, persist-error, and next-action steering behavior
-- preserve Windows/tmux launch reliability, shift-enter handling, and launcher command resolution
-- keep notification/reminder/session continuity paths more reliable during live operator workflows
+- avoid duplicate bridge `MarkMailboxDelivered` calls for already-delivered leader system mail
+- persist interactive worker PID metadata from the resolved pane id
+- preserve live launcher ancestry while reaping orphaned OMX MCP processes
+- rotate notify-fallback once-mode logs under the configured size cap
 
 ### Changed
-- add first-party Bash `PreToolUse` / `PostToolUse` guidance for the native hook lane
-- refresh prompt/AGENTS defaults toward quality-first, evidence-backed execution
-- reorganize translated README/docs collateral under `docs/readme/` and extend Ukrainian docs coverage
-- bump release metadata from `0.11.13` to `0.12.0` across Node/Cargo workspace manifests, lockfiles, and release collateral
+- default leader launches to direct mode outside tmux unless `--tmux` explicitly requests detached startup
+- tighten the information-architect prompt
+- bump release metadata from `0.12.0` to `0.12.1` across Node/Cargo manifests, changelog, and release collateral
 
 ## Verification
 
-- `npm ci`
-- `node dist/cli/omx.js version`
-- `node --test dist/cli/__tests__/version-sync-contract.test.js`
-- `cargo test -p omx-runtime-core`
 - `npm run build`
-- `npm run lint`
-- `npm test`
+- `npx biome lint src/cli/index.ts src/cli/cleanup.ts src/cli/__tests__/index.test.ts src/cli/__tests__/cleanup.test.ts src/scripts/notify-fallback-watcher.ts src/hooks/__tests__/notify-fallback-watcher.test.ts src/team/runtime.ts src/team/state/mailbox.ts src/team/__tests__/runtime.test.ts src/team/__tests__/state.test.ts package.json`
+- `node --test dist/cli/__tests__/cleanup.test.js dist/cli/__tests__/index.test.js dist/cli/__tests__/version-sync-contract.test.js`
+- `node --test dist/hooks/__tests__/notify-fallback-watcher.test.js`
+- `node --test dist/team/__tests__/state.test.js dist/team/__tests__/runtime.test.js`
 - `npm run smoke:packed-install`
-- `git diff --check origin/main...HEAD`
 
 ## Remaining risk
 
-- This release verification is still a local release gate, not a full GitHub Actions matrix rerun.
-- The release train is intentionally broad, so post-release monitoring should keep an eye on native hook setup/uninstall behavior, stop-state continuity, team delivery/runtime behavior, and follow-up docs/readme refresh work.
+- This verification is still local; it is not a full GitHub Actions matrix rerun.
+- The release still touches live team/runtime and notification surfaces, so post-release monitoring should watch team status output, interactive worker lifecycle telemetry, and notify-fallback behavior.
 
 ## Contributors
 
 - [@Yeachan-Heo](https://github.com/Yeachan-Heo) (Bellman)
 
-**Full Changelog**: [`v0.11.13...v0.12.0`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.11.13...v0.12.0)
+**Full Changelog**: [`v0.12.0...v0.12.1`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.12.0...v0.12.1)
