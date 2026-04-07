@@ -4,6 +4,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { buildLeaderMonitoringHints, parseTeamStartArgs, teamCommand } from '../team.js';
+import { readModeState } from '../../modes/base.js';
 import { DEFAULT_MAX_WORKERS } from '../../team/state.js';
 import {
   appendTeamEvent,
@@ -1527,6 +1528,129 @@ process.on('SIGTERM', () => process.exit(0));
     } finally {
       console.log = originalLog;
       process.stderr.write = originalStderrWrite;
+      process.chdir(previousCwd);
+      if (typeof previousPath === 'string') process.env.PATH = previousPath;
+      else delete process.env.PATH;
+      if (typeof previousTmux === 'string') process.env.TMUX = previousTmux;
+      else delete process.env.TMUX;
+      if (typeof previousLaunchMode === 'string') process.env.OMX_TEAM_WORKER_LAUNCH_MODE = previousLaunchMode;
+      else delete process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
+      if (typeof previousWorkerCli === 'string') process.env.OMX_TEAM_WORKER_CLI = previousWorkerCli;
+      else delete process.env.OMX_TEAM_WORKER_CLI;
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('initializes and rehydrates active team mode state on start and resume', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-team-mode-state-'));
+    const binDir = join(wd, 'bin');
+    const fakeCodexPath = join(binDir, 'codex');
+    const previousCwd = process.cwd();
+    const previousPath = process.env.PATH;
+    const previousTmux = process.env.TMUX;
+    const previousLaunchMode = process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
+    const previousWorkerCli = process.env.OMX_TEAM_WORKER_CLI;
+    const teamTask = 'issue 771 rehydrate team mode state';
+    const teamName = parseTeamStartArgs(['1:executor', teamTask]).parsed.teamName;
+
+    await mkdir(binDir, { recursive: true });
+    await writeFile(
+      fakeCodexPath,
+      `#!/usr/bin/env node
+setTimeout(() => process.exit(0), 3000);
+process.stdin.resume();
+process.on('SIGTERM', () => process.exit(0));
+`,
+    );
+    await chmod(fakeCodexPath, 0o755);
+
+    try {
+      process.chdir(wd);
+      process.env.PATH = `${binDir}:${previousPath ?? ''}`;
+      delete process.env.TMUX;
+      process.env.OMX_TEAM_WORKER_LAUNCH_MODE = 'prompt';
+      process.env.OMX_TEAM_WORKER_CLI = 'codex';
+
+      await withoutTeamTestWorkerEnv(() => teamCommand(['1:executor', teamTask]));
+
+      const startedState = await readModeState('team', wd);
+      assert.equal(startedState?.active, true);
+      assert.equal(startedState?.team_name, teamName);
+      assert.equal(startedState?.current_phase, 'team-exec');
+
+      await rm(join(wd, '.omx', 'state', 'team-state.json'), { force: true });
+      assert.equal(await readModeState('team', wd), null);
+
+      await withoutTeamTestWorkerEnv(() => teamCommand(['resume', teamName]));
+
+      const resumedState = await readModeState('team', wd);
+      assert.equal(resumedState?.active, true);
+      assert.equal(resumedState?.team_name, teamName);
+      assert.equal(resumedState?.current_phase, 'team-exec');
+    } finally {
+      process.chdir(previousCwd);
+      if (typeof previousPath === 'string') process.env.PATH = previousPath;
+      else delete process.env.PATH;
+      if (typeof previousTmux === 'string') process.env.TMUX = previousTmux;
+      else delete process.env.TMUX;
+      if (typeof previousLaunchMode === 'string') process.env.OMX_TEAM_WORKER_LAUNCH_MODE = previousLaunchMode;
+      else delete process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
+      if (typeof previousWorkerCli === 'string') process.env.OMX_TEAM_WORKER_CLI = previousWorkerCli;
+      else delete process.env.OMX_TEAM_WORKER_CLI;
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('does not resurrect active team mode state when canonical team phase is terminal on resume', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-team-mode-terminal-'));
+    const binDir = join(wd, 'bin');
+    const fakeCodexPath = join(binDir, 'codex');
+    const previousCwd = process.cwd();
+    const previousPath = process.env.PATH;
+    const previousTmux = process.env.TMUX;
+    const previousLaunchMode = process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
+    const previousWorkerCli = process.env.OMX_TEAM_WORKER_CLI;
+    const teamTask = 'issue 772 terminal team mode state';
+    const teamName = parseTeamStartArgs(['1:executor', teamTask]).parsed.teamName;
+
+    await mkdir(binDir, { recursive: true });
+    await writeFile(
+      fakeCodexPath,
+      `#!/usr/bin/env node
+setTimeout(() => process.exit(0), 3000);
+process.stdin.resume();
+process.on('SIGTERM', () => process.exit(0));
+`,
+    );
+    await chmod(fakeCodexPath, 0o755);
+
+    try {
+      process.chdir(wd);
+      process.env.PATH = `${binDir}:${previousPath ?? ''}`;
+      delete process.env.TMUX;
+      process.env.OMX_TEAM_WORKER_LAUNCH_MODE = 'prompt';
+      process.env.OMX_TEAM_WORKER_CLI = 'codex';
+
+      await withoutTeamTestWorkerEnv(() => teamCommand(['1:executor', teamTask]));
+      await writeFile(
+        join(wd, '.omx', 'state', 'team', teamName, 'phase.json'),
+        JSON.stringify({
+          current_phase: 'complete',
+          max_fix_attempts: 3,
+          current_fix_attempt: 0,
+          transitions: [],
+          updated_at: new Date().toISOString(),
+        }, null, 2),
+      );
+      await rm(join(wd, '.omx', 'state', 'team-state.json'), { force: true });
+
+      await withoutTeamTestWorkerEnv(() => teamCommand(['resume', teamName]));
+
+      const resumedState = await readModeState('team', wd);
+      assert.equal(resumedState?.active, false);
+      assert.equal(resumedState?.team_name, teamName);
+      assert.equal(resumedState?.current_phase, 'complete');
+    } finally {
       process.chdir(previousCwd);
       if (typeof previousPath === 'string') process.env.PATH = previousPath;
       else delete process.env.PATH;
