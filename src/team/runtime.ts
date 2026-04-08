@@ -17,6 +17,7 @@ import {
   type TeamSession,
   waitForWorkerReady,
   dismissTrustPromptIfPresent,
+  isNativeWindows,
   sleepFractionalSeconds,
   sendToWorker,
   sendToWorkerStdin,
@@ -296,6 +297,12 @@ function collectShutdownPaneIds(params: {
   }
 
   return [...paneIds];
+}
+
+export function shouldPrekillInteractiveShutdownProcessTrees(sessionName: string): boolean {
+  // Native Windows + split-pane psmux sessions can expose overlapping
+  // ancestry around the leader client; rely on pane-targeted teardown there.
+  return !(isNativeWindows() && sessionName.includes(':'));
 }
 
 async function logRuntimeDispatchOutcome(params: {
@@ -2769,11 +2776,13 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
   if (config.worker_launch_mode === 'interactive') {
     const livePaneIds = listPaneIds(sessionName);
     let shutdownPaneIds = collectShutdownPaneIds({ config, livePaneIds });
-    const workerPanePids = shutdownPaneIds
-      .map((paneId) => getWorkerPanePid(sessionName, 1, paneId))
-      .filter((pid): pid is number => typeof pid === 'number' && Number.isFinite(pid) && pid > 0);
-    for (const panePid of workerPanePids) {
-      await terminateTrackedProcessTree(panePid);
+    if (shouldPrekillInteractiveShutdownProcessTrees(sessionName)) {
+      const workerPanePids = shutdownPaneIds
+        .map((paneId) => getWorkerPanePid(sessionName, 1, paneId))
+        .filter((pid): pid is number => typeof pid === 'number' && Number.isFinite(pid) && pid > 0);
+      for (const panePid of workerPanePids) {
+        await terminateTrackedProcessTree(panePid);
+      }
     }
 
     let resizeHookWarning: string | null = null;
@@ -3790,7 +3799,11 @@ async function sendLeaderMailboxMessage(params: {
   cwd: string;
 }): Promise<DispatchOutcome> {
   const { teamName, fromWorker, body, config, dispatchPolicy, cwd } = params;
-  const triggerDirective = buildLeaderMailboxTriggerDirective(teamName, fromWorker);
+  const triggerDirective = buildLeaderMailboxTriggerDirective(
+    teamName,
+    fromWorker,
+    config.team_state_root || undefined,
+  );
   const transportPreference = resolveLeaderMailboxTransportPreference(dispatchPolicy);
   const queuedOutcome = await queueDirectMailboxMessage({
     teamName,

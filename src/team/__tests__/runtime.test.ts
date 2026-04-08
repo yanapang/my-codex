@@ -32,6 +32,7 @@ import {
   sendWorkerMessage,
   applyCreatedInteractiveSessionToConfig,
   resolveWorkerLaunchArgsFromEnv,
+  shouldPrekillInteractiveShutdownProcessTrees,
   waitForWorkerStartupEvidence,
   waitForClaudeStartupEvidence,
   TEAM_LOW_COMPLEXITY_DEFAULT_MODEL,
@@ -191,6 +192,33 @@ async function withMockTmuxFixture<T>(
     }
 
     await rm(fakeBinDir, { recursive: true, force: true });
+  }
+}
+
+async function withNativeWindowsPlatform<T>(run: () => Promise<T>): Promise<T> {
+  const prevMsystem = process.env.MSYSTEM;
+  const prevOstype = process.env.OSTYPE;
+  const prevWsl = process.env.WSL_DISTRO_NAME;
+  const prevWslInterop = process.env.WSL_INTEROP;
+  const origPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+
+  try {
+    delete process.env.MSYSTEM;
+    delete process.env.OSTYPE;
+    delete process.env.WSL_DISTRO_NAME;
+    delete process.env.WSL_INTEROP;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    return await run();
+  } finally {
+    if (origPlatform) Object.defineProperty(process, 'platform', origPlatform);
+    if (typeof prevMsystem === 'string') process.env.MSYSTEM = prevMsystem;
+    else delete process.env.MSYSTEM;
+    if (typeof prevOstype === 'string') process.env.OSTYPE = prevOstype;
+    else delete process.env.OSTYPE;
+    if (typeof prevWsl === 'string') process.env.WSL_DISTRO_NAME = prevWsl;
+    else delete process.env.WSL_DISTRO_NAME;
+    if (typeof prevWslInterop === 'string') process.env.WSL_INTEROP = prevWslInterop;
+    else delete process.env.WSL_INTEROP;
   }
 }
 
@@ -608,9 +636,9 @@ sleep 5
       await shutdownTeam(runtime.teamName, cwd, { force: true });
       runtime = null;
     } finally {
-      const activeRuntime: TeamRuntime | null = runtime;
-      if (activeRuntime) {
-        await shutdownTeam((activeRuntime as TeamRuntime).teamName, cwd, { force: true }).catch(() => {});
+      const runtimeToShutdown = runtime as TeamRuntime | null;
+      if (runtimeToShutdown) {
+        await shutdownTeam(runtimeToShutdown.teamName, cwd, { force: true }).catch(() => {});
       }
       if (typeof prevPath === 'string') process.env.PATH = prevPath;
       else delete process.env.PATH;
@@ -702,6 +730,15 @@ sleep 5
       else delete process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
       await rm(cwd, { recursive: true, force: true });
     }
+  });
+
+  it('skips interactive worker process-tree prekill on native Windows split-pane sessions', async () => {
+    await withNativeWindowsPlatform(async () => {
+      assert.equal(shouldPrekillInteractiveShutdownProcessTrees('leader:0'), false);
+      assert.equal(shouldPrekillInteractiveShutdownProcessTrees('omx-team-alpha'), true);
+    });
+
+    assert.equal(shouldPrekillInteractiveShutdownProcessTrees('leader:0'), true);
   });
 
   it('startTeam accepts native Windows tmux clients even when TMUX env vars are absent', async () => {
@@ -963,9 +1000,9 @@ esac
         },
       );
     } finally {
-      const activeRuntime: TeamRuntime | null = runtime;
-      if (activeRuntime) {
-        await shutdownTeam((activeRuntime as TeamRuntime).teamName, cwd, { force: true }).catch(() => {});
+      const runtimeToShutdown = runtime as TeamRuntime | null;
+      if (runtimeToShutdown) {
+        await shutdownTeam(runtimeToShutdown.teamName, cwd, { force: true }).catch(() => {});
       }
       if (typeof prevTmux === 'string') process.env.TMUX = prevTmux;
       else delete process.env.TMUX;
@@ -1095,9 +1132,8 @@ sleep 5
       await shutdownTeam(runtime.teamName, cwd, { force: true });
       runtime = null;
     } finally {
-      const activeRuntime: TeamRuntime | null = runtime;
-      if (activeRuntime) {
-        await shutdownTeam((activeRuntime as TeamRuntime).teamName, cwd, { force: true }).catch(() => {});
+      if (runtime) {
+        await shutdownTeam(runtime.teamName, cwd, { force: true }).catch(() => {});
       }
       if (typeof prevPath === 'string') process.env.PATH = prevPath;
       else delete process.env.PATH;
@@ -1182,9 +1218,8 @@ process.on('SIGTERM', () => process.exit(0));
       await shutdownTeam(runtime.teamName, cwd, { force: true });
       runtime = null;
     } finally {
-      const activeRuntime: TeamRuntime | null = runtime;
-      if (activeRuntime) {
-        await shutdownTeam((activeRuntime as TeamRuntime).teamName, cwd, { force: true }).catch(() => {});
+      if (runtime) {
+        await shutdownTeam(runtime.teamName, cwd, { force: true }).catch(() => {});
       }
       if (typeof prevPath === 'string') process.env.PATH = prevPath;
       else delete process.env.PATH;
@@ -1306,9 +1341,8 @@ process.on('SIGTERM', () => process.exit(0));
       await shutdownTeam(runtime.teamName, cwd, { force: true });
       runtime = null;
     } finally {
-      const activeRuntime: TeamRuntime | null = runtime;
-      if (activeRuntime) {
-        await shutdownTeam((activeRuntime as TeamRuntime).teamName, cwd, { force: true }).catch(() => {});
+      if (runtime) {
+        await shutdownTeam(runtime.teamName, cwd, { force: true }).catch(() => {});
       }
       if (typeof prevPath === 'string') process.env.PATH = prevPath;
       else delete process.env.PATH;
@@ -1401,9 +1435,8 @@ process.on('SIGTERM', () => process.exit(0));
       await shutdownTeam(runtime.teamName, cwd, { force: true });
       runtime = null;
     } finally {
-      const activeRuntime: TeamRuntime | null = runtime;
-      if (activeRuntime) {
-        await shutdownTeam((activeRuntime as TeamRuntime).teamName, cwd, { force: true }).catch(() => {});
+      if (runtime) {
+        await shutdownTeam(runtime.teamName, cwd, { force: true }).catch(() => {});
       }
       if (typeof prevPath === 'string') process.env.PATH = prevPath;
       else delete process.env.PATH;
@@ -1465,9 +1498,8 @@ process.on('SIGTERM', () => process.exit(0));
       await shutdownTeam(runtime.teamName, cwd, { force: true });
       runtime = null;
     } finally {
-      const activeRuntime: TeamRuntime | null = runtime;
-      if (activeRuntime) {
-        await shutdownTeam((activeRuntime as TeamRuntime).teamName, cwd, { force: true }).catch(() => {});
+      if (runtime) {
+        await shutdownTeam(runtime.teamName, cwd, { force: true }).catch(() => {});
       }
       if (typeof prevPath === 'string') process.env.PATH = prevPath;
       else delete process.env.PATH;
@@ -1601,9 +1633,9 @@ exit 0
         },
       );
     } finally {
-      const activeRuntime: TeamRuntime | null = runtime;
-      if (activeRuntime) {
-        await shutdownTeam((activeRuntime as TeamRuntime).teamName, cwd, { force: true }).catch(() => {});
+      const runtimeToShutdown = runtime as TeamRuntime | null;
+      if (runtimeToShutdown) {
+        await shutdownTeam(runtimeToShutdown.teamName, cwd, { force: true }).catch(() => {});
       }
       if (typeof previousTmux === 'string') process.env.TMUX = previousTmux;
       else delete process.env.TMUX;
@@ -1967,9 +1999,8 @@ process.on('SIGTERM', () => {
       }
       assert.equal(alive, false, `worker pid ${workerPid} should be terminated after shutdown`);
     } finally {
-      const activeRuntime: TeamRuntime | null = runtime;
-      if (activeRuntime) {
-        await shutdownTeam((activeRuntime as TeamRuntime).teamName, cwd, { force: true }).catch(() => {});
+      if (runtime) {
+        await shutdownTeam(runtime.teamName, cwd, { force: true }).catch(() => {});
       }
       if (typeof prevPath === 'string') process.env.PATH = prevPath;
       else delete process.env.PATH;
@@ -2051,9 +2082,8 @@ process.on('SIGTERM', () => process.exit(0));
       }
       assert.equal(alive, false, `detached helper pid ${helperPid} should be terminated after shutdown`);
     } finally {
-      const activeRuntime: TeamRuntime | null = runtime;
-      if (activeRuntime) {
-        await shutdownTeam((activeRuntime as TeamRuntime).teamName, cwd, { force: true }).catch(() => {});
+      if (runtime) {
+        await shutdownTeam(runtime.teamName, cwd, { force: true }).catch(() => {});
       }
       if (helperPid > 0) {
         try {
@@ -3529,6 +3559,85 @@ esac
     }
   });
 
+  it('shutdownTeam skips prekill and keeps the leader pane alive on native Windows split-pane shutdown', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-shutdown-win32-split-'));
+    try {
+      await withNativeWindowsPlatform(async () => {
+        await withMockTmuxFixture(
+          {
+            dirPrefix: 'omx-runtime-shutdown-win32-split-bin-',
+            tmuxScript: (tmuxLogPath) => `#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >> "${tmuxLogPath}"
+case "$1" in
+  -V)
+    echo "tmux 3.4"
+    exit 0
+    ;;
+  list-panes)
+    case "$*" in
+      *"-F #{pane_dead} #{pane_pid}"*)
+        exit 1
+        ;;
+      *"-t leader:0 -F #{pane_id}"*"#{pane_current_command}"*)
+        printf "%%11\\tpwsh\\tpwsh\\n%%12\\tnode\\tnode /tmp/bin/omx.js hud --watch\\n%%13\\tcodex\\tcodex\\n%%14\\tcodex\\tcodex\\n"
+        exit 0
+        ;;
+      *)
+        exit 1
+        ;;
+    esac
+    ;;
+  split-window)
+    printf '%%44\\n'
+    exit 0
+    ;;
+  kill-pane|resize-pane|select-pane)
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`,
+          },
+          async ({ tmuxLogPath }) => {
+            await initTeamState('team-shutdown-win32-split', 'shutdown win32 split test', 'executor', 2, cwd);
+            const config = await readTeamConfig('team-shutdown-win32-split', cwd);
+            assert.ok(config);
+            if (!config) return;
+            config.tmux_session = 'leader:0';
+            config.leader_pane_id = '%11';
+            config.hud_pane_id = '%12';
+            config.workers[0]!.pane_id = '%13';
+            config.workers[1]!.pane_id = '%14';
+            await saveTeamConfig(config, cwd);
+
+            await shutdownTeam('team-shutdown-win32-split', cwd, { force: true });
+
+            const teamRoot = join(cwd, '.omx', 'state', 'team', 'team-shutdown-win32-split');
+            assert.equal(existsSync(teamRoot), false);
+            assert.equal(await readMonitorSnapshot('team-shutdown-win32-split', cwd), null);
+
+            const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
+            assert.doesNotMatch(tmuxLog, /list-panes -t %13 -F #\{pane_pid\}/);
+            assert.doesNotMatch(tmuxLog, /list-panes -t %14 -F #\{pane_pid\}/);
+            assert.doesNotMatch(tmuxLog, /kill-pane -t %11/);
+            assert.doesNotMatch(tmuxLog, /kill-session -t leader:0/);
+            assert.match(tmuxLog, /kill-pane -t %12/);
+            assert.match(tmuxLog, /kill-pane -t %13/);
+            assert.match(tmuxLog, /kill-pane -t %14/);
+            assert.match(tmuxLog, new RegExp(`split-window -v -l ${HUD_TMUX_TEAM_HEIGHT_LINES} -t %11 -d -P -F #\\{pane_id\\}`));
+            assert.match(tmuxLog, new RegExp(`resize-pane -t %44 -y ${HUD_TMUX_TEAM_HEIGHT_LINES}`));
+            assert.match(tmuxLog, /select-pane -t %11/);
+          },
+        );
+      });
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
 
   it('shutdownTeam restores a standalone HUD pane after tearing down the team HUD', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-shutdown-restore-hud-'));
@@ -4101,6 +4210,7 @@ esac
           assert.ok(cfg);
           if (!cfg) throw new Error('missing team config');
           cfg.leader_pane_id = '%55';
+          cfg.team_state_root = '/tmp/custom-team-state-root';
           await saveTeamConfig(cfg, cwd);
 
           const manifestPath = teamStateTestPath(cwd, 'team', 'team-leader-inject', 'manifest.v2.json');
@@ -4121,6 +4231,10 @@ esac
           const latest = requests[requests.length - 1];
           assert.equal(latest?.status, 'notified');
           assert.equal(latest?.last_reason, 'fallback_confirmed:leader_mailbox_notified');
+          assert.match(
+            latest?.trigger_message ?? '',
+            /Read \/tmp\/custom-team-state-root\/team\/team-leader-inject\/mailbox\/leader-fixed\.json; new msg from worker-1\./,
+          );
 
           const deliveryLog = await readTeamDeliveryLog(cwd);
           const runtimeEntries = deliveryLog.filter((entry) =>

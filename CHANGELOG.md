@@ -4,23 +4,48 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-04-08
+
+Patch release for the `v0.12.1..v0.12.2` train: Windows team worker boot and shutdown hardening, postLaunch mode-state shutdown-race recovery, canonical HUD skill-state visibility, and team state preservation on monitor-driven exits.
+
+### Fixed
+- **Windows split-pane shutdown safety** — `omx team shutdown --force` no longer kills the leader pane on native Windows + psmux split-pane sessions by skipping the process-tree prekill step when leader/client ancestry overlaps. (PR [#1358](https://github.com/Yeachan-Heo/oh-my-codex/pull/1358))
+- **PostLaunch mode-state shutdown race** — empty or truncated mode-state JSON left by concurrent writers during session exit is now recovered into a minimal inactive record instead of crashing cleanup; structurally complete malformed JSON is warned but left untouched. (PR [#1360](https://github.com/Yeachan-Heo/oh-my-codex/pull/1360))
+- **Windows psmux worker boot** — native Windows team workers now launch through an explicit PowerShell path instead of being routed through POSIX `/bin/sh -lc`, which caused workers to never report ready. (PR [#1362](https://github.com/Yeachan-Heo/oh-my-codex/pull/1362))
+- **Stale HUD workflow badges** — canonical session-scoped skill-active state now drives HUD badge visibility, suppressing stale root-only mode badges that outlived their session while preserving backward compatibility for legacy single-skill readers. (PR [#1367](https://github.com/Yeachan-Heo/oh-my-codex/pull/1367))
+- **Team state silently deleted** — monitor-detected terminal and failure conditions in `runtime-cli` no longer trigger shutdown cleanup; team state is preserved until operators explicitly request shutdown. (PR [#1369](https://github.com/Yeachan-Heo/oh-my-codex/pull/1369))
+
+### Changed
+- **Release metadata sync** — Node/Cargo package metadata, lockfiles, changelog, release body, and release notes are aligned to `0.12.2`.
+
+### Verified
+- `npm run build`
+- `npm run lint`
+- `npm test`
+- `npm run smoke:packed-install`
+
 ## [0.12.1] - 2026-04-07
 
-Patch release for team status JSON hygiene, interactive worker PID metadata integrity, and release-collateral alignment after `0.12.0`.
+Patch release for the `v0.12.0..v0.12.1` train: team-runtime hygiene, launch/cleanup follow-through, notify-fallback hardening, and release-collateral sync.
 
 ### Fixed
 - **Machine-readable team status output** — leader mailbox pruning no longer re-issues duplicate delivered-message bridge calls, so `omx team status --json` stays parseable instead of leaking mailbox-delivery stderr noise.
 - **Interactive worker PID capture** — team startup now resolves worker PIDs from the actual pane id and persists them into worker metadata for diagnostics and cleanup.
+- **Launch-safe orphan cleanup** — stale OMX MCP cleanup preserves live launcher/session ancestry instead of reaping processes that still belong to the active tree.
+- **Notify-fallback log growth** — once-mode fallback watcher logs now rotate instead of growing silently on long-lived runs.
 
 ### Changed
-- **Release metadata sync** — Node/Cargo package metadata, changelog, release body, and `0.12.1` release/readiness docs are aligned for the patch cut.
+- **Direct leader launch by default** — outside tmux, OMX now launches the leader directly unless the operator explicitly requests detached tmux behavior.
+- **Prompt collateral tightening** — the information-architect prompt is slimmer and the `0.12.1` release/readiness collateral now matches the actual patch scope.
+- **Release metadata sync** — Node/Cargo package metadata, lockfiles, changelog, release body, and release notes are aligned to `0.12.1`.
 
 ### Verified
 - `npm run build`
-- `node --test dist/team/__tests__/state.test.js`
-- `node --test --test-name-pattern="startTeam captures interactive worker pid from the resolved pane id" dist/team/__tests__/runtime.test.js`
-- `npx biome lint src/team/state/mailbox.ts src/team/__tests__/state.test.ts src/team/runtime.ts src/team/__tests__/runtime.test.ts`
-- `node --test dist/cli/__tests__/version-sync-contract.test.js`
+- `npx biome lint src/cli/index.ts src/cli/cleanup.ts src/cli/__tests__/index.test.ts src/cli/__tests__/cleanup.test.ts src/scripts/notify-fallback-watcher.ts src/hooks/__tests__/notify-fallback-watcher.test.ts src/team/runtime.ts src/team/state/mailbox.ts src/team/__tests__/runtime.test.ts src/team/__tests__/state.test.ts package.json`
+- `node --test dist/cli/__tests__/cleanup.test.js dist/cli/__tests__/index.test.js dist/cli/__tests__/version-sync-contract.test.js`
+- `node --test dist/hooks/__tests__/notify-fallback-watcher.test.js`
+- `node --test dist/team/__tests__/state.test.js dist/team/__tests__/runtime.test.js`
+- `npm run smoke:packed-install`
 
 ## [0.12.0] - 2026-04-06
 
