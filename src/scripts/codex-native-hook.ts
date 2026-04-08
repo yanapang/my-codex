@@ -4,6 +4,10 @@ import { mkdir, readFile, readdir, writeFile } from "fs/promises";
 import { join, resolve } from "path";
 import { readModeState } from "../modes/base.js";
 import { getReadScopedStateDirs } from "../mcp/state-paths.js";
+import {
+  listActiveSkills,
+  readVisibleSkillActiveState,
+} from "../state/skill-active.js";
 import { readSubagentSessionSummary } from "../subagents/tracker.js";
 import { resolveCanonicalTeamStateRoot } from "../team/state-root.js";
 import { readTeamManifestV2, readTeamPhase } from "../team/state.js";
@@ -623,20 +627,73 @@ async function isDeepInterviewSuppressedForStop(
   cwd: string,
   stateDir: string,
   sessionId: string,
+  threadId: string,
 ): Promise<boolean> {
   if (await isDeepInterviewStateActive(stateDir)) return true;
   if (await isDeepInterviewInputLockActive(stateDir)) return true;
 
-  const scopedModeState = sessionId
-    ? await readScopedJsonState("deep-interview-state.json", cwd, sessionId)
-    : null;
-  if (scopedModeState?.active === true) return true;
+  return (await readBlockingSkillForStop(cwd, sessionId, threadId, "deep-interview")) !== null;
+}
 
-  const scopedSkillState = sessionId
-    ? await readScopedJsonState("skill-active-state.json", cwd, sessionId)
-    : null;
-  if (!scopedSkillState || scopedSkillState.active !== true) return false;
-  return safeString(scopedSkillState.skill).trim() === "deep-interview";
+function matchesSkillStopContext(
+  entry: { session_id?: string; thread_id?: string },
+  state: { session_id?: string; thread_id?: string },
+  sessionId: string,
+  threadId: string,
+): boolean {
+  const entrySessionId = safeString(entry.session_id ?? state.session_id).trim();
+  const entryThreadId = safeString(entry.thread_id ?? state.thread_id).trim();
+  if (sessionId && entrySessionId && entrySessionId !== sessionId) return false;
+  if (sessionId && !entrySessionId && threadId && entryThreadId && entryThreadId !== threadId) {
+    return false;
+  }
+  return true;
+}
+
+async function readBlockingSkillForStop(
+  cwd: string,
+  sessionId: string,
+  threadId: string,
+  requiredSkill?: string,
+): Promise<{ skill: string; phase: string } | null> {
+  const canonicalState = await readVisibleSkillActiveState(cwd, sessionId);
+  const visibleEntries = canonicalState ? listActiveSkills(canonicalState) : [];
+  const candidateSkills = requiredSkill
+    ? [requiredSkill]
+    : [...SKILL_STOP_BLOCKERS];
+
+  for (const skill of candidateSkills) {
+    const modeState = await readScopedJsonState(`${skill}-state.json`, cwd, sessionId);
+    if (!modeState || modeState.active !== true) continue;
+
+    const phase = formatPhase(
+      modeState.current_phase,
+      formatPhase(
+        visibleEntries.find((entry) => entry.skill === skill)?.phase,
+        "planning",
+      ),
+    );
+    if (TERMINAL_MODE_PHASES.has(phase.toLowerCase()) || phase === "completing") {
+      continue;
+    }
+
+    if (!canonicalState) {
+      return { skill, phase };
+    }
+
+    const blocker = visibleEntries.find((entry) => (
+      entry.skill === skill
+      && matchesSkillStopContext(entry, canonicalState, sessionId, threadId)
+    ));
+    if (!blocker) continue;
+
+    return {
+      skill,
+      phase: formatPhase(modeState.current_phase ?? blocker.phase ?? canonicalState.phase, "planning"),
+    };
+  }
+
+  return null;
 }
 
 function buildRepeatableStopSignature(
@@ -766,17 +823,8 @@ async function buildSkillStopOutput(
   sessionId: string,
   threadId: string,
 ): Promise<Record<string, unknown> | null> {
-  const state = await readScopedJsonState("skill-active-state.json", cwd, sessionId);
-  if (!state || state.active !== true) return null;
-  const stateSessionId = safeString(state.session_id).trim();
-  const stateThreadId = safeString(state.thread_id).trim();
-  if (sessionId && stateSessionId && stateSessionId !== sessionId) return null;
-  if (sessionId && !stateSessionId && threadId && stateThreadId && stateThreadId !== threadId) {
-    return null;
-  }
-  const skill = safeString(state.skill).trim();
-  const phase = formatPhase(state.phase, "planning");
-  if (!SKILL_STOP_BLOCKERS.has(skill) || phase === "completing") return null;
+  const blocker = await readBlockingSkillForStop(cwd, sessionId, threadId);
+  if (!blocker) return null;
 
   const subagentSummary = await readSubagentSessionSummary(cwd, sessionId).catch(() => null);
   if (subagentSummary && subagentSummary.activeSubagentThreadIds.length > 0) {
@@ -785,9 +833,9 @@ async function buildSkillStopOutput(
 
   return {
     decision: "block",
-    reason: `OMX skill ${skill} is still active (phase: ${phase}); continue until the current ${skill} workflow reaches a terminal state.`,
-    stopReason: `skill_${skill}_${phase}`,
-    systemMessage: `OMX skill ${skill} is still active (phase: ${phase}).`,
+    reason: `OMX skill ${blocker.skill} is still active (phase: ${blocker.phase}); continue until the current ${blocker.skill} workflow reaches a terminal state.`,
+    stopReason: `skill_${blocker.skill}_${blocker.phase}`,
+    systemMessage: `OMX skill ${blocker.skill} is still active (phase: ${blocker.phase}).`,
   };
 }
 
@@ -844,7 +892,7 @@ async function buildStopHookOutput(
       if (!stopHookActive && skillOutput) return skillOutput;
     }
 
-    const deepInterviewActive = await isDeepInterviewSuppressedForStop(cwd, stateDir, sessionId);
+    const deepInterviewActive = await isDeepInterviewSuppressedForStop(cwd, stateDir, sessionId, threadId);
     const lastAssistantMessage = safeString(
       payload.last_assistant_message ?? payload.lastAssistantMessage,
     );
