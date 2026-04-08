@@ -1086,7 +1086,8 @@ export async function executeTeamApiOperation(
         const teamName = String(args.team_name || '').trim();
         if (!teamName) return { ok: false, operation, error: { code: 'invalid_input', message: 'team_name is required' } };
         const force = args.force === true;
-        await shutdownTeam(teamName, cwd, { force });
+        const confirmIssues = args.confirm_issues === true || args.confirmIssues === true;
+        await shutdownTeam(teamName, cwd, { force, confirmIssues });
         return { ok: true, operation, data: { team_name: teamName, cleanup_mode: 'shutdown' } };
       }
       case 'orphan-cleanup': {

@@ -134,6 +134,35 @@ describe('runtime-cli helpers', () => {
     }
   });
 
+  it('does not auto-force failed-task shutdown without explicit issue confirmation', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-cli-confirm-issues-'));
+    const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+    delete process.env.OMX_TEAM_STATE_ROOT;
+    try {
+      await initTeamState('shutdown-confirm-required', 'task', 'executor', 1, cwd);
+      await createTask('shutdown-confirm-required', {
+        subject: 'failed task',
+        description: 'requires confirmation',
+        status: 'failed',
+      }, cwd);
+
+      const teamRoot = join(cwd, '.omx', 'state', 'team', 'shutdown-confirm-required');
+      assert.equal(existsSync(teamRoot), true);
+
+      const runtimeCli = await loadRuntimeCliModule();
+      await assert.rejects(
+        () => runtimeCli.shutdownWithForceFallback('shutdown-confirm-required', cwd),
+        /shutdown_confirm_issues_required:failed=1/,
+      );
+
+      assert.equal(existsSync(teamRoot), true);
+    } finally {
+      if (typeof previousTeamStateRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = previousTeamStateRoot;
+      else delete process.env.OMX_TEAM_STATE_ROOT;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('does not auto-shutdown merely because monitorTeam reaches complete', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-cli-complete-'));
     const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;

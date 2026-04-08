@@ -176,6 +176,12 @@ describe('teamCommand shutdown --force parsing', () => {
     const force = teamArgs.includes('--force');
     assert.equal(force, true);
   });
+
+  it('parses --confirm-issues from shutdown args', () => {
+    const teamArgs = ['shutdown', 'my-team', '--confirm-issues'];
+    const confirmIssues = teamArgs.includes('--confirm-issues');
+    assert.equal(confirmIssues, true);
+  });
 });
 
 describe('teamCommand api', () => {

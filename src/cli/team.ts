@@ -128,7 +128,7 @@ Usage: omx team [N:agent-type] "<task description>"
        omx team status <team-name> [--json] [--tail-lines <100-1000>]
        omx team await <team-name> [--timeout-ms <ms>] [--after-event-id <id>] [--json]
        omx team resume <team-name>
-       omx team shutdown <team-name> [--force]
+       omx team shutdown <team-name> [--force] [--confirm-issues]
        omx team api <operation> [--input <json>] [--json]
        omx team api --help
 
@@ -199,7 +199,7 @@ const TEAM_API_OPERATION_OPTIONAL_FIELDS: Partial<Record<TeamApiOperation, strin
   'create-task': ['owner', 'blocked_by', 'requires_code_change'],
   'update-task': ['subject', 'description', 'blocked_by', 'requires_code_change'],
   'claim-task': ['expected_version'],
-  'cleanup': ['force'],
+  'cleanup': ['force', 'confirm_issues'],
   'transition-task-status': ['result', 'error'],
   'read-shutdown-ack': ['min_updated_at'],
   'write-worker-identity': [
@@ -216,7 +216,7 @@ const TEAM_API_OPERATION_NOTES: Partial<Record<TeamApiOperation, string>> = {
   'update-task': 'Only non-lifecycle task metadata can be updated.',
   'release-task-claim': 'Use this only for rollback/requeue to pending (not for completion).',
   'transition-task-status': 'Lifecycle flow is claim-safe and typically transitions in_progress -> completed|failed.',
-  'cleanup': 'Uses the runtime shutdown contract; use orphan-cleanup only for known orphan recovery.',
+  'cleanup': 'Uses the runtime shutdown contract; add confirm_issues=true when failed tasks are acknowledged and shutdown should still proceed.',
   'orphan-cleanup': 'Destructive escape hatch for known orphan recovery. Bypasses shutdown orchestration.',
   'read-events': 'Events are returned in canonical form; worker_idle log entries normalize to type worker_state_changed with source_type worker_idle. wakeable_only defaults to false; set wakeable_only=true to mirror omx team await semantics (wakeable events now include merge conflicts and per-signal stale alerts).',
   'await-event': 'Waits for the next matching event and returns status=timeout when no matching event arrives before timeout_ms. wakeable_only defaults to false; set wakeable_only=true to mirror omx team await semantics (wakeable events now include merge conflicts and per-signal stale alerts).',
@@ -1525,9 +1525,10 @@ export async function teamCommand(args: string[], _options: TeamCliOptions = {})
 
   if (subcommand === 'shutdown') {
     const name = teamArgs[1];
-    if (!name) throw new Error('Usage: omx team shutdown <team-name> [--force]');
+    if (!name) throw new Error('Usage: omx team shutdown <team-name> [--force] [--confirm-issues]');
     const force = teamArgs.includes('--force');
-    const summary = await shutdownTeam(name, cwd, { force });
+    const confirmIssues = teamArgs.includes('--confirm-issues');
+    const summary = await shutdownTeam(name, cwd, { force, confirmIssues });
     await updateModeState('team', {
       active: false,
       current_phase: 'cancelled',

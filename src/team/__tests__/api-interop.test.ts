@@ -1829,7 +1829,7 @@ describe('executeTeamApiOperation: cleanup', () => {
     assert.equal(result.ok, false);
   });
 
-  it('routes cleanup through the shutdown gate for failed tasks on normal teams', async () => {
+  it('requires confirm_issues for failed-task cleanup on normal teams', async () => {
     const { cwd, cleanup } = await setupTeam('cleanup-gate');
     try {
       await createTask('cleanup-gate', {
@@ -1843,13 +1843,36 @@ describe('executeTeamApiOperation: cleanup', () => {
       }, cwd);
       assert.equal(result.ok, false);
       if (!result.ok) {
-        assert.match(result.error.message, /shutdown_gate_blocked:pending=0,blocked=0,in_progress=0,failed=1/);
+        assert.match(result.error.message, /shutdown_confirm_issues_required:failed=1/);
       }
 
       const summary = await executeTeamApiOperation('get-summary', {
         team_name: 'cleanup-gate',
       }, cwd);
       assert.equal(summary.ok, true);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('allows cleanup with confirm_issues when failed tasks remain', async () => {
+    const { cwd, cleanup } = await setupTeam('cleanup-confirm-issues');
+    try {
+      await createTask('cleanup-confirm-issues', {
+        subject: 'failed task',
+        description: 'requires explicit confirmation',
+        status: 'failed',
+      }, cwd);
+
+      const result = await executeTeamApiOperation('cleanup', {
+        team_name: 'cleanup-confirm-issues',
+        confirm_issues: true,
+      }, cwd);
+      assert.equal(result.ok, true);
+      if (result.ok) {
+        assert.equal(result.data.team_name, 'cleanup-confirm-issues');
+        assert.equal(result.data.cleanup_mode, 'shutdown');
+      }
     } finally {
       await cleanup();
     }
