@@ -58,6 +58,25 @@ async function addWorktree(repo: string, branchName: string, pathPrefix: string)
   return worktreePath;
 }
 
+async function attachDirtyWorkerRepo(teamName: string, cwd: string, repoName: string): Promise<void> {
+  const repo = join(cwd, repoName);
+  await mkdir(repo, { recursive: true });
+  execFileSync('git', ['init'], { cwd: repo, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: repo, stdio: 'ignore' });
+  await writeFile(join(repo, 'README.md'), 'hello\n', 'utf-8');
+  execFileSync('git', ['add', 'README.md'], { cwd: repo, stdio: 'ignore' });
+  execFileSync('git', ['commit', '-m', 'init'], { cwd: repo, stdio: 'ignore' });
+  await writeFile(join(repo, 'DIRTY.txt'), 'dirty\n', 'utf-8');
+
+  const config = await readTeamConfig(teamName, cwd);
+  assert.ok(config, 'team config should exist');
+  if (!config) throw new Error('missing config');
+  config.workers[0]!.worktree_repo_root = repo;
+  config.workers[0]!.worktree_path = repo;
+  await saveTeamConfig(config, cwd);
+}
+
 
 function expectedLowComplexityModel(codexHomeOverride?: string): string {
   return resolveTeamLowComplexityDefaultModel(codexHomeOverride);
@@ -3029,6 +3048,34 @@ exec "${realGit}" "$@"
     }
   });
 
+  it('shutdownTeam clean fast path ignores worker shutdown ack files', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-shutdown-clean-fast-'));
+    try {
+      await initTeamState('team-shutdown-clean-fast', 'shutdown clean fast path test', 'executor', 1, cwd);
+      const ackPath = join(
+        cwd,
+        '.omx',
+        'state',
+        'team',
+        'team-shutdown-clean-fast',
+        'workers',
+        'worker-1',
+        'shutdown-ack.json',
+      );
+      await writeFile(
+        ackPath,
+        JSON.stringify({ status: 'reject', reason: 'stale ack', updated_at: '9999-01-01T00:00:00.000Z' }),
+      );
+
+      await shutdownTeam('team-shutdown-clean-fast', cwd);
+
+      const teamRoot = join(cwd, '.omx', 'state', 'team', 'team-shutdown-clean-fast');
+      assert.equal(existsSync(teamRoot), false);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('shutdownTeam blocks when pending tasks remain (shutdown gate)', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-shutdown-gate-'));
     try {
@@ -3106,7 +3153,7 @@ exec "${realGit}" "$@"
     }
   });
 
-  it('shutdownTeam blocks when failed tasks remain (completion gate)', async () => {
+  it('shutdownTeam requires explicit issue confirmation when failed tasks remain', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-shutdown-gate-failed-'));
     try {
       await initTeamState('team-shutdown-gate-failed', 'shutdown gate failed test', 'executor', 1, cwd);
@@ -3118,7 +3165,7 @@ exec "${realGit}" "$@"
 
       await assert.rejects(
         () => shutdownTeam('team-shutdown-gate-failed', cwd),
-        /shutdown_gate_blocked:pending=0,blocked=0,in_progress=0,failed=1/,
+        /shutdown_confirm_issues_required:failed=1:rerun=omx team shutdown team-shutdown-gate-failed --confirm-issues/,
       );
 
       const teamRoot = teamStateTestPath(cwd, 'team', 'team-shutdown-gate-failed');
@@ -3267,6 +3314,7 @@ esac
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-'));
     try {
       await initTeamState('team-reject', 'shutdown reject test', 'executor', 1, cwd);
+      await attachDirtyWorkerRepo('team-reject', cwd, 'team-reject-repo');
       const ackPath = join(
         cwd,
         '.omx',
@@ -3292,6 +3340,7 @@ esac
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-'));
     try {
       await initTeamState('team-ack-evt', 'shutdown ack event test', 'executor', 1, cwd);
+      await attachDirtyWorkerRepo('team-ack-evt', cwd, 'team-ack-evt-repo');
       const ackPath = join(
         cwd,
         '.omx',
@@ -3406,6 +3455,39 @@ esac
 
       await shutdownTeam('team-stale-ack', cwd);
       const teamRoot = join(cwd, '.omx', 'state', 'team', 'team-stale-ack');
+      assert.equal(existsSync(teamRoot), false);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('shutdownTeam confirmIssues=true allows failed-task shutdown without worker ack handshake', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-shutdown-confirm-issues-'));
+    try {
+      await initTeamState('team-confirm-issues', 'shutdown confirm issues test', 'executor', 1, cwd);
+      await createTask(
+        'team-confirm-issues',
+        { subject: 'failed', description: 'd', status: 'failed' },
+        cwd,
+      );
+      const ackPath = join(
+        cwd,
+        '.omx',
+        'state',
+        'team',
+        'team-confirm-issues',
+        'workers',
+        'worker-1',
+        'shutdown-ack.json',
+      );
+      await writeFile(
+        ackPath,
+        JSON.stringify({ status: 'reject', reason: 'should be ignored', updated_at: '9999-01-01T00:00:00.000Z' }),
+      );
+
+      await shutdownTeam('team-confirm-issues', cwd, { confirmIssues: true });
+
+      const teamRoot = join(cwd, '.omx', 'state', 'team', 'team-confirm-issues');
       assert.equal(existsSync(teamRoot), false);
     } finally {
       await rm(cwd, { recursive: true, force: true });
@@ -3749,7 +3831,7 @@ esac
     }
   });
 
-  it('shutdownTeam still throws on failed tasks', async () => {
+  it('shutdownTeam still requires confirm-issues on failed tasks', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-normal-gate-'));
     try {
       await initTeamState('team-normal-gate', 'normal gate test', 'executor', 1, cwd);
@@ -3761,7 +3843,7 @@ esac
 
       await assert.rejects(
         () => shutdownTeam('team-normal-gate', cwd),
-        /shutdown_gate_blocked:pending=0,blocked=0,in_progress=0,failed=1/,
+        /shutdown_confirm_issues_required:failed=1/,
       );
 
       const teamRoot = join(cwd, '.omx', 'state', 'team', 'team-normal-gate');

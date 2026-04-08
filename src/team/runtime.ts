@@ -245,6 +245,7 @@ export interface TeamRuntime {
 
 interface ShutdownOptions {
   force?: boolean;
+  confirmIssues?: boolean;
 }
 
 export interface TeamShutdownSummary {
@@ -1104,6 +1105,60 @@ interface ShutdownGateCounts {
   completed: number;
   failed: number;
   allowed: boolean;
+}
+
+interface ShutdownClassification {
+  gate: ShutdownGateCounts;
+  dirtyWorkers: string[];
+  requiresIssueConfirmation: boolean;
+  useCleanFastPath: boolean;
+}
+
+function listDirtyShutdownWorkers(config: TeamConfig): string[] {
+  const dirtyWorkers: string[] = [];
+  for (const worker of config.workers) {
+    if (!worker.worktree_repo_root || !worker.worktree_path || !existsSync(worker.worktree_path)) continue;
+    const worktreePath = resolve(worker.worktree_path);
+    const repoRoot = resolve(worker.worktree_repo_root);
+    const status = runGitCommand(repoRoot, ['status', '--porcelain'], worktreePath);
+    if (!status.ok || status.stdout.trim().length > 0) {
+      dirtyWorkers.push(worker.name);
+    }
+  }
+  return dirtyWorkers;
+}
+
+async function classifyShutdown(params: {
+  teamName: string;
+  cwd: string;
+  config: TeamConfig;
+  governance: TeamGovernance;
+  confirmIssues: boolean;
+}): Promise<ShutdownClassification> {
+  const { teamName, cwd, config, governance, confirmIssues } = params;
+  const allTasks = await listTasks(teamName, cwd);
+  const gate: ShutdownGateCounts = {
+    total: allTasks.length,
+    pending: allTasks.filter((t) => t.status === 'pending').length,
+    blocked: allTasks.filter((t) => t.status === 'blocked').length,
+    in_progress: allTasks.filter((t) => t.status === 'in_progress').length,
+    completed: allTasks.filter((t) => t.status === 'completed').length,
+    failed: allTasks.filter((t) => t.status === 'failed').length,
+    allowed: false,
+  };
+
+  const dirtyWorkers = listDirtyShutdownWorkers(config);
+  const hasBlockingBacklog = gate.pending > 0 || gate.blocked > 0 || gate.in_progress > 0;
+  const requiresIssueConfirmation = gate.failed > 0 && dirtyWorkers.length === 0 && !confirmIssues;
+  gate.allowed = governance.cleanup_requires_all_workers_inactive !== true
+    || (!hasBlockingBacklog && !requiresIssueConfirmation);
+
+  return {
+    gate,
+    dirtyWorkers,
+    requiresIssueConfirmation,
+    useCleanFastPath: dirtyWorkers.length === 0 && !hasBlockingBacklog && (gate.failed === 0 || confirmIssues),
+  };
 }
 
 function resolveEffectiveTeamWorktreeMode(
@@ -2633,6 +2688,8 @@ export async function reassignTask(
  */
 export async function shutdownTeam(teamName: string, cwd: string, options: ShutdownOptions = {}): Promise<TeamShutdownSummary> {
   const force = options.force === true;
+  const confirmIssues = options.confirmIssues === true;
+  let skipWorkerAcks = false;
   const sanitized = sanitizeTeamName(teamName);
   const config = await readTeamConfig(sanitized, cwd);
   if (!config) {
@@ -2653,34 +2710,37 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
   );
 
   if (!force) {
-    const allTasks = await listTasks(sanitized, cwd);
-    const gate: ShutdownGateCounts = {
-      total: allTasks.length,
-      pending: allTasks.filter((t) => t.status === 'pending').length,
-      blocked: allTasks.filter((t) => t.status === 'blocked').length,
-      in_progress: allTasks.filter((t) => t.status === 'in_progress').length,
-      completed: allTasks.filter((t) => t.status === 'completed').length,
-      failed: allTasks.filter((t) => t.status === 'failed').length,
-      allowed: false,
-    };
-    gate.allowed = governance.cleanup_requires_all_workers_inactive !== true
-      || (gate.pending === 0 && gate.blocked === 0 && gate.in_progress === 0 && gate.failed === 0);
+    const classification = await classifyShutdown({
+      teamName: sanitized,
+      cwd,
+      config,
+      governance,
+      confirmIssues,
+    });
+    const { gate, dirtyWorkers, requiresIssueConfirmation, useCleanFastPath } = classification;
 
     await appendTeamEvent(
       sanitized,
       {
         type: 'shutdown_gate',
         worker: 'leader-fixed',
-        reason: `allowed=${gate.allowed} total=${gate.total} pending=${gate.pending} blocked=${gate.blocked} in_progress=${gate.in_progress} completed=${gate.completed} failed=${gate.failed} cleanup_requires_all_workers_inactive=${governance.cleanup_requires_all_workers_inactive}`,
+        reason: `allowed=${gate.allowed} total=${gate.total} pending=${gate.pending} blocked=${gate.blocked} in_progress=${gate.in_progress} completed=${gate.completed} failed=${gate.failed} cleanup_requires_all_workers_inactive=${governance.cleanup_requires_all_workers_inactive} dirty_workers=${dirtyWorkers.join('|') || 'none'} confirm_issues=${confirmIssues} clean_fast_path=${useCleanFastPath}`,
       },
       cwd,
     ).catch(() => {});
 
     if (!gate.allowed) {
+      if (requiresIssueConfirmation) {
+        throw new Error(
+          `shutdown_confirm_issues_required:failed=${gate.failed}:rerun=omx team shutdown ${sanitized} --confirm-issues`,
+        );
+      }
       throw new Error(
         `shutdown_gate_blocked:pending=${gate.pending},blocked=${gate.blocked},in_progress=${gate.in_progress},failed=${gate.failed}`,
       );
     }
+
+    skipWorkerAcks = useCleanFastPath;
   }
 
   if (force) {
@@ -2695,79 +2755,81 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
   const dispatchPolicy = resolveDispatchPolicy(manifest?.policy, config.worker_launch_mode);
   const shutdownRequestTimes = new Map<string, string>();
 
-  // 1. Send shutdown inbox to each worker
-  for (const w of config.workers) {
-    try {
-      const requestedAt = new Date().toISOString();
-      await writeShutdownRequest(sanitized, w.name, 'leader-fixed', cwd);
-      shutdownRequestTimes.set(w.name, requestedAt);
-      const triggerDirective = buildTriggerDirective(
-        w.name,
-        sanitized,
-        resolveInstructionStateRoot(w.worktree_path),
-      );
-      await dispatchCriticalInboxInstruction({
-        teamName: sanitized,
-        config,
-        workerName: w.name,
-        workerIndex: w.index,
-        paneId: w.pane_id,
-        inbox: generateShutdownInbox(sanitized, w.name),
-        triggerMessage: triggerDirective.text,
-        intent: triggerDirective.intent,
-        cwd,
-        dispatchPolicy,
-        inboxCorrelationKey: `shutdown:${w.name}`,
-      });
-    } catch (err) {
-      process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
-    }
-  }
-
-  // 2. Wait up to 15s for workers to exit and collect acks
-  const deadline = Date.now() + 15_000;
-  const rejected: Array<{ worker: string; reason: string }> = [];
-  const ackedWorkers = new Set<string>();
-  while (Date.now() < deadline) {
+  if (!skipWorkerAcks) {
+    // 1. Send shutdown inbox to each worker
     for (const w of config.workers) {
-      const ack = await readShutdownAck(sanitized, w.name, cwd, shutdownRequestTimes.get(w.name));
-      if (ack && !ackedWorkers.has(w.name)) {
-        ackedWorkers.add(w.name);
-        await appendTeamEvent(sanitized, {
-          type: 'shutdown_ack',
-          worker: w.name,
-          reason: ack.status === 'reject' ? `reject:${ack.reason || 'no_reason'}` : 'accept',
-        }, cwd);
+      try {
+        const requestedAt = new Date().toISOString();
+        await writeShutdownRequest(sanitized, w.name, 'leader-fixed', cwd);
+        shutdownRequestTimes.set(w.name, requestedAt);
+        const triggerDirective = buildTriggerDirective(
+          w.name,
+          sanitized,
+          resolveInstructionStateRoot(w.worktree_path),
+        );
+        await dispatchCriticalInboxInstruction({
+          teamName: sanitized,
+          config,
+          workerName: w.name,
+          workerIndex: w.index,
+          paneId: w.pane_id,
+          inbox: generateShutdownInbox(sanitized, w.name),
+          triggerMessage: triggerDirective.text,
+          intent: triggerDirective.intent,
+          cwd,
+          dispatchPolicy,
+          inboxCorrelationKey: `shutdown:${w.name}`,
+        });
+      } catch (err) {
+        process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
       }
-      if (ack?.status === 'reject') {
-        if (!rejected.some((r) => r.worker === w.name)) {
-          rejected.push({ worker: w.name, reason: ack.reason || 'no_reason' });
+    }
+
+    // 2. Wait up to 15s for workers to exit and collect acks
+    const deadline = Date.now() + 15_000;
+    const rejected: Array<{ worker: string; reason: string }> = [];
+    const ackedWorkers = new Set<string>();
+    while (Date.now() < deadline) {
+      for (const w of config.workers) {
+        const ack = await readShutdownAck(sanitized, w.name, cwd, shutdownRequestTimes.get(w.name));
+        if (ack && !ackedWorkers.has(w.name)) {
+          ackedWorkers.add(w.name);
+          await appendTeamEvent(sanitized, {
+            type: 'shutdown_ack',
+            worker: w.name,
+            reason: ack.status === 'reject' ? `reject:${ack.reason || 'no_reason'}` : 'accept',
+          }, cwd);
+        }
+        if (ack?.status === 'reject') {
+          if (!rejected.some((r) => r.worker === w.name)) {
+            rejected.push({ worker: w.name, reason: ack.reason || 'no_reason' });
+          }
         }
       }
-    }
-    if (rejected.length > 0 && !force) {
-      const detail = rejected.map(r => `${r.worker}:${r.reason}`).join(',');
-      throw new Error(`shutdown_rejected:${detail}`);
+      if (rejected.length > 0 && !force) {
+        const detail = rejected.map(r => `${r.worker}:${r.reason}`).join(',');
+        throw new Error(`shutdown_rejected:${detail}`);
+      }
+
+      const anyAlive = config.workers.some((w) => (
+        config.worker_launch_mode === 'prompt'
+          ? isPromptWorkerAlive(config, w)
+          : isWorkerAlive(sessionName, w.index, w.pane_id)
+      ));
+      if (!anyAlive) break;
+      // Sleep 2s
+      await new Promise(resolve => setTimeout(resolve, 2000));
     }
 
-    const anyAlive = config.workers.some((w) => (
+    const anyAliveAfterWait = config.workers.some((w) => (
       config.worker_launch_mode === 'prompt'
         ? isPromptWorkerAlive(config, w)
         : isWorkerAlive(sessionName, w.index, w.pane_id)
     ));
-    if (!anyAlive) break;
-    // Sleep 2s
-    await new Promise(resolve => setTimeout(resolve, 2000));
-  }
-
-  const anyAliveAfterWait = config.workers.some((w) => (
-    config.worker_launch_mode === 'prompt'
-      ? isPromptWorkerAlive(config, w)
-      : isWorkerAlive(sessionName, w.index, w.pane_id)
-  ));
-  if (anyAliveAfterWait && !force) {
-    // Workers may have accepted shutdown but not exited (Codex TUI requires explicit exit).
-    // In this case, proceed to force kill panes (next step) rather than failing and leaving state around.
+    if (anyAliveAfterWait && !force) {
+      // Workers may have accepted shutdown but not exited (Codex TUI requires explicit exit).
+      // In this case, proceed to force kill panes (next step) rather than failing and leaving state around.
+    }
   }
 
   // 3. Force kill remaining workers
