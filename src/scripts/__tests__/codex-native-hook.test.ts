@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import { buildManagedCodexHooksConfig } from "../../config/codex-hooks.js";
 import {
   initTeamState,
@@ -24,6 +24,31 @@ async function writeJson(path: string, value: unknown): Promise<void> {
 
 const TEAM_STOP_COMMIT_GUIDANCE =
   " If system-generated worker auto-checkpoint commits exist, rewrite them into Lore-format final commits before merge/finalization.";
+
+const TEAM_ENV_KEYS = [
+  "OMX_TEAM_WORKER",
+  "OMX_TEAM_STATE_ROOT",
+  "OMX_TEAM_LEADER_CWD",
+] as const;
+
+const priorTeamEnv = new Map<(typeof TEAM_ENV_KEYS)[number], string | undefined>();
+
+beforeEach(() => {
+  priorTeamEnv.clear();
+  for (const key of TEAM_ENV_KEYS) {
+    priorTeamEnv.set(key, process.env[key]);
+    delete process.env[key];
+  }
+});
+
+afterEach(() => {
+  for (const key of TEAM_ENV_KEYS) {
+    const value = priorTeamEnv.get(key);
+    if (typeof value === "string") process.env[key] = value;
+    else delete process.env[key];
+  }
+  priorTeamEnv.clear();
+});
 
 describe("codex native hook config", () => {
   it("builds the expected managed hooks.json shape", () => {
@@ -282,6 +307,76 @@ describe("codex native hook dispatch", () => {
       assert.equal(state.active, true);
       assert.equal(state.current_phase, "starting");
     } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("runs prompt-submit HUD reconciliation as a best-effort tmux-only side effect", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-hud-reconcile-"));
+    const originalTmux = process.env.TMUX;
+    const originalTmuxPane = process.env.TMUX_PANE;
+    const originalPath = process.env.PATH;
+    try {
+      process.env.TMUX = "1";
+      process.env.TMUX_PANE = "%1";
+      await mkdir(join(cwd, ".omx", "state"), { recursive: true });
+      await writeFile(
+        join(cwd, ".omx", "hud-config.json"),
+        JSON.stringify({ preset: "focused", git: { display: "branch" } }, null, 2),
+      );
+
+      const binDir = await mkdtemp(join(tmpdir(), "omx-native-hook-hud-reconcile-bin-"));
+      const tmuxLog = join(cwd, "tmux.log");
+      await writeFile(
+        join(binDir, "tmux"),
+        `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> ${JSON.stringify(tmuxLog)}
+case "$1" in
+  list-panes)
+    printf '%%1\\tcodex\\tcodex\\n'
+    ;;
+  display-message)
+    printf '80\\t24\\n'
+    ;;
+  split-window)
+    printf '%%9\\n'
+    ;;
+  resize-pane)
+    ;;
+esac
+`,
+      );
+      await chmod(join(binDir, "tmux"), 0o755);
+      process.env.PATH = `${binDir}:${originalPath}`;
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "UserPromptSubmit",
+          cwd,
+          session_id: "sess-hud-1",
+          prompt: "$ralplan prepare plan",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "keyword-detector");
+      const tmuxCalls = await readFile(tmuxLog, "utf-8");
+      assert.match(tmuxCalls, /list-panes/);
+      assert.match(tmuxCalls, /split-window/);
+      assert.match(tmuxCalls, /resize-pane -t %9 -y 1/);
+    } finally {
+      if (originalTmux === undefined) {
+        delete process.env.TMUX;
+      } else {
+        process.env.TMUX = originalTmux;
+      }
+      if (originalTmuxPane === undefined) {
+        delete process.env.TMUX_PANE;
+      } else {
+        process.env.TMUX_PANE = originalTmuxPane;
+      }
+      process.env.PATH = originalPath;
       await rm(cwd, { recursive: true, force: true });
     }
   });

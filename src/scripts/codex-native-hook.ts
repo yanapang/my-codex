@@ -39,6 +39,7 @@ import {
 import type { HookEventEnvelope } from "../hooks/extensibility/types.js";
 import { dispatchHookEvent } from "../hooks/extensibility/dispatcher.js";
 import { writeSessionStart } from "../hooks/session.js";
+import { reconcileHudForPromptSubmit } from "../hud/reconcile.js";
 
 type CodexHookEventName =
   | "SessionStart"
@@ -1093,6 +1094,7 @@ export async function dispatchCodexNativeHook(
         turnId,
       });
     }
+    await reconcileHudForPromptSubmit(cwd).catch(() => {});
   }
 
   if (omxEventName) {
