@@ -46,18 +46,19 @@ describe('CI Rust gates', () => {
     assert.match(workflow, /^  ralph-persistence-gate:\s*\n(?:.*\n)*?^\s+needs:\s*\[typecheck, build-dist\]/m);
     assert.match(workflow, /^  build:\s*\n(?:.*\n)*?^\s+needs:\s*\[rustfmt, clippy, lint, typecheck, build-dist, test, ralph-persistence-gate\]/m);
 
-    for (const jobName of ['coverage-team-critical', 'coverage-ts-full', 'ralph-persistence-gate', 'build']) {
+    for (const jobName of ['test', 'coverage-team-critical', 'coverage-ts-full', 'ralph-persistence-gate', 'build']) {
       assert.match(
         workflow,
         new RegExp(`^  ${jobName}:\\s*\\n(?:.*\\n)*?^\\s+- name:\\s*Download prebuilt dist artifact\\s*\\n\\s+uses:\\s*actions/download-artifact@v8`, 'm'),
       );
     }
 
-    assert.match(testJob, /^\s+- name:\s*Run grouped full-suite lane\s*\n(?:.*\n)*?^\s+run:\s*\|\n\s+npm run build/m);
-    assert.doesNotMatch(
+    assert.match(
       testJob,
-      /^\s+- name:\s*Download prebuilt dist artifact\s*\n\s+uses:\s*actions\/download-artifact@v8/m,
+      /^\s+- name:\s*Download prebuilt dist artifact\s*\n\s+uses:\s*actions\/download-artifact@v8(?:.*\n)*?\s+path:\s*dist/m,
     );
+    assert.match(testJob, /^\s+- name:\s*Run grouped full-suite lane\s*\n(?:.*\n)*?^\s+run:\s*\|\n\s+node dist\/scripts\/run-test-files\.js/m);
+    assert.doesNotMatch(testJob, /^\s+npm run build$/m);
   });
 
   it('avoids path-filtered CI triggers so required checks cannot be skipped into a pending state', () => {

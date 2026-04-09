@@ -145,10 +145,14 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
+      - name: Download prebuilt dist artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: ci-dist-node20
+          path: dist
       - name: Run grouped full-suite lane
         if: matrix.lane != 'smoke'
         run: |
-          npm run build
           node dist/scripts/run-test-files.js ${{ matrix.test-roots }}
       - name: Verify generated catalog docs
         if: matrix.catalog-check == true
@@ -186,7 +190,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: ci-dist-node20
-          path: .
+          path: dist
       - name: Run team/state coverage gate
         run: npm run coverage:team-critical:compiled
       - name: Add coverage summary to job summary
@@ -229,7 +233,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: ci-dist-node20
-          path: .
+          path: dist
       - name: Run full TypeScript coverage report
         run: npm run coverage:ts:full:compiled
       - name: Add TypeScript coverage summary to job summary
@@ -317,7 +321,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: ci-dist-node20
-          path: .
+          path: dist
       - name: Run Ralph persistence verification matrix
         run: npm run test:ralph-persistence:compiled
 
@@ -339,7 +343,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: ci-dist-node20
-          path: .
+          path: dist
       - run: npm run build:explore:release
       - run: npm run build:sparkshell
 
