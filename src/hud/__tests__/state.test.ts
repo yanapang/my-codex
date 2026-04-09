@@ -378,4 +378,42 @@ describe('readAllState canonical skill precedence', () => {
       assert.deepEqual(state.team, { active: true, team_name: 'alpha', current_phase: 'running' });
     });
   });
+
+  it('surfaces approved combined workflow state from canonical multi-skill data', async () => {
+    await withTempRepo('omx-hud-canonical-combined-', async (cwd) => {
+      const rootStateDir = join(cwd, '.omx', 'state');
+      const sessionId = 'sess-combined';
+      const sessionDir = join(rootStateDir, 'sessions', sessionId);
+      await mkdir(sessionDir, { recursive: true });
+      await writeFile(join(rootStateDir, 'session.json'), JSON.stringify({ session_id: sessionId }));
+      await writeFile(join(sessionDir, 'skill-active-state.json'), JSON.stringify({
+        active: true,
+        skill: 'team',
+        phase: 'running',
+        session_id: sessionId,
+        active_skills: [
+          { skill: 'team', phase: 'running', active: true, session_id: sessionId },
+          { skill: 'ralph', phase: 'executing', active: true, session_id: sessionId },
+        ],
+      }));
+      await writeFile(join(sessionDir, 'team-state.json'), JSON.stringify({
+        active: true,
+        team_name: 'alpha',
+      }));
+      await writeFile(join(sessionDir, 'ralph-state.json'), JSON.stringify({
+        active: true,
+        iteration: 2,
+        max_iterations: 5,
+      }));
+
+      const state = await readAllState(cwd);
+      assert.deepEqual(state.team, { active: true, team_name: 'alpha', current_phase: 'running' });
+      assert.deepEqual(state.ralph, {
+        active: true,
+        iteration: 2,
+        max_iterations: 5,
+        current_phase: 'executing',
+      });
+    });
+  });
 });

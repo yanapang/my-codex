@@ -136,6 +136,41 @@ describe("generateOverlay", () => {
     assert.ok(overlay.includes("iteration 1/5"));
   });
 
+  it("lists both approved combined workflow members from canonical skill state", async () => {
+    const sessionId = "combined-session";
+    const sessionDir = join(tempDir, ".omx", "state", "sessions", sessionId);
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(
+      join(tempDir, ".omx", "state", "session.json"),
+      JSON.stringify({ session_id: sessionId }),
+    );
+    await writeFile(
+      join(sessionDir, "skill-active-state.json"),
+      JSON.stringify({
+        active: true,
+        skill: "team",
+        phase: "running",
+        session_id: sessionId,
+        active_skills: [
+          { skill: "team", phase: "running", active: true, session_id: sessionId },
+          { skill: "ralph", phase: "executing", active: true, session_id: sessionId },
+        ],
+      }),
+    );
+    await writeFile(
+      join(sessionDir, "team-state.json"),
+      JSON.stringify({ active: true, current_phase: "running" }),
+    );
+    await writeFile(
+      join(sessionDir, "ralph-state.json"),
+      JSON.stringify({ active: true, iteration: 2, max_iterations: 5, current_phase: "executing" }),
+    );
+
+    const overlay = await generateOverlay(tempDir, sessionId);
+    assert.match(overlay, /- team: phase: running/);
+    assert.match(overlay, /- ralph: iteration 2\/5, phase: executing/);
+  });
+
   it("generates overlay with notepad priority content", async () => {
     await writeFile(
       join(tempDir, ".omx", "notepad.md"),

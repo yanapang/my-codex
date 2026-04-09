@@ -309,6 +309,114 @@ describe('state-server directory initialization', () => {
     }
   });
 
+  it('allows approved overlaps and preserves the remaining canonical state on clear', async () => {
+    process.env.OMX_STATE_SERVER_DISABLE_AUTO_START = '1';
+    const { handleStateToolCall } = await import('../state-server.js');
+
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-server-overlap-'));
+    try {
+      await handleStateToolCall({
+        params: {
+          name: 'state_write',
+          arguments: {
+            workingDirectory: wd,
+            session_id: 'sess-overlap',
+            mode: 'team',
+            active: true,
+            current_phase: 'running',
+          },
+        },
+      });
+      await handleStateToolCall({
+        params: {
+          name: 'state_write',
+          arguments: {
+            workingDirectory: wd,
+            session_id: 'sess-overlap',
+            mode: 'ralph',
+            active: true,
+            iteration: 1,
+            max_iterations: 3,
+            current_phase: 'executing',
+          },
+        },
+      });
+
+      const canonicalPath = join(wd, '.omx', 'state', 'sessions', 'sess-overlap', 'skill-active-state.json');
+      const canonical = JSON.parse(await readFile(canonicalPath, 'utf-8')) as {
+        active_skills?: Array<{ skill: string }>;
+      };
+      assert.deepEqual(canonical.active_skills?.map((entry) => entry.skill), ['team', 'ralph']);
+
+      await handleStateToolCall({
+        params: {
+          name: 'state_clear',
+          arguments: {
+            workingDirectory: wd,
+            session_id: 'sess-overlap',
+            mode: 'team',
+          },
+        },
+      });
+
+      const clearedCanonical = JSON.parse(await readFile(canonicalPath, 'utf-8')) as {
+        active: boolean;
+        skill: string;
+        active_skills?: Array<{ skill: string }>;
+      };
+      assert.equal(clearedCanonical.active, true);
+      assert.equal(clearedCanonical.skill, 'ralph');
+      assert.deepEqual(clearedCanonical.active_skills?.map((entry) => entry.skill), ['ralph']);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('denies unsupported overlaps without writing the requested mode state', async () => {
+    process.env.OMX_STATE_SERVER_DISABLE_AUTO_START = '1';
+    const { handleStateToolCall } = await import('../state-server.js');
+
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-server-deny-'));
+    try {
+      await handleStateToolCall({
+        params: {
+          name: 'state_write',
+          arguments: {
+            workingDirectory: wd,
+            session_id: 'sess-deny',
+            mode: 'team',
+            active: true,
+            current_phase: 'running',
+          },
+        },
+      });
+
+      const denied = await handleStateToolCall({
+        params: {
+          name: 'state_write',
+          arguments: {
+            workingDirectory: wd,
+            session_id: 'sess-deny',
+            mode: 'autopilot',
+            active: true,
+            current_phase: 'planning',
+          },
+        },
+      });
+
+      assert.equal(denied.isError, true);
+      assert.match(denied.content[0]?.text || '', /Unsupported workflow overlap: team \+ autopilot\./);
+      assert.equal(existsSync(join(wd, '.omx', 'state', 'sessions', 'sess-deny', 'autopilot-state.json')), false);
+
+      const canonical = JSON.parse(
+        await readFile(join(wd, '.omx', 'state', 'sessions', 'sess-deny', 'skill-active-state.json'), 'utf-8'),
+      ) as { active_skills?: Array<{ skill: string }> };
+      assert.deepEqual(canonical.active_skills?.map((entry) => entry.skill), ['team']);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it('removes tracked workflows from canonical skill-active state on all_sessions clear', async () => {
     process.env.OMX_STATE_SERVER_DISABLE_AUTO_START = '1';
     const { handleStateToolCall } = await import('../state-server.js');
@@ -345,6 +453,133 @@ describe('state-server directory initialization', () => {
       };
       assert.equal(canonical.active, false);
       assert.deepEqual(canonical.active_skills, []);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves root-scoped team state when session-scoped ralph is added via state_write', async () => {
+    process.env.OMX_STATE_SERVER_DISABLE_AUTO_START = '1';
+    const { handleStateToolCall } = await import('../state-server.js');
+
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-server-team-ralph-'));
+    try {
+      const teamWrite = await handleStateToolCall({
+        params: {
+          name: 'state_write',
+          arguments: {
+            workingDirectory: wd,
+            mode: 'team',
+            active: true,
+            current_phase: 'running',
+          },
+        },
+      });
+      assert.equal(teamWrite.isError, undefined);
+
+      const ralphWrite = await handleStateToolCall({
+        params: {
+          name: 'state_write',
+          arguments: {
+            workingDirectory: wd,
+            session_id: 'sess-team-ralph',
+            mode: 'ralph',
+            active: true,
+            iteration: 1,
+            max_iterations: 5,
+            current_phase: 'executing',
+          },
+        },
+      });
+      assert.equal(ralphWrite.isError, undefined);
+
+      const rootCanonical = JSON.parse(
+        await readFile(join(wd, '.omx', 'state', 'skill-active-state.json'), 'utf-8'),
+      ) as { active_skills?: Array<{ skill: string; phase?: string; session_id?: string }> };
+      assert.deepEqual(
+        rootCanonical.active_skills?.map(({ skill, phase, session_id }) => ({
+          skill,
+          phase,
+          session_id,
+        })),
+        [{ skill: 'team', phase: 'running', session_id: undefined }],
+      );
+
+      const sessionCanonical = JSON.parse(
+        await readFile(
+          join(wd, '.omx', 'state', 'sessions', 'sess-team-ralph', 'skill-active-state.json'),
+          'utf-8',
+        ),
+      ) as { active_skills?: Array<{ skill: string; phase?: string; session_id?: string }> };
+      assert.deepEqual(
+        sessionCanonical.active_skills?.map(({ skill, phase, session_id }) => ({
+          skill,
+          phase,
+          session_id,
+        })),
+        [
+          { skill: 'team', phase: 'running', session_id: undefined },
+          { skill: 'ralph', phase: 'executing', session_id: 'sess-team-ralph' },
+        ],
+      );
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects standalone overlaps without mutating canonical state', async () => {
+    process.env.OMX_STATE_SERVER_DISABLE_AUTO_START = '1';
+    const { handleStateToolCall } = await import('../state-server.js');
+
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-server-standalone-overlap-'));
+    try {
+      const autopilotWrite = await handleStateToolCall({
+        params: {
+          name: 'state_write',
+          arguments: {
+            workingDirectory: wd,
+            session_id: 'sess-standalone',
+            mode: 'autopilot',
+            active: true,
+            current_phase: 'planning',
+          },
+        },
+      });
+      assert.equal(autopilotWrite.isError, undefined);
+
+      const invalidTeamWrite = await handleStateToolCall({
+        params: {
+          name: 'state_write',
+          arguments: {
+            workingDirectory: wd,
+            session_id: 'sess-standalone',
+            mode: 'team',
+            active: true,
+            current_phase: 'starting',
+          },
+        },
+      });
+
+      assert.equal(invalidTeamWrite.isError, true);
+      const body = JSON.parse(invalidTeamWrite.content[0]?.text || '{}') as { error?: string };
+      assert.match(body.error || '', /omx state/i);
+      assert.match(body.error || '', /omx_state\.\*/i);
+
+      const canonical = JSON.parse(
+        await readFile(
+          join(wd, '.omx', 'state', 'sessions', 'sess-standalone', 'skill-active-state.json'),
+          'utf-8',
+        ),
+      ) as { active_skills?: Array<{ skill: string; phase?: string; session_id?: string }> };
+      assert.deepEqual(
+        canonical.active_skills?.map(({ skill, phase, session_id }) => ({
+          skill,
+          phase,
+          session_id,
+        })),
+        [{ skill: 'autopilot', phase: 'planning', session_id: 'sess-standalone' }],
+      );
+      assert.equal(existsSync(join(wd, '.omx', 'state', 'sessions', 'sess-standalone', 'team-state.json')), false);
     } finally {
       await rm(wd, { recursive: true, force: true });
     }

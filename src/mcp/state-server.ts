@@ -37,6 +37,11 @@ import {
 	writeSkillActiveStateCopies,
 } from "../state/skill-active.js";
 import {
+	assertWorkflowTransitionAllowed,
+	isTrackedWorkflowMode,
+	readActiveWorkflowModes,
+} from "../state/workflow-transition.js";
+import {
 	RALPH_PHASES,
 	validateAndNormalizeRalphState,
 } from "../ralph/contract.js";
@@ -353,6 +358,15 @@ export async function handleStateToolCall(request: {
 						...fields,
 						...((customState as Record<string, unknown>) || {}),
 					} as Record<string, unknown>;
+					if (isTrackedWorkflowMode(mode) && mergedRaw.active === true) {
+						try {
+							const activeModes = await readActiveWorkflowModes(cwd, effectiveSessionId);
+							assertWorkflowTransitionAllowed(activeModes, mode, "write");
+						} catch (error) {
+							validationError = (error as Error).message;
+							return;
+						}
+					}
 					if (
 						mode === "ralph" &&
 						effectiveSessionId &&

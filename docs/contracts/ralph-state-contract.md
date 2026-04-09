@@ -21,9 +21,12 @@ Ralph runtime state is stored at `.omx/state/{scope}/ralph-state.json` and MUST 
 - Optional stop/audit fields:
   - `stop_reason`
 
-Ralph remains a standalone mode. Other workflows may start Ralph later as an
-explicit follow-up, but there is no built-in `omx team ralph ...` linked launch
-path anymore.
+Ralph still owns its own mode state and there is no built-in
+`omx team ralph ...` linked launch path anymore. Under the multi-state
+transition compatibility contract, `team + ralph` is an approved peer overlap,
+so Ralph may coexist with team when the canonical allowlist permits it. Other
+overlaps remain deny-by-default until they are explicitly approved. See
+`docs/contracts/multi-state-transition-contract.md`.
 
 Legacy phase aliases may be normalized for compatibility, but persisted values MUST end in the frozen enum below.
 

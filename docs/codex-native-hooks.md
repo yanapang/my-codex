@@ -46,6 +46,20 @@ OMX only owns the wrapper entries that invoke `dist/scripts/codex-native-hook.js
 | `session-end` | none | `session-end` | runtime-fallback | Still emitted from runtime/notify path, not native Codex hooks |
 | `session-idle` | none | `session-idle` | runtime-fallback | Still emitted from runtime/notify path, not native Codex hooks |
 
+## Combined workflow note
+
+Stop/continuation readers must interpret approved combined workflow state from
+the shared active-set contract rather than from a single legacy `skill` owner.
+For the first-pass multi-state rollout, the approved overlaps are:
+
+- `team + ralph`
+- `team + ultrawork`
+
+Unsupported overlaps should preserve the current state unchanged and direct the
+operator to clear incompatible state explicitly via `omx state ...` or the
+`omx_state.*` MCP tools before retrying. See
+`docs/contracts/multi-state-transition-contract.md`.
+
 ## Verification guidance
 
 When validating hooks, keep the proof boundary explicit:
