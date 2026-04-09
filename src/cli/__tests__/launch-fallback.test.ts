@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { HUD_TMUX_HEIGHT_LINES } from '../../hud/constants.js';
 
 const CLI_SPAWN_TIMEOUT_MS = 15_000;
 const TTY_SPAWN_TIMEOUT_MS = 15_000;
@@ -193,7 +194,7 @@ exit 0
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
       assert.match(tmuxLog, /tmux:new-session .* -s /);
-      assert.match(tmuxLog, /tmux:split-window -v -l 2 .* -t /);
+      assert.match(tmuxLog, new RegExp(`tmux:split-window -v -l ${HUD_TMUX_HEIGHT_LINES} .* -t `));
       if (!isTimedOutSpawn(result.error)) {
         assert.equal(result.status, 0, result.error || result.stderr || result.stdout);
       }
