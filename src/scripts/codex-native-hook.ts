@@ -174,10 +174,7 @@ function formatPhase(value: unknown, fallback = "active"): string {
   return phase || fallback;
 }
 
-async function readActiveRalphState(
-  stateDir: string,
-  requestedSessionId?: string,
-): Promise<Record<string, unknown> | null> {
+async function readActiveRalphState(stateDir: string): Promise<Record<string, unknown> | null> {
   const sessionInfo = await readJsonIfExists(join(stateDir, "session.json"));
   const currentOmxSessionId = safeString(sessionInfo?.session_id).trim();
   if (currentOmxSessionId) {
@@ -191,12 +188,6 @@ async function readActiveRalphState(
       )
     ) {
       return sessionScoped;
-    }
-
-    // Session ownership is authoritative for ownerless Stop events when session.json is bound.
-    // Keep legacy root fallback for explicit-session calls when session-scoped file is missing.
-    if (!safeString(requestedSessionId).trim()) {
-      return null;
     }
   }
 
@@ -983,7 +974,7 @@ async function buildStopHookOutput(
 
   const sessionId = readPayloadSessionId(payload);
   const threadId = readPayloadThreadId(payload);
-  const ralphState = await readActiveRalphState(stateDir, sessionId);
+  const ralphState = await readActiveRalphState(stateDir);
   const stopHookActive = payload.stop_hook_active === true || payload.stopHookActive === true;
   if (!ralphState) {
     const teamWorkerOutput = await buildTeamWorkerStopOutput(cwd);
