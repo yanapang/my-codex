@@ -301,9 +301,15 @@ function collectShutdownPaneIds(params: {
 }
 
 export function shouldPrekillInteractiveShutdownProcessTrees(sessionName: string): boolean {
-  // Native Windows + split-pane psmux sessions can expose overlapping
-  // ancestry around the leader client; rely on pane-targeted teardown there.
-  return !(isNativeWindows() && sessionName.includes(':'));
+  // Shared-window tmux sessions can expose overlapping ancestry around the
+  // invoking leader client. Rely on pane-targeted teardown there so shutdown
+  // does not signal the leader while tearing down worker panes.
+  if (sessionName.includes(':')) return false;
+
+  // Detached session teardown still benefits from process-tree prekill,
+  // including native Windows prompt-worker ancestry where pane-targeted
+  // teardown alone is insufficient.
+  return true;
 }
 
 async function logRuntimeDispatchOutcome(params: {
