@@ -3,7 +3,6 @@ import { existsSync, readFileSync } from "fs";
 import { mkdir, readFile, readdir, writeFile } from "fs/promises";
 import { join, resolve } from "path";
 import { readModeState, updateModeState } from "../modes/base.js";
-import { getReadScopedStateDirs } from "../mcp/state-paths.js";
 import {
   listActiveSkills,
   readVisibleSkillActiveState,
@@ -18,7 +17,7 @@ import {
   writeTeamLeaderAttention,
   writeTeamPhase,
 } from "../team/state.js";
-import { omxNotepadPath, omxProjectMemoryPath } from "../utils/paths.js";
+import { omxNotepadPath, omxProjectMemoryPath, omxStateDir } from "../utils/paths.js";
 import {
   detectPrimaryKeyword,
   recordSkillActivation,
@@ -26,8 +25,6 @@ import {
 } from "../hooks/keyword-detector.js";
 import {
   detectStallPattern,
-  isDeepInterviewInputLockActive,
-  isDeepInterviewStateActive,
   loadAutoNudgeConfig,
   normalizeAutoNudgeSignatureText,
 } from "./notify-hook/auto-nudge.js";
@@ -166,19 +163,6 @@ async function readJsonIfExists(path: string): Promise<Record<string, unknown> |
   }
 }
 
-async function readScopedJsonState(
-  fileName: string,
-  cwd: string,
-  sessionId?: string,
-): Promise<Record<string, unknown> | null> {
-  const dirs = await getReadScopedStateDirs(cwd, sessionId);
-  for (const dir of dirs) {
-    const candidate = await readJsonIfExists(join(dir, fileName));
-    if (candidate) return candidate;
-  }
-  return null;
-}
-
 function isNonTerminalPhase(value: unknown): boolean {
   const phase = safeString(value).trim().toLowerCase();
   return phase !== "" && !TERMINAL_MODE_PHASES.has(phase);
@@ -190,26 +174,28 @@ function formatPhase(value: unknown, fallback = "active"): string {
 }
 
 async function readActiveRalphState(stateDir: string): Promise<Record<string, unknown> | null> {
+  const sessionInfo = await readJsonIfExists(join(stateDir, "session.json"));
+  const currentOmxSessionId = safeString(sessionInfo?.session_id).trim();
+  if (currentOmxSessionId) {
+    const sessionScoped = await readJsonIfExists(
+      join(stateDir, "sessions", currentOmxSessionId, "ralph-state.json"),
+    );
+    if (
+      sessionScoped?.active === true
+      && !TERMINAL_RALPH_PHASES.has(
+        safeString(sessionScoped.current_phase).trim().toLowerCase(),
+      )
+    ) {
+      return sessionScoped;
+    }
+  }
+
   const direct = await readJsonIfExists(join(stateDir, "ralph-state.json"));
   if (direct?.active === true && !TERMINAL_RALPH_PHASES.has(safeString(direct.current_phase).trim().toLowerCase())) {
     return direct;
   }
 
-  const sessionInfo = await readJsonIfExists(join(stateDir, "session.json"));
-  const currentOmxSessionId = safeString(sessionInfo?.session_id).trim();
-  if (!currentOmxSessionId) return null;
-
-  const sessionScoped = await readJsonIfExists(
-    join(stateDir, "sessions", currentOmxSessionId, "ralph-state.json"),
-  );
-  if (
-    sessionScoped?.active === true
-    && !TERMINAL_RALPH_PHASES.has(
-      safeString(sessionScoped.current_phase).trim().toLowerCase(),
-    )
-  ) {
-    return sessionScoped;
-  }
+  if (currentOmxSessionId) return null;
 
   const sessionsRoot = join(stateDir, "sessions");
   if (!existsSync(sessionsRoot)) return null;
@@ -633,14 +619,39 @@ function readPayloadTurnId(payload: CodexHookPayload): string {
 
 async function isDeepInterviewSuppressedForStop(
   cwd: string,
-  stateDir: string,
   sessionId: string,
   threadId: string,
 ): Promise<boolean> {
-  if (await isDeepInterviewStateActive(stateDir)) return true;
-  if (await isDeepInterviewInputLockActive(stateDir)) return true;
+  const scopedModeState = await readStopSessionPinnedState("deep-interview-state.json", cwd, sessionId);
+  if (scopedModeState?.active === true) return true;
+
+  const canonicalState = await readVisibleSkillActiveState(cwd, sessionId);
+  const deepInterviewEntry = canonicalState
+    ? listActiveSkills(canonicalState).find((entry) => (
+      entry.skill === "deep-interview"
+      && matchesSkillStopContext(entry, canonicalState, sessionId, threadId)
+    ))
+    : null;
+  if (
+    deepInterviewEntry
+    && safeObject(canonicalState?.input_lock).active === true
+  ) {
+    return true;
+  }
 
   return (await readBlockingSkillForStop(cwd, sessionId, threadId, "deep-interview")) !== null;
+}
+
+async function readStopSessionPinnedState(
+  fileName: string,
+  cwd: string,
+  sessionId: string,
+): Promise<Record<string, unknown> | null> {
+  const stateDir = omxStateDir(cwd);
+  const statePath = sessionId
+    ? join(stateDir, "sessions", sessionId, fileName)
+    : join(stateDir, fileName);
+  return readJsonIfExists(statePath);
 }
 
 function matchesSkillStopContext(
@@ -671,7 +682,7 @@ async function readBlockingSkillForStop(
     : [...SKILL_STOP_BLOCKERS];
 
   for (const skill of candidateSkills) {
-    const modeState = await readScopedJsonState(`${skill}-state.json`, cwd, sessionId);
+    const modeState = await readStopSessionPinnedState(`${skill}-state.json`, cwd, sessionId);
     if (!modeState || modeState.active !== true) continue;
 
     const phase = formatPhase(
@@ -1004,7 +1015,7 @@ async function buildStopHookOutput(
       if (!stopHookActive && skillOutput) return skillOutput;
     }
 
-    const deepInterviewActive = await isDeepInterviewSuppressedForStop(cwd, stateDir, sessionId, threadId);
+    const deepInterviewActive = await isDeepInterviewSuppressedForStop(cwd, sessionId, threadId);
     const lastAssistantMessage = safeString(
       payload.last_assistant_message ?? payload.lastAssistantMessage,
     );

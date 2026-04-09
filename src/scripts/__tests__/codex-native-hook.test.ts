@@ -225,6 +225,31 @@ describe("codex native hook dispatch", () => {
     }
   });
 
+  it("does not emit UserPromptSubmit routing context for unknown $tokens", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-unknown-token-"));
+    try {
+      await mkdir(join(cwd, ".omx", "state"), { recursive: true });
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "UserPromptSubmit",
+          cwd,
+          session_id: "sess-unknown-1",
+          thread_id: "thread-unknown-1",
+          turn_id: "turn-unknown-1",
+          prompt: "$maer-thinking 다시 설명해봐",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "keyword-detector");
+      assert.equal(result.skillState, null);
+      assert.equal(result.outputJson, null);
+      assert.equal(existsSync(join(cwd, ".omx", "state", "skill-active-state.json")), false);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("nudges $team prompt-submit routing toward omx team runtime usage", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-team-"));
     try {
@@ -1401,6 +1426,35 @@ describe("codex native hook dispatch", () => {
     }
   });
 
+  it("does not block Stop from stale session-scoped Ralph state that belongs to another session", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-stale-session-ralph-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      await mkdir(join(stateDir, "sessions", "sess-current"), { recursive: true });
+      await mkdir(join(stateDir, "sessions", "sess-stale"), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: "sess-current" });
+      await writeJson(join(stateDir, "sessions", "sess-stale", "ralph-state.json"), {
+        active: true,
+        current_phase: "starting",
+        session_id: "sess-stale",
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-current",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("does not re-block Ralph when Stop already continued once", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-ralph-once-"));
     try {
@@ -1622,7 +1676,7 @@ describe("codex native hook dispatch", () => {
     }
   });
 
-  it("returns Stop continuation output when deep-interview mode state is active without a scoped skill state", async () => {
+  it("suppresses native auto-nudge when root deep-interview mode state is active without an explicit session", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-auto-nudge-deep-interview-mode-"));
     try {
       const stateDir = join(cwd, ".omx", "state");
@@ -1637,9 +1691,37 @@ describe("codex native hook dispatch", () => {
         {
           hook_event_name: "Stop",
           cwd,
-          session_id: "sess-stop-auto-mode",
-          thread_id: "thread-stop-auto-mode",
           turn_id: "turn-stop-auto-mode-1",
+          last_assistant_message: "Would you like me to continue with the next step?",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("does not suppress native auto-nudge from stale root deep-interview mode state when the explicit session-scoped mode state is absent", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-auto-nudge-stale-root-mode-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      await mkdir(stateDir, { recursive: true });
+      await writeJson(join(stateDir, "deep-interview-state.json"), {
+        active: true,
+        mode: "deep-interview",
+        current_phase: "intent-first",
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-stop-auto-stale-root-mode",
+          thread_id: "thread-stop-auto-stale-root-mode",
+          turn_id: "turn-stop-auto-stale-root-mode-1",
           last_assistant_message: "Would you like me to continue with the next step?",
         },
         { cwd },
@@ -1648,10 +1730,10 @@ describe("codex native hook dispatch", () => {
       assert.equal(result.omxEventName, "stop");
       assert.deepEqual(result.outputJson, {
         decision: "block",
-        reason:
-          "OMX skill deep-interview is still active (phase: intent-first); continue until the current deep-interview workflow reaches a terminal state.",
-        stopReason: "skill_deep-interview_intent-first",
-        systemMessage: "OMX skill deep-interview is still active (phase: intent-first).",
+        reason: "yes, proceed",
+        stopReason: "auto_nudge",
+        systemMessage:
+          "OMX native Stop detected a stall/permission-style handoff and continued the turn automatically.",
       });
     } finally {
       await rm(cwd, { recursive: true, force: true });
@@ -1676,6 +1758,48 @@ describe("codex native hook dispatch", () => {
           session_id: "sess-stop-auto-stale-root-skill",
           thread_id: "thread-stop-auto-stale-root-skill",
           turn_id: "turn-stop-auto-stale-root-skill-1",
+          last_assistant_message: "Would you like me to continue with the next step?",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.deepEqual(result.outputJson, {
+        decision: "block",
+        reason: "yes, proceed",
+        stopReason: "auto_nudge",
+        systemMessage:
+          "OMX native Stop detected a stall/permission-style handoff and continued the turn automatically.",
+      });
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("does not suppress native auto-nudge from stale root deep-interview input lock when the explicit session-scoped canonical skill state is absent", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-auto-nudge-stale-root-lock-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      await mkdir(stateDir, { recursive: true });
+      await writeJson(join(stateDir, "skill-active-state.json"), {
+        active: true,
+        skill: "deep-interview",
+        phase: "planning",
+        input_lock: {
+          active: true,
+          scope: "deep-interview-auto-approval",
+          blocked_inputs: ["yes", "proceed"],
+          message: "Deep interview is active; auto-approval shortcuts are blocked until the interview finishes.",
+        },
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-stop-auto-stale-root-lock",
+          thread_id: "thread-stop-auto-stale-root-lock",
+          turn_id: "turn-stop-auto-stale-root-lock-1",
           last_assistant_message: "Would you like me to continue with the next step?",
         },
         { cwd },
