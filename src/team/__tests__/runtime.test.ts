@@ -820,7 +820,8 @@ sleep 5
       assert.equal(shouldPrekillInteractiveShutdownProcessTrees('omx-team-alpha'), true);
     });
 
-    assert.equal(shouldPrekillInteractiveShutdownProcessTrees('leader:0'), true);
+    assert.equal(shouldPrekillInteractiveShutdownProcessTrees('leader:0'), false);
+    assert.equal(shouldPrekillInteractiveShutdownProcessTrees('omx-team-alpha'), true);
   });
 
   it('startTeam accepts native Windows tmux clients even when TMUX env vars are absent', async () => {
@@ -3750,6 +3751,82 @@ esac
           },
         );
       });
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('shutdownTeam skips prekill and keeps the leader pane alive on shared-session shutdown', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-shutdown-shared-session-'));
+    try {
+      await withMockTmuxFixture(
+        {
+          dirPrefix: 'omx-runtime-shutdown-shared-session-bin-',
+          tmuxScript: (tmuxLogPath) => `#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >> "${tmuxLogPath}"
+case "$1" in
+  -V)
+    echo "tmux 3.4"
+    exit 0
+    ;;
+  list-panes)
+    case "$*" in
+      *"-F #{pane_dead} #{pane_pid}"*)
+        exit 1
+        ;;
+      *"-t leader:0 -F #{pane_id}"*"#{pane_current_command}"*)
+        printf "%%11\\tzsh\\tzsh\\n%%12\\tnode\\tnode /tmp/bin/omx.js hud --watch\\n%%13\\tcodex\\tcodex\\n%%14\\tcodex\\tcodex\\n"
+        exit 0
+        ;;
+      *)
+        exit 1
+        ;;
+    esac
+    ;;
+  split-window)
+    printf '%%44\\n'
+    exit 0
+    ;;
+  kill-pane|resize-pane|select-pane)
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`,
+        },
+        async ({ tmuxLogPath }) => {
+          await initTeamState('team-shutdown-shared-session', 'shutdown shared session test', 'executor', 2, cwd);
+          const config = await readTeamConfig('team-shutdown-shared-session', cwd);
+          assert.ok(config);
+          if (!config) return;
+          config.tmux_session = 'leader:0';
+          config.leader_pane_id = '%11';
+          config.hud_pane_id = '%12';
+          config.workers[0]!.pane_id = '%13';
+          config.workers[1]!.pane_id = '%14';
+          await saveTeamConfig(config, cwd);
+
+          await shutdownTeam('team-shutdown-shared-session', cwd, { force: true });
+
+          const teamRoot = join(cwd, '.omx', 'state', 'team', 'team-shutdown-shared-session');
+          assert.equal(existsSync(teamRoot), false);
+          assert.equal(await readMonitorSnapshot('team-shutdown-shared-session', cwd), null);
+
+          const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
+          assert.doesNotMatch(tmuxLog, /list-panes -t %13 -F #\{pane_pid\}/);
+          assert.doesNotMatch(tmuxLog, /list-panes -t %14 -F #\{pane_pid\}/);
+          assert.doesNotMatch(tmuxLog, /kill-pane -t %11/);
+          assert.doesNotMatch(tmuxLog, /kill-session -t leader:0/);
+          assert.match(tmuxLog, /kill-pane -t %12/);
+          assert.match(tmuxLog, /kill-pane -t %13/);
+          assert.match(tmuxLog, /kill-pane -t %14/);
+          assert.match(tmuxLog, new RegExp(`split-window -v -l ${HUD_TMUX_TEAM_HEIGHT_LINES} -t %11 -d -P -F #\\{pane_id\\}`));
+          assert.match(tmuxLog, /select-pane -t %11/);
+        },
+      );
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

@@ -1580,10 +1580,12 @@ function buildDetachedSessionLeaderCommand(
     "status=$?;",
     "trap - 0 INT TERM HUP;",
     buildTmuxExtendedKeysReleaseShellSnippet(cwd),
+    'if [ "$status" -lt 128 ]; then',
     `tmux kill-session -t "${escapeShellDoubleQuotedValue(sessionName)}" >/dev/null 2>&1 || true;`,
+    "fi;",
     "exit $status;",
     "};",
-    "trap omx_detached_session_cleanup 0 INT TERM HUP;",
+    "trap omx_detached_session_cleanup 0;",
     codexCmd,
   ].join(" ");
   return `/bin/sh -lc ${quoteShellArg(wrapped)}`;

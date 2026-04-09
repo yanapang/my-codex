@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import { buildManagedCodexHooksConfig } from "../../config/codex-hooks.js";
 import {
   initTeamState,
@@ -24,6 +24,31 @@ async function writeJson(path: string, value: unknown): Promise<void> {
 
 const TEAM_STOP_COMMIT_GUIDANCE =
   " If system-generated worker auto-checkpoint commits exist, rewrite them into Lore-format final commits before merge/finalization.";
+
+const TEAM_ENV_KEYS = [
+  "OMX_TEAM_WORKER",
+  "OMX_TEAM_STATE_ROOT",
+  "OMX_TEAM_LEADER_CWD",
+] as const;
+
+const priorTeamEnv = new Map<(typeof TEAM_ENV_KEYS)[number], string | undefined>();
+
+beforeEach(() => {
+  priorTeamEnv.clear();
+  for (const key of TEAM_ENV_KEYS) {
+    priorTeamEnv.set(key, process.env[key]);
+    delete process.env[key];
+  }
+});
+
+afterEach(() => {
+  for (const key of TEAM_ENV_KEYS) {
+    const value = priorTeamEnv.get(key);
+    if (typeof value === "string") process.env[key] = value;
+    else delete process.env[key];
+  }
+  priorTeamEnv.clear();
+});
 
 describe("codex native hook config", () => {
   it("builds the expected managed hooks.json shape", () => {
