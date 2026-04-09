@@ -368,7 +368,7 @@ esac
       assert.match(tmuxCalls, /split-window/);
       assert.match(tmuxCalls, /resize-pane -t %9 -y 3/);
       assert.match(tmuxCalls, /dist\/cli\/omx\.js' hud --watch --preset=focused/);
-      assert.doesNotMatch(tmuxCalls, /dist\/scripts\/codex-native-hook\.js hud --watch/);
+      assert.doesNotMatch(tmuxCalls, /\/tmp\/codex-host-binary' hud --watch/);
     } finally {
       if (originalTmux === undefined) {
         delete process.env.TMUX;
