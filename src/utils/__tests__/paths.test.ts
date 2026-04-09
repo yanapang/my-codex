@@ -517,4 +517,33 @@ describe("OMX launcher path resolution", () => {
       await rm(startupCwd, { recursive: true, force: true });
     }
   });
+
+  it("falls back from a non-OMX host binary to the packaged CLI entry", async () => {
+    const startupCwd = await mkdtemp(join(tmpdir(), "omx-launcher-cli-host-start-"));
+    const packageRootDir = await mkdtemp(join(tmpdir(), "omx-launcher-cli-host-root-"));
+    try {
+      const hostPath = join(startupCwd, "codex-host");
+      const cliDir = join(packageRootDir, "dist", "cli");
+      const cliPath = join(cliDir, "omx.js");
+      await writeFile(hostPath, "#!/usr/bin/env node\n", "utf-8");
+      await mkdir(cliDir, { recursive: true });
+      await writeFile(cliPath, "#!/usr/bin/env node\n", "utf-8");
+
+      const resolved = resolveOmxCliEntryPath({
+        argv1: hostPath,
+        cwd: startupCwd,
+        env: {
+          ...process.env,
+          [OMX_STARTUP_CWD_ENV]: startupCwd,
+        },
+        packageRootDir,
+      });
+
+      assert.equal(resolved, cliPath);
+    } finally {
+      await rm(startupCwd, { recursive: true, force: true });
+      await rm(packageRootDir, { recursive: true, force: true });
+    }
+  });
+
 });
