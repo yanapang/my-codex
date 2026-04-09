@@ -17,7 +17,6 @@ import {
   type TeamSession,
   waitForWorkerReady,
   dismissTrustPromptIfPresent,
-  isNativeWindows,
   sleepFractionalSeconds,
   sendToWorker,
   sendToWorkerStdin,
