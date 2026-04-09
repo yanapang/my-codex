@@ -1112,15 +1112,6 @@ export interface TeamStartOptions {
   confirmStaleCleanup?: (summary: StaleTeamSummary) => Promise<boolean>;
 }
 
-export function assertInteractiveTmuxPrereqs(hasTmuxContext: boolean, tmuxAvailable: boolean): void {
-  if (!hasTmuxContext && !tmuxAvailable) {
-    throw new Error('Team mode requires tmux. Install with: apt install tmux / brew install tmux');
-  }
-  if (!hasTmuxContext) {
-    throw new Error('Team mode requires running inside tmux current leader pane');
-  }
-}
-
 interface ShutdownGateCounts {
   total: number;
   pending: number;
@@ -1821,9 +1812,12 @@ export async function startTeam(
   const workerLaunchMode = resolveTeamWorkerLaunchMode(process.env);
   const displayMode = workerLaunchMode === 'interactive' ? 'split_pane' : 'auto';
   if (workerLaunchMode === 'interactive') {
-    const hasTmuxContext = hasCurrentTmuxClientContext();
-    const tmuxAvailable = hasTmuxContext ? true : isTmuxAvailable();
-    assertInteractiveTmuxPrereqs(hasTmuxContext, tmuxAvailable);
+    if (!isTmuxAvailable()) {
+      throw new Error('Team mode requires tmux. Install with: apt install tmux / brew install tmux');
+    }
+    if (!hasCurrentTmuxClientContext()) {
+      throw new Error('Team mode requires running inside tmux current leader pane');
+    }
   }
 
   const teamStateRoot = resolveCanonicalTeamStateRoot(leaderCwd);
