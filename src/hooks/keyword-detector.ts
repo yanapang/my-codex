@@ -27,7 +27,6 @@ import {
   buildWorkflowTransitionError,
   evaluateWorkflowTransition,
   isTrackedWorkflowMode,
-  pickPrimaryWorkflowMode,
 } from '../state/workflow-transition.js';
 
 export interface KeywordMatch {

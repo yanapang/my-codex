@@ -69,15 +69,6 @@ function safeString(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
-function filterEntriesForSession(
-  entries: SkillActiveEntry[],
-  sessionId?: string,
-): SkillActiveEntry[] {
-  const normalizedSessionId = safeString(sessionId).trim();
-  if (!normalizedSessionId) return entries;
-  return entries.filter((entry) => safeString(entry.session_id).trim() === normalizedSessionId);
-}
-
 function normalizeSkillActiveEntry(raw: unknown): SkillActiveEntry | null {
   if (!raw || typeof raw !== 'object') return null;
   const skill = safeString((raw as Record<string, unknown>).skill).trim();
