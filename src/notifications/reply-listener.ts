@@ -32,7 +32,6 @@ import {
 } from './session-registry.js';
 import { parseMentionAllowedMentions } from './config.js';
 import { parseTmuxTail } from './formatter.js';
-import { spawnPlatformCommandSync } from '../utils/platform-command.js';
 import type { ReplyConfig } from './types.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -271,36 +270,19 @@ const DAEMON_IDENTITY_MARKER = 'pollLoop';
  * inspecting its command line for the daemon identity marker. Returns false if
  * the process cannot be positively identified (safe default).
  */
-export function isReplyListenerProcess(
-  pid: number,
-  options: {
-    platform?: NodeJS.Platform;
-    env?: NodeJS.ProcessEnv;
-    existsImpl?: typeof existsSync;
-    spawnImpl?: typeof spawnSync;
-  } = {},
-): boolean {
+export function isReplyListenerProcess(pid: number): boolean {
   try {
-    const platform = options.platform ?? process.platform;
-    if (platform === 'linux') {
+    if (process.platform === 'linux') {
       // NUL-separated argv available without spawning a subprocess
       const cmdline = readFileSync(`/proc/${pid}/cmdline`, 'utf-8');
       return cmdline.includes(DAEMON_IDENTITY_MARKER);
     }
     if (process.platform === 'win32') return false;
     // macOS and other POSIX systems
-    const { result } = spawnPlatformCommandSync(
-      'ps',
-      ['-p', String(pid), '-o', 'args='],
-      {
-        encoding: 'utf-8',
-        timeout: 3000,
-      },
-      platform,
-      options.env,
-      options.existsImpl,
-      options.spawnImpl,
-    );
+    const result = spawnSync('ps', ['-p', String(pid), '-o', 'args='], {
+      encoding: 'utf-8',
+      timeout: 3000,
+    });
     if (result.status !== 0 || result.error) return false;
     return (result.stdout ?? '').includes(DAEMON_IDENTITY_MARKER);
   } catch {
