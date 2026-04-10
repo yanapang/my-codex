@@ -352,6 +352,27 @@ describe('additional HUD mode state readers', () => {
       assert.deepEqual(state, { last_turn_at: 'session', turn_count: 2 });
     });
   });
+
+  it('keeps hud notify pinned to the canonical OMX session when session metadata also carries a native session id', async () => {
+    await withTempRepo('omx-hud-notify-native-meta-', async (cwd) => {
+      const rootStateDir = join(cwd, '.omx', 'state');
+      const canonicalSessionId = 'omx-canonical-session';
+      const nativeSessionId = 'codex-native-session';
+      const canonicalDir = join(rootStateDir, 'sessions', canonicalSessionId);
+      const nativeDir = join(rootStateDir, 'sessions', nativeSessionId);
+      await mkdir(canonicalDir, { recursive: true });
+      await mkdir(nativeDir, { recursive: true });
+      await writeFile(join(rootStateDir, 'session.json'), JSON.stringify({
+        session_id: canonicalSessionId,
+        native_session_id: nativeSessionId,
+      }));
+      await writeFile(join(canonicalDir, 'hud-state.json'), JSON.stringify({ last_turn_at: 'canonical', turn_count: 3 }));
+      await writeFile(join(nativeDir, 'hud-state.json'), JSON.stringify({ last_turn_at: 'native', turn_count: 99 }));
+
+      const state = await readHudNotifyState(cwd);
+      assert.deepEqual(state, { last_turn_at: 'canonical', turn_count: 3 });
+    });
+  });
 });
 
 describe('readAllState canonical skill precedence', () => {

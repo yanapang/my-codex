@@ -9,7 +9,7 @@ import {
 } from "../state/skill-active.js";
 import { readSubagentSessionSummary } from "../subagents/tracker.js";
 import { resolveCanonicalTeamStateRoot } from "../team/state-root.js";
-import { readUsableSessionState } from "../hooks/session.js";
+import { readUsableSessionState, reconcileNativeSessionStart } from "../hooks/session.js";
 import {
   appendTeamEvent,
   readTeamLeaderAttention,
@@ -42,7 +42,6 @@ import {
 } from "../hooks/extensibility/events.js";
 import type { HookEventEnvelope } from "../hooks/extensibility/types.js";
 import { dispatchHookEvent } from "../hooks/extensibility/dispatcher.js";
-import { writeSessionStart } from "../hooks/session.js";
 import { reconcileHudForPromptSubmit } from "../hud/reconcile.js";
 
 type CodexHookEventName =
@@ -677,6 +676,21 @@ function readPayloadTurnId(payload: CodexHookPayload): string {
   return safeString(payload.turn_id ?? payload.turnId).trim();
 }
 
+async function resolveInternalSessionIdForPayload(
+  cwd: string,
+  payloadSessionId: string,
+): Promise<string> {
+  const currentSession = await readUsableSessionState(cwd);
+  const canonicalSessionId = safeString(currentSession?.session_id).trim();
+  if (!canonicalSessionId) return payloadSessionId;
+
+  const nativeSessionId = safeString(currentSession?.native_session_id).trim();
+  if (!payloadSessionId) return canonicalSessionId;
+  if (payloadSessionId === canonicalSessionId) return canonicalSessionId;
+  if (nativeSessionId && payloadSessionId === nativeSessionId) return canonicalSessionId;
+  return payloadSessionId;
+}
+
 async function readStopSessionPinnedState(
   fileName: string,
   cwd: string,
@@ -1003,30 +1017,31 @@ async function buildStopHookOutput(
   }
 
   const sessionId = readPayloadSessionId(payload);
+  const canonicalSessionId = await resolveInternalSessionIdForPayload(cwd, sessionId);
   const threadId = readPayloadThreadId(payload);
-  const ralphState = await readActiveRalphState(stateDir, sessionId);
+  const ralphState = await readActiveRalphState(stateDir, canonicalSessionId);
   const stopHookActive = payload.stop_hook_active === true || payload.stopHookActive === true;
   if (!ralphState) {
     const teamWorkerOutput = await buildTeamWorkerStopOutput(cwd);
     if (!stopHookActive && hasTeamWorkerContext()) return teamWorkerOutput;
 
-    const autopilotOutput = await buildModeBasedStopOutput("autopilot", cwd, sessionId);
+    const autopilotOutput = await buildModeBasedStopOutput("autopilot", cwd, canonicalSessionId);
     if (!stopHookActive && autopilotOutput) return autopilotOutput;
 
-    const ultraworkOutput = await buildModeBasedStopOutput("ultrawork", cwd, sessionId);
+    const ultraworkOutput = await buildModeBasedStopOutput("ultrawork", cwd, canonicalSessionId);
     if (!stopHookActive && ultraworkOutput) return ultraworkOutput;
 
-    const ultraqaOutput = await buildModeBasedStopOutput("ultraqa", cwd, sessionId);
+    const ultraqaOutput = await buildModeBasedStopOutput("ultraqa", cwd, canonicalSessionId);
     if (!stopHookActive && ultraqaOutput) return ultraqaOutput;
 
-    const teamOutput = await buildTeamStopOutput(cwd, sessionId);
+    const teamOutput = await buildTeamStopOutput(cwd, canonicalSessionId);
     if (teamOutput) {
       const teamSignature = buildRepeatableStopSignature(payload, "team-stop", safeString(teamOutput.stopReason));
       return await maybeReturnRepeatableStopOutput(payload, stateDir, teamSignature, teamOutput);
     }
 
-    if (sessionId) {
-      const canonicalTeam = await findCanonicalActiveTeamForSession(cwd, sessionId);
+    if (canonicalSessionId) {
+      const canonicalTeam = await findCanonicalActiveTeamForSession(cwd, canonicalSessionId);
       if (canonicalTeam) {
         const canonicalTeamOutput = buildTeamStopOutputForPhase(
           canonicalTeam.teamName,
@@ -1042,7 +1057,7 @@ async function buildStopHookOutput(
         if (repeatedCanonicalTeamOutput) return repeatedCanonicalTeamOutput;
       }
 
-      const skillOutput = await buildSkillStopOutput(cwd, sessionId, threadId);
+      const skillOutput = await buildSkillStopOutput(cwd, canonicalSessionId, threadId);
       if (!stopHookActive && skillOutput) return skillOutput;
     }
 
@@ -1102,15 +1117,22 @@ export async function dispatchCodexNativeHook(
   const omxEventName = mapCodexHookEventToOmxEvent(hookEventName);
   let skillState: SkillActiveState | null = null;
 
-  const sessionId = safeString(payload.session_id ?? payload.sessionId).trim();
+  const nativeSessionId = safeString(payload.session_id ?? payload.sessionId).trim();
   const threadId = safeString(payload.thread_id ?? payload.threadId).trim();
   const turnId = safeString(payload.turn_id ?? payload.turnId).trim();
+  let canonicalSessionId = safeString((await readUsableSessionState(cwd))?.session_id).trim();
 
-  if (hookEventName === "SessionStart" && sessionId) {
-    await writeSessionStart(cwd, sessionId, {
+  if (hookEventName === "SessionStart" && nativeSessionId) {
+    const sessionState = await reconcileNativeSessionStart(cwd, nativeSessionId, {
       pid: options.sessionOwnerPid ?? resolveSessionOwnerPid(payload),
     });
+    canonicalSessionId = safeString(sessionState.session_id).trim();
+  } else if (!canonicalSessionId) {
+    canonicalSessionId = safeString((await readUsableSessionState(cwd))?.session_id).trim();
   }
+
+  const eventSessionId = canonicalSessionId || nativeSessionId || undefined;
+  const sessionIdForState = canonicalSessionId || nativeSessionId;
 
   if (hookEventName === "UserPromptSubmit") {
     const prompt = readPromptText(payload);
@@ -1118,7 +1140,7 @@ export async function dispatchCodexNativeHook(
       skillState = await recordSkillActivation({
         stateDir,
         text: prompt,
-        sessionId,
+        sessionId: sessionIdForState,
         threadId,
         turnId,
       });
@@ -1127,11 +1149,19 @@ export async function dispatchCodexNativeHook(
   }
 
   if (omxEventName) {
+    const baseContext = buildBaseContext(cwd, payload, hookEventName!);
+    if (nativeSessionId) {
+      baseContext.native_session_id = nativeSessionId;
+      baseContext.codex_session_id = nativeSessionId;
+    }
+    if (canonicalSessionId) {
+      baseContext.omx_session_id = canonicalSessionId;
+    }
     const event: HookEventEnvelope = buildNativeHookEvent(
       omxEventName,
-      buildBaseContext(cwd, payload, hookEventName!),
+      baseContext,
       {
-        session_id: sessionId || undefined,
+        session_id: eventSessionId,
         thread_id: threadId || undefined,
         turn_id: turnId || undefined,
         mode: safeString(payload.mode).trim() || undefined,
@@ -1143,7 +1173,7 @@ export async function dispatchCodexNativeHook(
   let outputJson: Record<string, unknown> | null = null;
   if (hookEventName === "SessionStart" || hookEventName === "UserPromptSubmit") {
     const additionalContext = hookEventName === "SessionStart"
-      ? await buildSessionStartContext(cwd, sessionId)
+      ? await buildSessionStartContext(cwd, canonicalSessionId || nativeSessionId)
       : buildAdditionalContextMessage(readPromptText(payload), skillState);
     if (additionalContext) {
       outputJson = {

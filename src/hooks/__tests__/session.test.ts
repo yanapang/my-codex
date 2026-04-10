@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   resetSessionMetrics,
+  reconcileNativeSessionStart,
   writeSessionStart,
   writeSessionEnd,
   readSessionState,
@@ -16,6 +17,7 @@ import {
 
 interface SessionHistoryEntry {
   session_id: string;
+  native_session_id?: string;
   started_at: string;
   ended_at: string;
   cwd: string;
@@ -122,6 +124,58 @@ describe('session lifecycle manager', () => {
       const dailyLog = await readFile(dailyLogPath, 'utf-8');
       assert.match(dailyLog, /"event":"session_start"/);
       assert.match(dailyLog, /"event":"session_end"/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves canonical session id while reconciling native SessionStart metadata', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-session-native-reconcile-'));
+    try {
+      await writeSessionStart(cwd, 'omx-launch-1');
+
+      const reconciled = await reconcileNativeSessionStart(cwd, 'codex-native-1', {
+        pid: 54321,
+        platform: 'win32',
+      });
+
+      assert.equal(reconciled.session_id, 'omx-launch-1');
+      assert.equal(reconciled.native_session_id, 'codex-native-1');
+      assert.equal(reconciled.pid, 54321);
+      assert.equal(reconciled.platform, 'win32');
+
+      const persisted = await readSessionState(cwd);
+      assert.equal(persisted?.session_id, 'omx-launch-1');
+      assert.equal(persisted?.native_session_id, 'codex-native-1');
+      assert.equal(persisted?.pid, 54321);
+
+      const dailyLogPath = join(cwd, '.omx', 'logs', `omx-${todayIsoDate()}.jsonl`);
+      const dailyLog = await readFile(dailyLogPath, 'utf-8');
+      assert.match(dailyLog, /"event":"session_start_reconciled"/);
+      assert.match(dailyLog, /"native_session_id":"codex-native-1"/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to a fresh canonical session when reconciling without authoritative launch state', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-session-native-fallback-'));
+    try {
+      const statePath = join(cwd, '.omx', 'state', 'session.json');
+      await resetSessionMetrics(cwd);
+      await writeFile(statePath, JSON.stringify({
+        session_id: 'sess-other-worktree',
+        cwd: join(cwd, '..', 'different-worktree'),
+      }), 'utf-8');
+
+      const reconciled = await reconcileNativeSessionStart(cwd, 'codex-fallback-1', {
+        pid: 67890,
+        platform: 'win32',
+      });
+
+      assert.equal(reconciled.session_id, 'codex-fallback-1');
+      assert.equal(reconciled.native_session_id, 'codex-fallback-1');
+      assert.equal(reconciled.pid, 67890);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

@@ -30,6 +30,7 @@ import {
 } from './notify-hook/payload-parser.js';
 import {
   getScopedStatePath,
+  readCurrentSessionId,
   readScopedJsonIfExists,
   getScopedStateDirsForCurrentSession,
   normalizeNotifyState,
@@ -182,10 +183,12 @@ async function main() {
   const logsDir = join(cwd, '.omx', 'logs');
   const omxDir = join(cwd, '.omx');
   let currentOmxSessionId = '';
+  const getEffectiveSessionId = () => currentOmxSessionId || payloadSessionId;
 
   // Ensure directories exist
   await mkdir(logsDir, { recursive: true }).catch(() => {});
   await mkdir(stateDir, { recursive: true }).catch(() => {});
+  currentOmxSessionId = await readCurrentSessionId(stateDir).catch(() => '') || '';
 
   // Turn-level dedupe prevents double-processing when native notify and fallback
   // watcher both emit the same completed turn.
@@ -196,9 +199,10 @@ async function main() {
       const threadId = safeString(payload['thread-id'] || payload.thread_id || '');
       const eventType = safeString(payload.type || 'agent-turn-complete');
       const key = `${threadId || 'no-thread'}|${turnId}|${eventType}`;
-      const dedupeStatePath = await getScopedStatePath(stateDir, 'notify-hook-state.json', payloadSessionId);
+      const dedupeSessionId = getEffectiveSessionId();
+      const dedupeStatePath = await getScopedStatePath(stateDir, 'notify-hook-state.json', dedupeSessionId);
       const dedupeState = normalizeNotifyState(
-        await readScopedJsonIfExists(stateDir, 'notify-hook-state.json', payloadSessionId, null),
+        await readScopedJsonIfExists(stateDir, 'notify-hook-state.json', dedupeSessionId, null),
       );
       dedupeState.recent_turns = pruneRecentTurns(dedupeState.recent_turns, now);
       if (dedupeState.recent_turns[key]) {
@@ -218,10 +222,10 @@ async function main() {
     try {
       const threadId = safeString(payload['thread-id'] || payload.thread_id || '');
       const turnId = safeString(payload['turn-id'] || payload.turn_id || '');
-      if (payloadSessionId && threadId) {
+      if (getEffectiveSessionId() && threadId) {
         const { recordSubagentTurnForSession } = await import('../subagents/tracker.js');
         await recordSubagentTurnForSession(cwd, {
-          sessionId: payloadSessionId,
+          sessionId: getEffectiveSessionId(),
           threadId,
           ...(turnId ? { turnId } : {}),
           timestamp: new Date().toISOString(),
@@ -422,8 +426,9 @@ async function main() {
   // 4. Write HUD state summary for `omx hud` (lead session only)
   if (!isTeamWorker) {
     try {
-      const hudStatePath = await getScopedStatePath(stateDir, 'hud-state.json', payloadSessionId);
-      let hudState = await readScopedJsonIfExists(stateDir, 'hud-state.json', payloadSessionId, {
+      const scopedSessionId = getEffectiveSessionId();
+      const hudStatePath = await getScopedStatePath(stateDir, 'hud-state.json', scopedSessionId);
+      let hudState = await readScopedJsonIfExists(stateDir, 'hud-state.json', scopedSessionId, {
         last_turn_at: '',
         turn_count: 0,
       });
@@ -456,19 +461,19 @@ async function main() {
   try {
     const { recordSkillActivation } = await import('../hooks/keyword-detector.js');
     if (latestUserInput) {
-      await recordSkillActivation({
-        stateDir,
-        text: latestUserInput,
-        sessionId: payloadSessionId,
-        threadId: payloadThreadId,
-        turnId: safeString(payload['turn-id'] || payload.turn_id || ''),
-      });
+        await recordSkillActivation({
+          stateDir,
+          text: latestUserInput,
+          sessionId: getEffectiveSessionId(),
+          threadId: payloadThreadId,
+          turnId: safeString(payload['turn-id'] || payload.turn_id || ''),
+        });
     }
   } catch {
     // Non-fatal: keyword detector module may not be built yet
   }
 
-  const deepInterviewStateActive = await isDeepInterviewStateActive(stateDir, payloadSessionId);
+  const deepInterviewStateActive = await isDeepInterviewStateActive(stateDir, getEffectiveSessionId());
 
   // 4.55. Notify leader when individual worker transitions to idle (worker session only)
   if (isTeamWorker && parsedTeamWorker && !deepInterviewStateActive) {
@@ -520,7 +525,7 @@ async function main() {
   try {
     const { buildNativeHookEvent, buildDerivedHookEvent } = await import('../hooks/extensibility/events.js');
     const { dispatchHookEvent } = await import('../hooks/extensibility/dispatcher.js');
-    const sessionIdForHooks = safeString(payload.session_id || payload['session-id'] || '');
+    const sessionIdForHooks = getEffectiveSessionId();
     const threadIdForHooks = safeString(payload['thread-id'] || payload.thread_id || '');
     const turnIdForHooks = safeString(payload['turn-id'] || payload.turn_id || '');
     const modeForHooks = safeString(payload.mode || '');
@@ -530,6 +535,8 @@ async function main() {
       type: safeString(payload.type || 'agent-turn-complete'),
       input_messages: normalizeInputMessages(payload),
       output_preview: outputPreview,
+      native_session_id: payloadSessionId || null,
+      omx_session_id: sessionIdForHooks || null,
       ...readRepositoryMetadata(cwd),
       session_name: resolveOperationalSessionName(cwd, sessionIdForHooks),
       project_path: cwd,
@@ -551,6 +558,8 @@ async function main() {
         status: signal.normalized_event,
         errorSummary: signal.error_summary,
         extra: {
+          native_session_id: payloadSessionId || null,
+          omx_session_id: sessionIdForHooks || null,
           source_event: safeString(payload.type || 'agent-turn-complete'),
         },
       }), {
@@ -655,7 +664,7 @@ async function main() {
         payload,
         stateDir,
         logsDir,
-        sessionId: currentOmxSessionId || payloadSessionId,
+        sessionId: getEffectiveSessionId(),
         turnId: safeString(payload['turn-id'] || payload.turn_id || ''),
       });
     } catch (err) {
@@ -665,7 +674,7 @@ async function main() {
         level: 'warn',
         type: 'visual_verdict_import_failure',
         error: (err as any)?.message || String(err),
-        session_id: payloadSessionId,
+        session_id: getEffectiveSessionId(),
         turn_id: safeString(payload['turn-id'] || payload.turn_id || ''),
       });
       const warnFile = join(logsDir, `notify-hook-${new Date().toISOString().split('T')[0]}.jsonl`);

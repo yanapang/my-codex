@@ -78,6 +78,7 @@ export type HookPluginSendKeysResult = HookPluginTmuxSendKeysResult;
 
 export interface HookPluginOmxSessionState {
   session_id: string;
+  native_session_id?: string;
   started_at?: string;
   cwd?: string;
   pid?: number;

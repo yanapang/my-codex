@@ -16,6 +16,7 @@ import {
   mapCodexHookEventToOmxEvent,
   resolveSessionOwnerPidFromAncestry,
 } from "../codex-native-hook.js";
+import { writeSessionStart } from "../../hooks/session.js";
 
 async function writeJson(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true }).catch(() => {});
@@ -125,9 +126,64 @@ describe("codex native hook dispatch", () => {
       });
       const sessionState = JSON.parse(
         await readFile(join(cwd, ".omx", "state", "session.json"), "utf-8"),
-      ) as { session_id?: string; pid?: number };
+      ) as { session_id?: string; native_session_id?: string; pid?: number };
       assert.equal(sessionState.session_id, "sess-start-1");
+      assert.equal(sessionState.native_session_id, "sess-start-1");
       assert.equal(sessionState.pid, 43210);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves canonical OMX session scope when native SessionStart arrives with a different id", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-session-reconcile-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const canonicalSessionId = "omx-launch-1";
+      const nativeSessionId = "codex-native-1";
+      await mkdir(join(stateDir, "sessions", canonicalSessionId), { recursive: true });
+      await writeSessionStart(cwd, canonicalSessionId);
+      await writeJson(join(stateDir, "sessions", canonicalSessionId, "hud-state.json"), {
+        last_turn_at: "2026-04-10T00:00:00.000Z",
+        turn_count: 1,
+      });
+
+      await dispatchCodexNativeHook(
+        {
+          hook_event_name: "SessionStart",
+          cwd,
+          session_id: nativeSessionId,
+        },
+        {
+          cwd,
+          sessionOwnerPid: process.pid,
+        },
+      );
+
+      const sessionState = JSON.parse(
+        await readFile(join(stateDir, "session.json"), "utf-8"),
+      ) as { session_id?: string; native_session_id?: string; pid?: number };
+      assert.equal(sessionState.session_id, canonicalSessionId);
+      assert.equal(sessionState.native_session_id, nativeSessionId);
+      assert.equal(sessionState.pid, process.pid);
+
+      const promptResult = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "UserPromptSubmit",
+          cwd,
+          session_id: nativeSessionId,
+          thread_id: "thread-1",
+          turn_id: "turn-1",
+          prompt: "$ralplan fix hud scope drift",
+        },
+        { cwd },
+      );
+
+      assert.equal(promptResult.omxEventName, "keyword-detector");
+      assert.equal(existsSync(join(stateDir, "sessions", canonicalSessionId, "skill-active-state.json")), true);
+      assert.equal(existsSync(join(stateDir, "sessions", canonicalSessionId, "ralplan-state.json")), true);
+      assert.equal(existsSync(join(stateDir, "sessions", nativeSessionId, "skill-active-state.json")), false);
+      assert.equal(existsSync(join(stateDir, "sessions", nativeSessionId, "ralplan-state.json")), false);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
