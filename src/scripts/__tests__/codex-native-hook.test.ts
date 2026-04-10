@@ -2237,4 +2237,40 @@ esac
       await rm(cwd, { recursive: true, force: true });
     }
   });
+
+  it("does not block Stop from another session's stale root team state when no scoped team state exists", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-stale-root-team-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      await mkdir(join(stateDir, "sessions", "sess-current"), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: "sess-current" });
+      await writeJson(join(stateDir, "team-state.json"), {
+        active: true,
+        current_phase: "starting",
+        team_name: "stale-root-team",
+        session_id: "sess-other",
+      });
+      await writeJson(join(stateDir, "team", "stale-root-team", "phase.json"), {
+        current_phase: "team-exec",
+        max_fix_attempts: 3,
+        current_fix_attempt: 0,
+        transitions: [],
+        updated_at: new Date().toISOString(),
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-current",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
 });
