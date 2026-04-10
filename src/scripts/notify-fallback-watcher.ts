@@ -27,7 +27,7 @@ import {
 } from './notify-hook/team-leader-nudge.js';
 import { DEFAULT_MARKER } from './tmux-hook-engine.js';
 import { isTerminalPhase } from './notify-hook/utils.js';
-import { isSessionStale, readSessionState } from '../hooks/session.js';
+import { isSessionStale, isSessionStateAuthoritativeForCwd, readSessionState } from '../hooks/session.js';
 import {
   DEFAULT_SUBAGENT_ACTIVE_WINDOW_MS,
   readSubagentSessionSummary,
@@ -511,8 +511,10 @@ async function resolveActiveModeState(mode: string): Promise<ActiveModeResult> {
   let currentSessionIsLive = false;
   const session = await readSessionState(cwd);
   if (session?.session_id) {
-    currentSessionId = safeString(session.session_id).trim();
-    currentSessionIsLive = !isSessionStale(session);
+    if (isSessionStateAuthoritativeForCwd(session, cwd)) {
+      currentSessionId = safeString(session.session_id).trim();
+      currentSessionIsLive = !isSessionStale(session);
+    }
     if (currentSessionId && currentSessionIsLive) {
       candidateDirs.push(join(stateDir, 'sessions', currentSessionId));
     }
@@ -566,19 +568,22 @@ async function resolveActiveRalphState(): Promise<ActiveModeResult> {
 async function resolveActiveTeamState(): Promise<ActiveTeamResult> {
   const candidateDirs: string[] = [];
   let currentSessionId = '';
-  const sessionPath = join(stateDir, 'session.json');
-  try {
-    const session = JSON.parse(await readFile(sessionPath, 'utf-8')) as Record<string, unknown>;
-    currentSessionId = safeString(session?.session_id).trim();
-    if (currentSessionId) {
+  let currentSessionIsLive = false;
+  const session = await readSessionState(cwd);
+  if (session?.session_id) {
+    currentSessionId = safeString(session.session_id).trim();
+    currentSessionIsLive = !isSessionStale(session);
+    if (currentSessionId && currentSessionIsLive) {
       candidateDirs.push(join(stateDir, 'sessions', currentSessionId));
     }
-  } catch {
-    // No active session file; fall back to root state only.
   }
   if (!candidateDirs.includes(stateDir)) candidateDirs.push(stateDir);
 
   for (const dir of candidateDirs) {
+    if (dir === stateDir && currentSessionId) {
+      continue;
+    }
+
     const path = join(dir, 'team-state.json');
     if (!existsSync(path)) continue;
     const parsed = await readFile(path, 'utf-8')
@@ -659,6 +664,17 @@ async function resolveActiveTeamState(): Promise<ActiveTeamResult> {
       },
       team_name: team.teamName,
       pane_count: paneStatus.paneCount,
+    };
+  }
+
+  if (currentSessionId) {
+    return {
+      active: false,
+      reason: currentSessionIsLive ? 'blocked_by_current_session' : 'stale_current_session',
+      path: '',
+      state: null,
+      team_name: '',
+      pane_count: 0,
     };
   }
 

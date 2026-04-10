@@ -3,8 +3,9 @@
  */
 
 import { mkdir, readFile, readdir, writeFile } from 'fs/promises';
-import { dirname, join } from 'path';
+import { dirname, join, resolve } from 'path';
 import { existsSync } from 'fs';
+import { readUsableSessionState } from '../../hooks/session.js';
 import { asNumber, safeString } from './utils.js';
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -25,14 +26,10 @@ function isSafeStateFileName(fileName: string): boolean {
 }
 
 export async function readCurrentSessionId(baseStateDir: string): Promise<string | undefined> {
-  const sessionPath = join(baseStateDir, 'session.json');
-  try {
-    const session = JSON.parse(await readFile(sessionPath, 'utf-8'));
-    const sessionId = safeString(session && session.session_id ? session.session_id : '');
-    return SESSION_ID_PATTERN.test(sessionId) ? sessionId : undefined;
-  } catch {
-    return undefined;
-  }
+  const cwd = resolve(baseStateDir, '..', '..');
+  const session = await readUsableSessionState(cwd);
+  const sessionId = safeString(session?.session_id);
+  return SESSION_ID_PATTERN.test(sessionId) ? sessionId : undefined;
 }
 
 export async function resolveScopedStateDir(

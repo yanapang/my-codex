@@ -6,7 +6,7 @@
  */
 
 import { readFile, writeFile, mkdir, unlink, appendFile } from 'fs/promises';
-import { dirname, join } from 'path';
+import { dirname, join, resolve as resolvePath } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { omxStateDir, omxLogsDir } from '../utils/paths.js';
 import { getStateFilePath } from '../mcp/state-paths.js';
@@ -23,6 +23,7 @@ export interface SessionState {
 
 const SESSION_FILE = 'session.json';
 const HISTORY_FILE = 'session-history.jsonl';
+const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 // No age-based threshold: staleness is determined by PID liveness/identity.
 // Long-running sessions (>2h) are legitimate and should not be reaped.
 
@@ -79,6 +80,42 @@ export async function readSessionState(cwd: string): Promise<SessionState | null
   } catch {
     return null;
   }
+}
+
+export function isSessionStateAuthoritativeForCwd(state: SessionState, cwd: string): boolean {
+  if (!SESSION_ID_PATTERN.test(state.session_id)) return false;
+
+  if (typeof state.cwd === 'string' && state.cwd.trim() !== '') {
+    return resolvePath(state.cwd) === resolvePath(cwd);
+  }
+
+  return true;
+}
+
+export function isSessionStateUsable(
+  state: SessionState,
+  cwd: string,
+  options: SessionStaleCheckOptions = {},
+): boolean {
+  if (!isSessionStateAuthoritativeForCwd(state, cwd)) return false;
+
+  const hasPidMetadata = Number.isInteger(state.pid) && state.pid > 0;
+  const hasLinuxIdentityMetadata = typeof state.pid_start_ticks === 'number'
+    || typeof state.pid_cmdline === 'string';
+  if (hasPidMetadata || hasLinuxIdentityMetadata) {
+    return !isSessionStale(state, options);
+  }
+
+  return true;
+}
+
+export async function readUsableSessionState(
+  cwd: string,
+  options: SessionStaleCheckOptions = {},
+): Promise<SessionState | null> {
+  const state = await readSessionState(cwd);
+  if (!state) return null;
+  return isSessionStateUsable(state, cwd, options) ? state : null;
 }
 
 interface LinuxProcessIdentity {

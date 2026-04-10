@@ -9,6 +9,7 @@ import {
   writeSessionStart,
   writeSessionEnd,
   readSessionState,
+  readUsableSessionState,
   isSessionStale,
   type SessionState,
 } from '../session.js';
@@ -133,6 +134,47 @@ describe('session lifecycle manager', () => {
       await resetSessionMetrics(cwd);
       await writeFile(statePath, '{ not-json', 'utf-8');
       const state = await readSessionState(cwd);
+      assert.equal(state, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores session.json when its recorded cwd points at another worktree', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-session-mismatched-cwd-'));
+    try {
+      const statePath = join(cwd, '.omx', 'state', 'session.json');
+      await resetSessionMetrics(cwd);
+      await writeFile(statePath, JSON.stringify({
+        session_id: 'sess-other-worktree',
+        cwd: join(cwd, '..', 'different-worktree'),
+      }), 'utf-8');
+
+      const state = await readUsableSessionState(cwd);
+      assert.equal(state, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores session.json when its PID identity is stale', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-session-stale-pointer-'));
+    try {
+      const statePath = join(cwd, '.omx', 'state', 'session.json');
+      await resetSessionMetrics(cwd);
+      await writeFile(statePath, JSON.stringify({
+        session_id: 'sess-stale-pointer',
+        cwd,
+        pid: 4242,
+        pid_start_ticks: 11,
+        pid_cmdline: 'node omx',
+      }), 'utf-8');
+
+      const state = await readUsableSessionState(cwd, {
+        platform: 'linux',
+        isPidAlive: () => true,
+        readLinuxIdentity: () => ({ startTicks: 22, cmdline: 'node omx' }),
+      });
       assert.equal(state, null);
     } finally {
       await rm(cwd, { recursive: true, force: true });
