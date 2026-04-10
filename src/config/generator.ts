@@ -57,6 +57,10 @@ const OMX_TUI_STATUS_LINE =
 const LEGACY_OMX_TEAM_RUN_TABLE_PATTERN =
   /^\s*\[mcp_servers\.(?:"omx_team_run"|omx_team_run)\]\s*$/m;
 
+export function hasLegacyOmxTeamRunTable(config: string): boolean {
+  return LEGACY_OMX_TEAM_RUN_TABLE_PATTERN.test(config);
+}
+
 function unwrapTomlString(value: string | undefined): string | undefined {
   return value?.match(/^"(.*)"$/)?.[1];
 }
@@ -981,7 +985,7 @@ export async function repairConfigIfNeeded(
 
   const content = await readFile(configPath, "utf-8");
   const tuiCount = (content.match(/^\s*\[tui\]\s*$/gm) || []).length;
-  const hasLegacyTeamRunTable = LEGACY_OMX_TEAM_RUN_TABLE_PATTERN.test(content);
+  const hasLegacyTeamRunTable = hasLegacyOmxTeamRunTable(content);
   const hasLauncherTimeoutGap = findLauncherTimeoutRepairTargets(content).length > 0;
   if (tuiCount <= 1 && !hasLegacyTeamRunTable && !hasLauncherTimeoutGap) return false;
 

@@ -14,6 +14,7 @@ import { getCatalogExpectations } from './catalog-contract.js';
 import { parse as parseToml } from '@iarna/toml';
 import { resolvePackagedExploreHarnessCommand, EXPLORE_BIN_ENV } from './explore.js';
 import { getPackageRoot } from '../utils/package.js';
+import { hasLegacyOmxTeamRunTable } from '../config/generator.js';
 import { getDefaultBridge, isBridgeEnabled } from '../runtime/bridge.js';
 import { OMX_EXPLORE_CMD_ENV, isExploreCommandRoutingEnabled } from '../hooks/explore-routing.js';
 import { isLeaderRuntimeStale } from '../team/leader-activity.js';
@@ -583,6 +584,15 @@ async function checkConfig(configPath: string): Promise<Check> {
       };
     }
 
+    if (hasLegacyOmxTeamRunTable(content)) {
+      return {
+        name: 'Config',
+        status: 'warn',
+        message:
+          'retired [mcp_servers.omx_team_run] table still present; run "omx setup --force" to repair the config',
+      };
+    }
+
     const hasOmx = content.includes('omx_') || content.includes('oh-my-codex');
     if (hasOmx) {
       return { name: 'Config', status: 'pass', message: 'config.toml has OMX entries' };
@@ -756,6 +766,13 @@ async function checkMcpServers(configPath: string): Promise<Check> {
     const content = await readFile(configPath, 'utf-8');
     const mcpCount = (content.match(/\[mcp_servers\./g) || []).length;
     if (mcpCount > 0) {
+      if (hasLegacyOmxTeamRunTable(content)) {
+        return {
+          name: 'MCP Servers',
+          status: 'warn',
+          message: `${mcpCount} servers configured, but retired [mcp_servers.omx_team_run] is not supported; run "omx setup --force" to repair the config`,
+        };
+      }
       const hasOmx = content.includes('omx_state') || content.includes('omx_memory');
       if (hasOmx) {
         return { name: 'MCP Servers', status: 'pass', message: `${mcpCount} servers configured (OMX present)` };

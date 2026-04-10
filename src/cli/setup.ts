@@ -28,7 +28,11 @@ import {
   omxPlansDir,
   omxLogsDir,
 } from "../utils/paths.js";
-import { buildMergedConfig, getRootModelName } from "../config/generator.js";
+import {
+  buildMergedConfig,
+  getRootModelName,
+  hasLegacyOmxTeamRunTable,
+} from "../config/generator.js";
 import { mergeManagedCodexHooksConfig } from "../config/codex-hooks.js";
 import {
   getLegacyUnifiedMcpRegistryCandidate,
@@ -113,6 +117,7 @@ interface SetupBackupContext {
 interface ManagedConfigResult {
   finalConfig: string;
   omxManagesTui: boolean;
+  repairedLegacyTeamRunTable: boolean;
 }
 
 interface LegacySkillOverlapNotice {
@@ -826,6 +831,11 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
     { codexVersionProbe: options.codexVersionProbe, dryRun, verbose, modelUpgradePrompt },
   );
   const resolvedConfig = managedConfig.finalConfig;
+  if (managedConfig.repairedLegacyTeamRunTable) {
+    console.log(
+      "  Removed retired [mcp_servers.omx_team_run] config during refresh.",
+    );
+  }
   if (resolvedScope.scope === "user") {
     await syncClaudeCodeMcpSettings(
       sharedMcpRegistry,
@@ -1563,6 +1573,7 @@ async function updateManagedConfig(
   const existing = existsSync(configPath)
     ? await readFile(configPath, "utf-8")
     : "";
+  const hadLegacyTeamRunTable = hasLegacyOmxTeamRunTable(existing);
   const currentModel = getRootModelName(existing);
   let modelOverride: string | undefined;
   const codexVersion =
@@ -1594,7 +1605,11 @@ async function updateManagedConfig(
 
   if (!changed) {
     summary.unchanged += 1;
-    return { finalConfig, omxManagesTui };
+    return {
+      finalConfig,
+      omxManagesTui,
+      repairedLegacyTeamRunTable: false,
+    };
   }
 
   if (
@@ -1629,7 +1644,12 @@ async function updateManagedConfig(
       `  ${options.dryRun ? "would update" : "updated"} config ${configPath}`,
     );
   }
-  return { finalConfig, omxManagesTui };
+  return {
+    finalConfig,
+    omxManagesTui,
+    repairedLegacyTeamRunTable:
+      hadLegacyTeamRunTable && !hasLegacyOmxTeamRunTable(finalConfig),
+  };
 }
 
 function getClaudeCodeSettingsPath(homeDir = homedir()): string {

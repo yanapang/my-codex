@@ -402,6 +402,34 @@ describe("omx setup refresh summary and dry-run behavior", () => {
     }
   });
 
+  it("repairs retired omx_team_run config during setup refresh", async () => {
+    const wd = await mkdtemp(join(tmpdir(), "omx-setup-refresh-"));
+    try {
+      await mkdir(join(wd, ".omx", "state"), { recursive: true });
+      await mkdir(join(wd, ".codex"), { recursive: true });
+      await writeFile(
+        join(wd, ".codex", "config.toml"),
+        [
+          '[mcp_servers.omx_team_run]',
+          'command = "node"',
+          'args = ["./dist/cli/team-mcp.js"]',
+          "",
+        ].join("\n"),
+      );
+
+      const output = await runSetupWithCapturedLogs(wd, { scope: "project" });
+
+      const config = await readFile(join(wd, ".codex", "config.toml"), "utf-8");
+      assert.match(
+        output,
+        /Removed retired \[mcp_servers\.omx_team_run\] config during refresh\./,
+      );
+      assert.doesNotMatch(config, /^\[mcp_servers\.omx_team_run\]$/m);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it("syncs shared MCP registry entries into ~/.claude/settings.json for user scope", async () => {
     const wd = await mkdtemp(join(tmpdir(), "omx-setup-refresh-"));
     const previousHome = process.env.HOME;
