@@ -313,6 +313,47 @@ describe("codex native hook dispatch", () => {
     }
   });
 
+  it("returns actionable denial guidance for unsupported workflow overlaps on prompt submit", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-transition-deny-"));
+    try {
+      await mkdir(join(cwd, ".omx", "state"), { recursive: true });
+      await dispatchCodexNativeHook(
+        {
+          hook_event_name: "UserPromptSubmit",
+          cwd,
+          session_id: "sess-deny-1",
+          thread_id: "thread-deny-1",
+          turn_id: "turn-deny-1",
+          prompt: "$team ship this fix",
+        },
+        { cwd },
+      );
+
+      const denied = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "UserPromptSubmit",
+          cwd,
+          session_id: "sess-deny-1",
+          thread_id: "thread-deny-1",
+          turn_id: "turn-deny-2",
+          prompt: "$autopilot also run this",
+        },
+        { cwd },
+      );
+
+      assert.match(JSON.stringify(denied.outputJson), /denied workflow keyword/i);
+      assert.match(JSON.stringify(denied.outputJson), /Unsupported workflow overlap: team \+ autopilot\./);
+      assert.match(JSON.stringify(denied.outputJson), /`omx state clear --mode <mode>`/);
+      assert.match(JSON.stringify(denied.outputJson), /`omx_state\.\*` MCP tools/);
+      assert.equal(
+        existsSync(join(cwd, ".omx", "state", "sessions", "sess-deny-1", "autopilot-state.json")),
+        false,
+      );
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("runs prompt-submit HUD reconciliation as a best-effort tmux-only side effect", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-hud-reconcile-"));
     const originalTmux = process.env.TMUX;

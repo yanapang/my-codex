@@ -429,6 +429,14 @@ function buildAdditionalContextMessage(prompt: string, skillState?: SkillActiveS
   const match = detectPrimaryKeyword(prompt);
   if (!match) return null;
 
+  if (skillState?.transition_error) {
+    return [
+      `OMX native UserPromptSubmit denied workflow keyword "${match.keyword}" -> ${match.skill}.`,
+      skillState.transition_error,
+      'Follow AGENTS.md routing and preserve ralplan/ralph execution gates.',
+    ].join(' ');
+  }
+
   if (match.skill === "team") {
     const initializedStateMessage = skillState?.initialized_mode && skillState.initialized_state_path
       ? `skill: ${skillState.initialized_mode} activated and initial state initialized at ${skillState.initialized_state_path}; write subsequent updates via omx_state MCP.`

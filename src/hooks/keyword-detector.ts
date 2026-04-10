@@ -19,9 +19,15 @@ import { isPlanningComplete, readPlanningArtifacts } from '../planning/artifacts
 import { KEYWORD_TRIGGER_DEFINITIONS, compareKeywordMatches } from './keyword-registry.js';
 import {
   SKILL_ACTIVE_STATE_FILE,
+  listActiveSkills,
   writeSkillActiveStateCopies,
   type SkillActiveEntry,
 } from '../state/skill-active.js';
+import {
+  buildWorkflowTransitionError,
+  evaluateWorkflowTransition,
+  isTrackedWorkflowMode,
+} from '../state/workflow-transition.js';
 
 export interface KeywordMatch {
   keyword: string;
@@ -50,7 +56,7 @@ export interface SkillActiveState {
   active: boolean;
   skill: string;
   keyword: string;
-  phase: SkillActivePhase;
+  phase: string;
   activated_at: string;
   updated_at: string;
   source: 'keyword-detector';
@@ -61,6 +67,7 @@ export interface SkillActiveState {
   active_skills?: SkillActiveEntry[];
   initialized_mode?: string;
   initialized_state_path?: string;
+  transition_error?: string;
   [key: string]: unknown;
 }
 
@@ -144,6 +151,9 @@ async function readExistingSkillState(statePath: string): Promise<SkillActiveSta
 
 function buildActiveSkills(state: SkillActiveState): SkillActiveEntry[] | undefined {
   if (!state.active) return undefined;
+  if (Array.isArray(state.active_skills) && state.active_skills.length > 0) {
+    return state.active_skills.filter((entry) => entry.active !== false);
+  }
   return [{
     skill: state.skill,
     phase: state.phase,
@@ -445,8 +455,13 @@ export async function recordSkillActivation(input: RecordSkillActivationInput): 
   if (!match) return null;
 
   const nowIso = input.nowIso ?? new Date().toISOString();
-  const statePath = join(input.stateDir, SKILL_ACTIVE_STATE_FILE);
-  const previous = await readExistingSkillState(statePath);
+  const rootStatePath = join(input.stateDir, SKILL_ACTIVE_STATE_FILE);
+  const sessionStatePath = input.sessionId
+    ? join(input.stateDir, 'sessions', input.sessionId, SKILL_ACTIVE_STATE_FILE)
+    : null;
+  const previousRoot = await readExistingSkillState(rootStatePath);
+  const previousSession = sessionStatePath ? await readExistingSkillState(sessionStatePath) : null;
+  const previous = previousSession ?? previousRoot;
   const hadDeepInterviewLock = previous?.skill === 'deep-interview' && previous?.input_lock?.active === true;
   const matches = detectKeywords(input.text);
   const hasCancelIntent = matches.some((entry) => entry.skill === 'cancel');
@@ -469,7 +484,12 @@ export async function recordSkillActivation(input: RecordSkillActivationInput): 
     };
 
     try {
-      await writeSkillActiveStateCopies(dirname(dirname(input.stateDir)), state, input.sessionId);
+      await writeSkillActiveStateCopies(
+        dirname(dirname(input.stateDir)),
+        state,
+        input.sessionId,
+        input.sessionId ? (previousRoot ?? state) : state,
+      );
       await persistDeepInterviewModeState(input.stateDir, state, nowIso, previous, input);
     } catch (error) {
       console.warn('[omx] warning: failed to persist keyword activation state', error);
@@ -480,10 +500,143 @@ export async function recordSkillActivation(input: RecordSkillActivationInput): 
 
   const sameSkill = previous?.active === true && previous.skill === match.skill;
   const sameKeyword = previous?.keyword?.toLowerCase() === match.keyword.toLowerCase();
+  const previousEntries = listActiveSkills(previous ?? {});
+  const previousWorkflowEntries = previousEntries.filter((entry) => (
+    isTrackedWorkflowMode(entry.skill)
+    && (
+      !input.sessionId
+      || !safeString(entry.session_id).trim()
+      || safeString(entry.session_id).trim() === safeString(input.sessionId).trim()
+    )
+  ));
 
   const deepInterviewInputLock = match.skill === 'deep-interview'
     ? createDeepInterviewInputLock(nowIso, previous?.input_lock)
     : releaseDeepInterviewInputLock(previous?.input_lock, nowIso);
+
+  if (isTrackedWorkflowMode(match.skill)) {
+    const workflowMatches = extractExplicitSkillInvocations(input.text)
+      .map((entry) => entry.skill)
+      .filter(isTrackedWorkflowMode);
+    const requestedWorkflowSkills = workflowMatches.length > 0 ? workflowMatches : [match.skill];
+
+    let nextWorkflowEntries = previousWorkflowEntries.map((entry) => ({ ...entry }));
+    for (const requestedMode of requestedWorkflowSkills) {
+      const decision = evaluateWorkflowTransition(
+        nextWorkflowEntries.map((entry) => entry.skill),
+        requestedMode,
+      );
+      if (!decision.allowed) {
+        return {
+          ...(previous ?? {}),
+          version: 1,
+          active: previous?.active ?? nextWorkflowEntries.length > 0,
+          skill: previous?.skill || match.skill,
+          keyword: previous?.keyword || match.keyword,
+          phase: previous?.phase || 'planning',
+          activated_at: previous?.activated_at || nowIso,
+          updated_at: nowIso,
+          source: 'keyword-detector',
+          session_id: input.sessionId ?? previous?.session_id,
+          thread_id: input.threadId ?? previous?.thread_id,
+          turn_id: input.turnId ?? previous?.turn_id,
+          active_skills: previousEntries,
+          ...(previous?.input_lock ? { input_lock: previous.input_lock } : {}),
+          transition_error: buildWorkflowTransitionError(
+            nextWorkflowEntries.map((entry) => entry.skill),
+            requestedMode,
+            'activate',
+          ),
+        };
+      }
+
+      const existingEntry = nextWorkflowEntries.find((entry) => entry.skill === requestedMode);
+      if (existingEntry) {
+        existingEntry.phase = requestedMode === match.skill ? 'planning' : existingEntry.phase;
+        existingEntry.active = true;
+        existingEntry.activated_at = requestedMode === match.skill
+          ? (sameSkill && sameKeyword ? existingEntry.activated_at || previous?.activated_at || nowIso : nowIso)
+          : existingEntry.activated_at;
+        existingEntry.updated_at = nowIso;
+        existingEntry.session_id = input.sessionId ?? existingEntry.session_id;
+        existingEntry.thread_id = input.threadId ?? existingEntry.thread_id;
+        existingEntry.turn_id = input.turnId ?? existingEntry.turn_id;
+        continue;
+      }
+
+      nextWorkflowEntries = [
+        ...nextWorkflowEntries,
+        {
+          skill: requestedMode,
+          phase: requestedMode === match.skill ? 'planning' : undefined,
+          active: true,
+          activated_at: requestedMode === match.skill && sameSkill && sameKeyword
+            ? previous?.activated_at
+            : nowIso,
+          updated_at: nowIso,
+          session_id: input.sessionId,
+          thread_id: input.threadId,
+          turn_id: input.turnId,
+        },
+      ];
+    }
+
+    const matchedEntry = nextWorkflowEntries.find((entry) => entry.skill === match.skill) ?? nextWorkflowEntries[0];
+    const workflowState: SkillActiveState = {
+      version: 1,
+      active: true,
+      skill: match.skill,
+      keyword: match.keyword,
+      phase: matchedEntry?.phase || 'planning',
+      activated_at: matchedEntry?.activated_at || nowIso,
+      updated_at: nowIso,
+      source: 'keyword-detector',
+      session_id: input.sessionId,
+      thread_id: input.threadId,
+      turn_id: input.turnId,
+      active_skills: nextWorkflowEntries,
+      ...(deepInterviewInputLock ? { input_lock: deepInterviewInputLock } : {}),
+    };
+
+    try {
+      let nextState: SkillActiveState = { ...workflowState };
+      for (const requestedMode of requestedWorkflowSkills) {
+        const requestedEntry = nextWorkflowEntries.find((entry) => entry.skill === requestedMode);
+        const seeded = await persistStatefulSkillSeedState(
+          input.stateDir,
+          {
+            ...workflowState,
+            skill: requestedMode,
+            phase: requestedEntry?.phase || workflowState.phase,
+            activated_at: requestedEntry?.activated_at || workflowState.activated_at,
+            updated_at: requestedEntry?.updated_at || workflowState.updated_at,
+          },
+          nowIso,
+          previous,
+        );
+        if (requestedMode === match.skill) {
+          nextState = {
+            ...workflowState,
+            initialized_mode: seeded.initialized_mode,
+            initialized_state_path: seeded.initialized_state_path,
+          };
+        }
+      }
+      nextState.active_skills = buildActiveSkills(nextState);
+      await writeSkillActiveStateCopies(
+        dirname(dirname(input.stateDir)),
+        nextState,
+        input.sessionId,
+        input.sessionId ? (previousRoot ?? nextState) : nextState,
+      );
+      await persistDeepInterviewModeState(input.stateDir, nextState, nowIso, previous, input);
+      return nextState;
+    } catch (error) {
+      console.warn('[omx] warning: failed to persist keyword activation state', error);
+    }
+
+    return workflowState;
+  }
 
   const state: SkillActiveState = {
     version: 1,
@@ -513,7 +666,12 @@ export async function recordSkillActivation(input: RecordSkillActivationInput): 
   try {
     const nextState = await persistStatefulSkillSeedState(input.stateDir, state, nowIso, previous);
     nextState.active_skills = buildActiveSkills(nextState);
-    await writeSkillActiveStateCopies(dirname(dirname(input.stateDir)), nextState, input.sessionId);
+    await writeSkillActiveStateCopies(
+      dirname(dirname(input.stateDir)),
+      nextState,
+      input.sessionId,
+      input.sessionId ? (previousRoot ?? nextState) : nextState,
+    );
     await persistDeepInterviewModeState(input.stateDir, nextState, nowIso, previous, input);
     return nextState;
   } catch (error) {

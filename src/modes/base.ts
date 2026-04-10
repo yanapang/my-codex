@@ -6,6 +6,11 @@
 import { readFile, writeFile, mkdir, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { withModeRuntimeContext } from '../state/mode-state-context.js';
+import {
+  assertWorkflowTransitionAllowed,
+  isTrackedWorkflowMode,
+  readActiveWorkflowModes,
+} from '../state/workflow-transition.js';
 import { validateAndNormalizeRalphState } from '../ralph/contract.js';
 import {
   getBaseStateDir,
@@ -50,8 +55,6 @@ export function getDeprecationWarning(mode: string): string | null {
   return `[DEPRECATED] Mode "${mode}" is deprecated. ${warning}`;
 }
 
-const EXCLUSIVE_MODES: ModeName[] = ['autopilot', 'autoresearch', 'ralph', 'ultrawork'];
-
 function normalizeRalphModeStateOrThrow(state: ModeState): ModeState {
   const originalPhase = state.current_phase;
   const validation = validateAndNormalizeRalphState(state as Record<string, unknown>);
@@ -77,30 +80,10 @@ export async function assertModeStartAllowed(
   mode: ModeName,
   projectRoot?: string,
 ): Promise<void> {
-  if (!EXCLUSIVE_MODES.includes(mode)) return;
-
-  for (const other of EXCLUSIVE_MODES) {
-    if (other === mode) continue;
-    const otherPaths = await getReadScopedStatePaths(other, projectRoot);
-    for (const otherPath of otherPaths) {
-      if (!existsSync(otherPath)) continue;
-      try {
-        const raw = await readFile(otherPath, 'utf-8');
-        const otherState = JSON.parse(raw) as { active?: unknown };
-        if (otherState.active) {
-          throw new Error(`Cannot start ${mode}: ${other} is already active. Run cancel first.`);
-        }
-        break;
-      } catch (e) {
-        const err = e as NodeJS.ErrnoException;
-        if (err?.message.includes('Cannot start')) throw err;
-        if (err?.code === 'ENOENT') continue;
-        throw new Error(
-          `Cannot start ${mode}: ${other} state file is malformed or unreadable (${otherPath}). Run cancel or repair the state file.`
-        );
-      }
-    }
-  }
+  if (!isTrackedWorkflowMode(mode)) return;
+  const scope = await resolveStateScope(projectRoot);
+  const activeModes = await readActiveWorkflowModes(projectRoot ?? process.cwd(), scope.sessionId);
+  assertWorkflowTransitionAllowed(activeModes, mode, 'start');
 }
 
 /**
