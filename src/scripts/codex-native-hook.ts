@@ -649,7 +649,7 @@ async function readTeamModeStateForStop(
   }
 
   const scopedState = await readStopSessionPinnedState("team-state.json", cwd, normalizedSessionId);
-  if (scopedState?.active === true) return scopedState;
+  if (scopedState) return scopedState;
 
   const rootState = await readJsonIfExists(join(cwd, ".omx", "state", "team-state.json"));
   if (rootState?.active !== true) return null;
