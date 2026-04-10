@@ -66,6 +66,46 @@ command = "node"
     }
   });
 
+  it('warns about retired omx_team_run config left behind after upgrade', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-doctor-copy-'));
+    try {
+      const home = join(wd, 'home');
+      const codexDir = join(home, '.codex');
+      await mkdir(codexDir, { recursive: true });
+      await writeFile(
+        join(codexDir, 'config.toml'),
+        `
+[mcp_servers.omx_team_run]
+command = "node"
+args = ["/tmp/team-server.js"]
+enabled = true
+`.trimStart(),
+      );
+
+      const res = runOmx(wd, ['doctor'], {
+        HOME: home,
+        CODEX_HOME: join(home, '.codex'),
+      });
+      if (shouldSkipForSpawnPermissions(res.error)) return;
+      assert.equal(res.status, 0, res.stderr || res.stdout);
+      assert.match(
+        res.stdout,
+        /Config: retired \[mcp_servers\.omx_team_run\] table still present; run "omx setup --force" to repair the config/,
+      );
+      assert.match(
+        res.stdout,
+        /MCP Servers: 1 servers configured, but retired \[mcp_servers\.omx_team_run\] is not supported; run "omx setup --force" to repair the config/,
+      );
+      assert.doesNotMatch(res.stdout, /Config: config\.toml has OMX entries/);
+      assert.doesNotMatch(
+        res.stdout,
+        /MCP Servers: 1 servers but no OMX servers yet \(expected before first setup; run "omx setup --force" once\)/,
+      );
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it('warns when explore harness sources are packaged but cargo is unavailable', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-doctor-explore-copy-'));
     try {
