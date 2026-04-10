@@ -11,10 +11,27 @@ const SERVER_DISABLE_ENV: Record<McpServerName, string> = {
 
 const GLOBAL_DISABLE_ENV = 'OMX_MCP_SERVER_DISABLE_AUTO_START';
 const LIFECYCLE_DEBUG_ENV = 'OMX_MCP_TRANSPORT_DEBUG';
+const PARENT_WATCHDOG_INTERVAL_MS = 25;
 
 interface StdioLifecycleServer {
   connect(transport: StdioServerTransport): Promise<unknown>;
   close(): Promise<unknown>;
+}
+
+export function isParentProcessAlive(
+  parentPid: number,
+  signalProcess: typeof process.kill = process.kill,
+): boolean {
+  if (!Number.isInteger(parentPid) || parentPid <= 1) {
+    return false;
+  }
+
+  try {
+    signalProcess(parentPid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException | undefined)?.code === 'EPERM';
+  }
 }
 
 export function shouldAutoStartMcpServer(
@@ -38,6 +55,7 @@ export function autoStartStdioMcpServer(
   const transport = new StdioServerTransport();
   let shuttingDown = false;
   const lifecycleDebugEnabled = env[LIFECYCLE_DEBUG_ENV] === '1';
+  const trackedParentPid = Number.isInteger(process.ppid) ? process.ppid : 0;
 
   const logLifecycle = (message: string, error?: unknown) => {
     if (!lifecycleDebugEnabled) return;
@@ -45,12 +63,24 @@ export function autoStartStdioMcpServer(
     process.stderr.write(`[omx-${serverName}-server] ${message}${detail}\n`);
   };
 
+  const parentWatchdog = trackedParentPid > 1
+    ? setInterval(() => {
+      if (!isParentProcessAlive(trackedParentPid)) {
+        void shutdown('parent_gone');
+      }
+    }, PARENT_WATCHDOG_INTERVAL_MS)
+    : null;
+  parentWatchdog?.unref();
+
   const shutdown = async (reason: string) => {
     if (shuttingDown) {
       return;
     }
     shuttingDown = true;
     logLifecycle(`transport shutdown: ${reason}`);
+    if (parentWatchdog) {
+      clearInterval(parentWatchdog);
+    }
     process.stdin.off('end', handleStdinEnd);
     process.stdin.off('close', handleStdinClose);
     process.off('SIGTERM', handleSigterm);
@@ -61,6 +91,9 @@ export function autoStartStdioMcpServer(
     } catch (error) {
       console.error(`[omx-${serverName}-server] shutdown failed`, error);
     }
+
+    logLifecycle('transport shutdown: exit');
+    process.exit(0);
   };
 
   const handleStdinEnd = () => {
