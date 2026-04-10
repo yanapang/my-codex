@@ -9,6 +9,7 @@ import {
 } from "../state/skill-active.js";
 import { readSubagentSessionSummary } from "../subagents/tracker.js";
 import { resolveCanonicalTeamStateRoot } from "../team/state-root.js";
+import { readUsableSessionState } from "../hooks/session.js";
 import {
   appendTeamEvent,
   readTeamLeaderAttention,
@@ -181,7 +182,7 @@ async function readActiveRalphState(
   stateDir: string,
   preferredSessionId?: string,
 ): Promise<Record<string, unknown> | null> {
-  const sessionInfo = await readJsonIfExists(join(stateDir, "session.json"));
+  const sessionInfo = await readUsableSessionState(resolve(stateDir, "..", ".."));
   const currentOmxSessionId = safeString(sessionInfo?.session_id).trim();
   const sessionCandidates = [...new Set([
     safeString(preferredSessionId).trim(),
@@ -202,12 +203,12 @@ async function readActiveRalphState(
     }
   }
 
+  if (currentOmxSessionId) return null;
+
   const direct = await readJsonIfExists(join(stateDir, "ralph-state.json"));
   if (direct?.active === true && !TERMINAL_RALPH_PHASES.has(safeString(direct.current_phase).trim().toLowerCase())) {
     return direct;
   }
-
-  if (sessionCandidates.length > 0) return null;
 
   const sessionsRoot = join(stateDir, "sessions");
   if (!existsSync(sessionsRoot)) return null;

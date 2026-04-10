@@ -220,12 +220,28 @@ describe('readRalphState scope precedence', () => {
     });
   });
 
-  it('falls back to root Ralph state when current session has no Ralph state file', async () => {
+  it('does not fall back to root Ralph state when current session has no Ralph state file', async () => {
     await withTempRepo('omx-hud-ralph-fallback-', async (cwd) => {
       const rootStateDir = join(cwd, '.omx', 'state');
       const sessionId = 'sess-fallback';
       await mkdir(join(rootStateDir, 'sessions', sessionId), { recursive: true });
       await writeFile(join(rootStateDir, 'session.json'), JSON.stringify({ session_id: sessionId }));
+      await writeFile(join(rootStateDir, 'ralph-state.json'), JSON.stringify({ active: true, iteration: 4, max_iterations: 10 }));
+
+      const state = await readRalphState(cwd);
+      assert.equal(state, null);
+    });
+  });
+
+  it('ignores session.json authority when it points at another worktree cwd', async () => {
+    await withTempRepo('omx-hud-ralph-cwd-mismatch-', async (cwd) => {
+      const rootStateDir = join(cwd, '.omx', 'state');
+      const sessionId = 'sess-mismatch';
+      await mkdir(join(rootStateDir, 'sessions', sessionId), { recursive: true });
+      await writeFile(join(rootStateDir, 'session.json'), JSON.stringify({
+        session_id: sessionId,
+        cwd: join(cwd, '..', 'other-worktree'),
+      }));
       await writeFile(join(rootStateDir, 'ralph-state.json'), JSON.stringify({ active: true, iteration: 4, max_iterations: 10 }));
 
       const state = await readRalphState(cwd);

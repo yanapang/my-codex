@@ -5,7 +5,8 @@
 
 import { readFile, writeFile, mkdir, appendFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
+import { readUsableSessionState } from '../../hooks/session.js';
 import { asNumber, safeString, isTerminalPhase } from './utils.js';
 import { readJsonIfExists, getScopedStateDirsForCurrentSession } from './state-io.js';
 import { runProcess } from './process-runner.js';
@@ -249,16 +250,7 @@ async function resolveCurrentSessionId(stateDir) {
     || '',
   ).trim();
   if (fromEnv) return fromEnv;
-
-  const sessionPath = join(stateDir, 'session.json');
-  try {
-    if (!existsSync(sessionPath)) return '';
-    const parsed = JSON.parse(await readFile(sessionPath, 'utf-8'));
-    const sessionId = safeString(parsed && parsed.session_id ? parsed.session_id : '').trim();
-    return sessionId;
-  } catch {
-    return '';
-  }
+  return safeString((await readUsableSessionState(resolve(stateDir, '..', '..')))?.session_id).trim();
 }
 
 async function readWorkerStatusSnapshot(stateDir, teamName, workerName) {

@@ -1,6 +1,7 @@
 import { delimiter, isAbsolute, join, relative, resolve as resolvePath } from 'path';
 import { existsSync } from 'fs';
-import { readdir, readFile } from 'fs/promises';
+import { readdir } from 'fs/promises';
+import { readUsableSessionState } from '../hooks/session.js';
 
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 export const STATE_MODE_SEGMENT_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -189,14 +190,8 @@ export interface ResolvedStateScope {
 }
 
 export async function readCurrentSessionId(workingDirectory?: string): Promise<string | undefined> {
-  const sessionPath = join(getBaseStateDir(workingDirectory), 'session.json');
-  if (!existsSync(sessionPath)) return undefined;
-  try {
-    const parsed = JSON.parse(await readFile(sessionPath, 'utf-8')) as { session_id?: unknown };
-    return validateSessionId(parsed.session_id);
-  } catch {
-    return undefined;
-  }
+  const cwd = resolveWorkingDirectoryForState(workingDirectory);
+  return (await readUsableSessionState(cwd))?.session_id;
 }
 
 export async function resolveStateScope(
