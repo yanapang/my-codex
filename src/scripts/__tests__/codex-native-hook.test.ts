@@ -753,6 +753,70 @@ esac
     }
   });
 
+  it("marks canonical team state failed when native payload session ids differ during MCP transport death", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-team-native-transport-"));
+    const previousCwd = process.cwd();
+    const canonicalSessionId = "omx-canonical-session";
+    const nativeSessionId = "codex-native-session";
+    try {
+      process.chdir(cwd);
+      await writeSessionStart(cwd, canonicalSessionId);
+      const sessionPath = join(cwd, ".omx", "state", "session.json");
+      const sessionState = JSON.parse(
+        await readFile(sessionPath, "utf-8"),
+      ) as { session_id?: string; native_session_id?: string };
+      await writeFile(
+        sessionPath,
+        JSON.stringify(
+          {
+            ...sessionState,
+            native_session_id: nativeSessionId,
+          },
+          null,
+          2,
+        ),
+      );
+
+      await initTeamState(
+        "transport-team",
+        "task",
+        "executor",
+        1,
+        cwd,
+        undefined,
+        { ...process.env, OMX_SESSION_ID: canonicalSessionId },
+      );
+      await writeJson(join(cwd, ".omx", "state", "team-state.json"), {
+        active: true,
+        team_name: "transport-team",
+        current_phase: "team-exec",
+      });
+
+      await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PostToolUse",
+          cwd,
+          session_id: nativeSessionId,
+          tool_name: "mcp__omx_state__state_write",
+          tool_use_id: "tool-mcp-transport-team-native",
+          tool_input: { mode: "team", active: true },
+          tool_response: "{\"error\":\"MCP transport closed\",\"details\":\"stdio pipe closed before response\"}",
+        },
+        { cwd },
+      );
+
+      const phase = await readTeamPhase("transport-team", cwd);
+      const attention = await readTeamLeaderAttention("transport-team", cwd);
+      assert.equal(phase?.current_phase, "failed");
+      assert.equal(attention?.leader_attention_reason, "mcp_transport_dead");
+      assert.equal(attention?.leader_attention_pending, true);
+      assert.equal(attention?.leader_session_id, canonicalSessionId);
+    } finally {
+      process.chdir(previousCwd);
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("treats stderr-only informative non-zero output as reviewable instead of a generic failure", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-posttool-informative-stderr-"));
     try {

@@ -946,8 +946,8 @@ async function markTeamTransportFailure(
   cwd: string,
   payload: CodexHookPayload,
 ): Promise<void> {
-  const sessionId = readPayloadSessionId(payload);
-  const activeTeam = await findActiveTeamForTransportFailure(cwd, sessionId);
+  const canonicalSessionId = await resolveInternalSessionIdForPayload(cwd, readPayloadSessionId(payload));
+  const activeTeam = await findActiveTeamForTransportFailure(cwd, canonicalSessionId);
   if (!activeTeam) return;
 
   const nowIso = new Date().toISOString();
@@ -990,7 +990,7 @@ async function markTeamTransportFailure(
       ],
       leader_stale: existingAttention?.leader_stale ?? false,
       leader_session_active: existingAttention?.leader_session_active ?? true,
-      leader_session_id: existingAttention?.leader_session_id ?? (sessionId || null),
+      leader_session_id: existingAttention?.leader_session_id ?? (canonicalSessionId || null),
       leader_session_stopped_at: existingAttention?.leader_session_stopped_at ?? null,
       unread_leader_message_count: existingAttention?.unread_leader_message_count ?? 0,
       work_remaining: existingAttention?.work_remaining ?? true,
@@ -1021,7 +1021,7 @@ async function markTeamTransportFailure(
         last_turn_at: nowIso,
       },
       cwd,
-      sessionId || undefined,
+      canonicalSessionId || undefined,
     );
   } catch {
     // Canonical team state already carries the preserved failure for coarse-state-missing sessions.
