@@ -169,4 +169,37 @@ describe('dispatchHookEventRuntime', () => {
       await rm(cwd, { recursive: true, force: true });
     }
   });
+
+  it('routes native stop leader attention by canonical OMX session id while preserving native metadata in context', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-stop-team-native-meta-'));
+    try {
+      await initTeamState('stop-owned-team-meta', 'stop test', 'executor', 1, cwd);
+      const manifest = await readTeamManifestV2('stop-owned-team-meta', cwd);
+      assert.ok(manifest);
+      await writeTeamManifestV2({
+        ...manifest!,
+        leader: {
+          ...manifest!.leader,
+          session_id: 'omx-canonical-session',
+        },
+      }, cwd);
+
+      const event = buildHookEvent('stop', {
+        source: 'native',
+        session_id: 'omx-canonical-session',
+        context: {
+          native_session_id: 'codex-native-session',
+        },
+      });
+      const result = await dispatchHookEventRuntime({ cwd, event });
+      const attention = await readTeamLeaderAttention('stop-owned-team-meta', cwd);
+
+      assert.equal(result.dispatched, true);
+      assert.equal(attention?.source, 'native_stop');
+      assert.equal(attention?.leader_session_id, 'omx-canonical-session');
+      assert.equal(attention?.leader_session_active, false);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
 });
