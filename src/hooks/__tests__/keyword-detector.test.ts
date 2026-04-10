@@ -371,6 +371,56 @@ describe('keyword detector skill-active-state lifecycle', () => {
     }
   });
 
+  it('denies prompt-submit overlaps against the current session-visible canonical state', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-session-visible-'));
+    const stateDir = join(cwd, '.omx', 'state');
+    try {
+      await mkdir(join(stateDir, 'sessions', 'sess-visible'), { recursive: true });
+      await writeFile(
+        join(stateDir, SKILL_ACTIVE_STATE_FILE),
+        JSON.stringify({
+          version: 1,
+          active: true,
+          skill: 'team',
+          active_skills: [
+            { skill: 'team', phase: 'running', active: true },
+          ],
+        }, null, 2),
+      );
+      await writeFile(
+        join(stateDir, 'sessions', 'sess-visible', SKILL_ACTIVE_STATE_FILE),
+        JSON.stringify({
+          version: 1,
+          active: true,
+          skill: 'team',
+          session_id: 'sess-visible',
+          active_skills: [
+            { skill: 'team', phase: 'running', active: true },
+            { skill: 'ralph', phase: 'executing', active: true, session_id: 'sess-visible' },
+          ],
+        }, null, 2),
+      );
+
+      const denied = await recordSkillActivation({
+        stateDir,
+        text: '$ultrawork continue',
+        sessionId: 'sess-visible',
+        nowIso: '2026-04-10T00:00:00.000Z',
+      });
+
+      assert.ok(denied?.transition_error);
+      assert.match(String(denied?.transition_error), /Unsupported workflow overlap: team \+ ralph \+ ultrawork\./);
+      assert.equal(existsSync(join(stateDir, 'sessions', 'sess-visible', 'ultrawork-state.json')), false);
+
+      const persisted = JSON.parse(
+        await readFile(join(stateDir, 'sessions', 'sess-visible', SKILL_ACTIVE_STATE_FILE), 'utf-8'),
+      ) as { active_skills?: Array<{ skill: string }> };
+      assert.deepEqual(persisted.active_skills?.map((entry) => entry.skill), ['team', 'ralph']);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('seeds first-class state for ralplan prompt-submit activation', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-ralplan-'));
     const stateDir = join(cwd, '.omx', 'state');

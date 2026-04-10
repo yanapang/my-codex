@@ -455,8 +455,13 @@ export async function recordSkillActivation(input: RecordSkillActivationInput): 
   if (!match) return null;
 
   const nowIso = input.nowIso ?? new Date().toISOString();
-  const statePath = join(input.stateDir, SKILL_ACTIVE_STATE_FILE);
-  const previous = await readExistingSkillState(statePath);
+  const rootStatePath = join(input.stateDir, SKILL_ACTIVE_STATE_FILE);
+  const sessionStatePath = input.sessionId
+    ? join(input.stateDir, 'sessions', input.sessionId, SKILL_ACTIVE_STATE_FILE)
+    : null;
+  const previousRoot = await readExistingSkillState(rootStatePath);
+  const previousSession = sessionStatePath ? await readExistingSkillState(sessionStatePath) : null;
+  const previous = previousSession ?? previousRoot;
   const hadDeepInterviewLock = previous?.skill === 'deep-interview' && previous?.input_lock?.active === true;
   const matches = detectKeywords(input.text);
   const hasCancelIntent = matches.some((entry) => entry.skill === 'cancel');
@@ -483,7 +488,7 @@ export async function recordSkillActivation(input: RecordSkillActivationInput): 
         dirname(dirname(input.stateDir)),
         state,
         input.sessionId,
-        previous ?? state,
+        input.sessionId ? (previousRoot ?? state) : state,
       );
       await persistDeepInterviewModeState(input.stateDir, state, nowIso, previous, input);
     } catch (error) {
@@ -622,7 +627,7 @@ export async function recordSkillActivation(input: RecordSkillActivationInput): 
         dirname(dirname(input.stateDir)),
         nextState,
         input.sessionId,
-        input.sessionId && previous ? previous : nextState,
+        input.sessionId ? (previousRoot ?? nextState) : nextState,
       );
       await persistDeepInterviewModeState(input.stateDir, nextState, nowIso, previous, input);
       return nextState;
@@ -665,7 +670,7 @@ export async function recordSkillActivation(input: RecordSkillActivationInput): 
       dirname(dirname(input.stateDir)),
       nextState,
       input.sessionId,
-      input.sessionId && previous ? previous : nextState,
+      input.sessionId ? (previousRoot ?? nextState) : nextState,
     );
     await persistDeepInterviewModeState(input.stateDir, nextState, nowIso, previous, input);
     return nextState;

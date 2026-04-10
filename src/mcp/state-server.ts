@@ -32,7 +32,9 @@ import {
 import { withModeRuntimeContext } from "../state/mode-state-context.js";
 import {
 	SKILL_ACTIVE_STATE_MODE,
+	listActiveSkills,
 	readSkillActiveState,
+	readVisibleSkillActiveState,
 	syncCanonicalSkillStateForMode,
 	writeSkillActiveStateCopies,
 } from "../state/skill-active.js";
@@ -73,6 +75,28 @@ const STATE_TOOL_NAMES = new Set([
 const TEAM_COMM_TOOL_NAMES: Set<string> = new Set([...LEGACY_TEAM_MCP_TOOLS]);
 
 const stateWriteQueues = new Map<string, Promise<void>>();
+
+async function listStateSessionIds(cwd: string): Promise<string[]> {
+	const sessionsDir = join(getStateDir(cwd), "sessions");
+	if (!existsSync(sessionsDir)) return [];
+	const entries = await readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
+	return entries
+		.filter((entry) => entry.isDirectory())
+		.map((entry) => entry.name)
+		.filter((entry) => entry.trim().length > 0);
+}
+
+async function readWorkflowModesForValidation(
+	cwd: string,
+	sessionId?: string,
+): Promise<string[]> {
+	const canonical = await readVisibleSkillActiveState(cwd, sessionId);
+	const canonicalModes = listActiveSkills(canonical ?? {})
+		.map((entry) => entry.skill)
+		.filter(isTrackedWorkflowMode);
+	if (canonicalModes.length > 0) return canonicalModes;
+	return readActiveWorkflowModes(cwd, sessionId);
+}
 
 async function withStateWriteLock<T>(
 	path: string,
@@ -360,8 +384,14 @@ export async function handleStateToolCall(request: {
 					} as Record<string, unknown>;
 					if (isTrackedWorkflowMode(mode) && mergedRaw.active === true) {
 						try {
-							const activeModes = await readActiveWorkflowModes(cwd, effectiveSessionId);
+							const activeModes = await readWorkflowModesForValidation(cwd, effectiveSessionId);
 							assertWorkflowTransitionAllowed(activeModes, mode, "write");
+							if (!effectiveSessionId) {
+								for (const sessionId of await listStateSessionIds(cwd)) {
+									const sessionModes = await readWorkflowModesForValidation(cwd, sessionId);
+									assertWorkflowTransitionAllowed(sessionModes, mode, "write");
+								}
+							}
 						} catch (error) {
 							validationError = (error as Error).message;
 							return;

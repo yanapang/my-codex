@@ -417,6 +417,64 @@ describe('state-server directory initialization', () => {
     }
   });
 
+  it('denies invalid writes before touching the requested mode file when canonical session state is stricter than mode files', async () => {
+    process.env.OMX_STATE_SERVER_DISABLE_AUTO_START = '1';
+    const { handleStateToolCall } = await import('../state-server.js');
+
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-server-canonical-prevalidate-'));
+    try {
+      await mkdir(join(wd, '.omx', 'state', 'sessions', 'sess-canonical-deny'), { recursive: true });
+      await writeFile(
+        join(wd, '.omx', 'state', 'team-state.json'),
+        JSON.stringify({ active: true, mode: 'team', current_phase: 'running' }, null, 2),
+      );
+      await writeFile(
+        join(wd, '.omx', 'state', 'skill-active-state.json'),
+        JSON.stringify({
+          version: 1,
+          active: true,
+          skill: 'team',
+          active_skills: [{ skill: 'team', phase: 'running', active: true }],
+        }, null, 2),
+      );
+      await writeFile(
+        join(wd, '.omx', 'state', 'sessions', 'sess-canonical-deny', 'skill-active-state.json'),
+        JSON.stringify({
+          version: 1,
+          active: true,
+          skill: 'team',
+          session_id: 'sess-canonical-deny',
+          active_skills: [
+            { skill: 'team', phase: 'running', active: true },
+            { skill: 'ralph', phase: 'executing', active: true, session_id: 'sess-canonical-deny' },
+          ],
+        }, null, 2),
+      );
+
+      const denied = await handleStateToolCall({
+        params: {
+          name: 'state_write',
+          arguments: {
+            workingDirectory: wd,
+            session_id: 'sess-canonical-deny',
+            mode: 'ultrawork',
+            active: true,
+            current_phase: 'planning',
+          },
+        },
+      });
+
+      assert.equal(denied.isError, true);
+      assert.match(denied.content[0]?.text || '', /Unsupported workflow overlap: team \+ ralph \+ ultrawork\./);
+      assert.equal(
+        existsSync(join(wd, '.omx', 'state', 'sessions', 'sess-canonical-deny', 'ultrawork-state.json')),
+        false,
+      );
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it('removes tracked workflows from canonical skill-active state on all_sessions clear', async () => {
     process.env.OMX_STATE_SERVER_DISABLE_AUTO_START = '1';
     const { handleStateToolCall } = await import('../state-server.js');
@@ -453,6 +511,60 @@ describe('state-server directory initialization', () => {
       };
       assert.equal(canonical.active, false);
       assert.deepEqual(canonical.active_skills, []);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('propagates root clears into inherited session canonical copies', async () => {
+    process.env.OMX_STATE_SERVER_DISABLE_AUTO_START = '1';
+    const { handleStateToolCall } = await import('../state-server.js');
+
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-server-root-clear-propagate-'));
+    try {
+      await handleStateToolCall({
+        params: {
+          name: 'state_write',
+          arguments: {
+            workingDirectory: wd,
+            mode: 'team',
+            active: true,
+            current_phase: 'running',
+          },
+        },
+      });
+      await handleStateToolCall({
+        params: {
+          name: 'state_write',
+          arguments: {
+            workingDirectory: wd,
+            session_id: 'sess-root-clear',
+            mode: 'ralph',
+            active: true,
+            iteration: 1,
+            max_iterations: 3,
+            current_phase: 'executing',
+          },
+        },
+      });
+
+      await handleStateToolCall({
+        params: {
+          name: 'state_clear',
+          arguments: {
+            workingDirectory: wd,
+            mode: 'team',
+          },
+        },
+      });
+
+      const sessionCanonical = JSON.parse(
+        await readFile(
+          join(wd, '.omx', 'state', 'sessions', 'sess-root-clear', 'skill-active-state.json'),
+          'utf-8',
+        ),
+      ) as { active_skills?: Array<{ skill: string }> };
+      assert.deepEqual(sessionCanonical.active_skills?.map((entry) => entry.skill), ['ralph']);
     } finally {
       await rm(wd, { recursive: true, force: true });
     }
