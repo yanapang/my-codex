@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { updateModeState, startMode, readModeState } from '../modes/base.js';
+import { updateModeState, startMode, readModeState, readModeStateForSession } from '../modes/base.js';
 import { monitorTeam, resumeTeam, shutdownTeam, startTeam, type TeamRuntime, type TeamSnapshot } from '../team/runtime.js';
 import { DEFAULT_MAX_WORKERS } from '../team/state.js';
 import { sanitizeTeamName } from '../team/tmux-session.js';
@@ -1242,6 +1242,19 @@ async function persistTeamShutdownModeState(
     agentType: string;
   } | null,
 ): Promise<void> {
+  const sessionStatePath = join(cwd, '.omx', 'state', 'session.json');
+  let scopedSessionId: string | undefined;
+  if (existsSync(sessionStatePath)) {
+    try {
+      const parsed = JSON.parse(readFileSync(sessionStatePath, 'utf-8')) as { session_id?: unknown };
+      if (typeof parsed.session_id === 'string' && parsed.session_id.trim()) {
+        scopedSessionId = parsed.session_id.trim();
+      }
+    } catch {
+      // Best-effort shutdown state sync only.
+    }
+  }
+
   const existing = await readModeState('team', cwd);
   if (!existing) {
     if (configSnapshot) {
@@ -1271,6 +1284,25 @@ async function persistTeamShutdownModeState(
       }
       : {}),
   }, cwd);
+
+  if (scopedSessionId) {
+    const scopedState = await readModeStateForSession('team', scopedSessionId, cwd);
+    if (scopedState) {
+      await updateModeState('team', {
+        active: false,
+        current_phase: 'cancelled',
+        completed_at: new Date().toISOString(),
+        team_name: teamName,
+        ...(configSnapshot
+          ? {
+            task_description: configSnapshot.task,
+            agent_count: configSnapshot.workerCount,
+            agent_types: configSnapshot.agentType,
+          }
+          : {}),
+      }, cwd, scopedSessionId);
+    }
+  }
 }
 
 

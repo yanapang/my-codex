@@ -334,6 +334,53 @@ describe('teamCommand shutdown --force parsing', () => {
     }
   });
 
+  it('persists cancelled session-scoped team mode state on shutdown', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-team-shutdown-session-mode-state-'));
+    const previousCwd = process.cwd();
+    const teamName = 'team-shutdown-scoped';
+
+    try {
+      process.chdir(wd);
+      const stateDir = join(wd, '.omx', 'state');
+      const sessionId = 'sess-team-shutdown-scoped';
+      const scopedStateDir = join(stateDir, 'sessions', sessionId);
+      await mkdir(scopedStateDir, { recursive: true });
+      await writeFile(
+        join(stateDir, 'session.json'),
+        JSON.stringify({ session_id: sessionId }),
+      );
+      await writeFile(
+        join(scopedStateDir, 'team-state.json'),
+        JSON.stringify({
+          active: true,
+          mode: 'team',
+          current_phase: 'team-exec',
+          team_name: teamName,
+        }, null, 2),
+      );
+      await initTeamState(
+        teamName,
+        'persist cancelled session-scoped team mode state after shutdown',
+        'executor',
+        1,
+        wd,
+      );
+
+      await teamCommand(['shutdown', teamName, '--force']);
+
+      const scopedState = JSON.parse(
+        await readFile(join(scopedStateDir, 'team-state.json'), 'utf-8'),
+      ) as Record<string, unknown>;
+      assert.equal(scopedState.active, false);
+      assert.equal(scopedState.current_phase, 'cancelled');
+      assert.equal(scopedState.team_name, teamName);
+      assert.ok(typeof scopedState.completed_at === 'string' && scopedState.completed_at.length > 0);
+    } finally {
+      process.chdir(previousCwd);
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it('parses --confirm-issues from shutdown args', () => {
     const teamArgs = ['shutdown', 'my-team', '--confirm-issues'];
     const confirmIssues = teamArgs.includes('--confirm-issues');
