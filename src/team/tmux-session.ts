@@ -771,7 +771,7 @@ export function buildWorkerStartupCommand(
     initialPrompt,
     workerRole,
   );
-  const resolvedLeaderNodePath = resolveLeaderNodePath();
+  const resolvedLeaderNodePath = processSpec.env[OMX_LEADER_NODE_PATH_ENV]?.trim() || resolveLeaderNodePath();
   const leaderNodeDir = /[\\/]/.test(resolvedLeaderNodePath)
     ? resolvedLeaderNodePath.replace(/[\\/][^\\/]+$/, '')
     : '';
@@ -835,10 +835,11 @@ export function buildWorkerProcessLaunchSpec(
   const platformSpec = isNativeWindows()
     ? buildPlatformCommandSpec(workerCli, effectiveCliLaunchArgs, process.platform, effectiveEnv)
     : { command: resolvedCliPath, args: effectiveCliLaunchArgs };
+  const resolvedLauncherPath = platformSpec.resolvedPath || resolvedCliPath;
   const workerEnv: Record<string, string> = {
     OMX_TEAM_WORKER: `${teamName}/worker-${workerIndex}`,
     [OMX_LEADER_NODE_PATH_ENV]: resolveLeaderNodePath(),
-    [OMX_LEADER_CLI_PATH_ENV]: resolvedCliPath,
+    [OMX_LEADER_CLI_PATH_ENV]: resolvedLauncherPath,
     ...(workerCli === 'codex'
       ? readActiveProviderEnvOverrides(
           effectiveEnv,
