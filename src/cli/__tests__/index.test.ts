@@ -1419,7 +1419,7 @@ describe("detached tmux new-session sequencing", () => {
     assert.match(leaderCmd!, /exit \$status/);
   });
 
-  it("detached leader command executes codex and cleanup without shell-quote breakage", async () => {
+  it("detached leader command preserves cwd and cleanup without shell-quote breakage", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-detached-leader-"));
     const fakeBin = join(cwd, "bin");
     const logPath = join(cwd, "leader.log");
@@ -1430,10 +1430,12 @@ describe("detached tmux new-session sequencing", () => {
         join(fakeBin, "codex"),
         `#!/bin/sh
 printf 'codex:%s\\n' "$*" >> "${logPath}"
+printf 'codex-pwd:%s\\n' "$(pwd)" >> "${logPath}"
 exit 0
 `,
       );
       await chmod(join(fakeBin, "codex"), 0o755);
+      await writeFile(join(cwd, ".profile"), "cd ..\n");
       await writeFile(
         join(fakeBin, "tmux"),
         `#!/bin/sh
@@ -1471,7 +1473,7 @@ exit 0
       const leaderCmd = steps[0]?.args.at(-1);
       assert.equal(typeof leaderCmd, "string");
 
-      execFileSync("/bin/sh", ["-lc", leaderCmd!], {
+      execFileSync("/bin/sh", ["-c", leaderCmd!], {
         cwd,
         env: {
           ...process.env,
@@ -1483,6 +1485,10 @@ exit 0
 
       const log = await readFile(logPath, "utf-8");
       assert.match(log, /codex:--dangerously-bypass-approvals-and-sandbox/);
+      assert.match(
+        log,
+        new RegExp(`codex-pwd:${cwd.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+      );
       assert.match(log, /tmux:display-message -p #\{socket_path\}/);
       assert.match(log, /tmux:show-options -sv extended-keys/);
       assert.match(log, /tmux:set-option -sq extended-keys always/);
