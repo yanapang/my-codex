@@ -320,4 +320,36 @@ describe('state operations directory initialization', () => {
       await rm(wd, { recursive: true, force: true });
     }
   });
+
+  it('does not auto-complete existing workflow state when tracked write validation fails', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-ops-validate-before-transition-'));
+    try {
+      const sessionDir = join(wd, '.omx', 'state', 'sessions', 'sess-invalid');
+      await mkdir(sessionDir, { recursive: true });
+      await writeFile(
+        join(sessionDir, 'ralplan-state.json'),
+        JSON.stringify({ active: true, mode: 'ralplan', current_phase: 'planning' }, null, 2),
+      );
+
+      const denied = await executeStateOperation('state_write', {
+        workingDirectory: wd,
+        session_id: 'sess-invalid',
+        mode: 'ralph',
+        active: true,
+        current_phase: 'definitely-invalid',
+      });
+
+      assert.equal(denied.isError, true);
+      assert.match(String((denied.payload as { error?: string }).error || ''), /ralph\.current_phase/i);
+
+      const ralplanState = JSON.parse(
+        await readFile(join(sessionDir, 'ralplan-state.json'), 'utf-8'),
+      ) as Record<string, unknown>;
+      assert.equal(ralplanState.active, true);
+      assert.equal(ralplanState.current_phase, 'planning');
+      assert.equal(existsSync(join(sessionDir, 'ralph-state.json')), false);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
 });

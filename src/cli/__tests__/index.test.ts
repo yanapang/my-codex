@@ -52,6 +52,8 @@ import {
   releaseTmuxExtendedKeysLease,
   withTmuxExtendedKeys,
 } from "../index.js";
+import { readAllState } from "../../hud/state.js";
+import { generateOverlay } from "../../hooks/agents-overlay.js";
 import { HUD_TMUX_HEIGHT_LINES } from "../../hud/constants.js";
 import {
   DEFAULT_FRONTIER_MODEL,
@@ -550,6 +552,45 @@ describe("cleanupPostLaunchModeStateFiles", () => {
     assert.equal(await readFile(join(stateDir, "ralph-state.json"), "utf-8"), malformedState);
     assert.equal(warnings.length, 1);
     assert.match(warnings[0] ?? "", /skipped malformed mode state .*ralph-state\.json/);
+  });
+
+  it("clears canonical skill-active entries during cleanup and hides them from HUD/overlay readers", async () => {
+    const wd = await mkdtemp(join(tmpdir(), "omx-postlaunch-skill-active-cleanup-"));
+    const sessionId = "sess-skill-active-cleanup";
+    const stateDir = join(wd, ".omx", "state");
+    const sessionStateDir = join(stateDir, "sessions", sessionId);
+
+    await mkdir(sessionStateDir, { recursive: true });
+    await writeFile(join(stateDir, "session.json"), JSON.stringify({ session_id: sessionId }), "utf-8");
+    await writeFile(
+      join(sessionStateDir, "skill-active-state.json"),
+      JSON.stringify({
+        version: 1,
+        active: true,
+        skill: "autoresearch",
+        phase: "running",
+        session_id: sessionId,
+        active_skills: [
+          { skill: "autoresearch", phase: "running", active: true, session_id: sessionId },
+        ],
+      }, null, 2),
+      "utf-8",
+    );
+
+    await cleanupPostLaunchModeStateFiles(wd, sessionId);
+
+    const canonical = JSON.parse(
+      await readFile(join(sessionStateDir, "skill-active-state.json"), "utf-8"),
+    ) as Record<string, unknown>;
+    assert.equal(canonical.active, false);
+    assert.equal(canonical.phase, "complete");
+    assert.deepEqual(canonical.active_skills, []);
+
+    const hudState = await readAllState(wd);
+    assert.equal(hudState.autoresearch, null);
+
+    const overlay = await generateOverlay(wd, sessionId);
+    assert.equal(overlay.includes("- autoresearch:"), false);
   });
 });
 

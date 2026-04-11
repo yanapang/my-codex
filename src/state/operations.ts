@@ -208,6 +208,7 @@ export async function executeStateOperation(
         } = rawArgs;
         let validationError: string | null = null;
         let transitionMessage: string | undefined;
+        let ensureRalphArtifacts = false;
 
         await withStateWriteLock(path, async () => {
           let existing: Record<string, unknown> = {};
@@ -224,6 +225,32 @@ export async function executeStateOperation(
             ...fields,
             ...((customState as Record<string, unknown>) || {}),
           } as Record<string, unknown>;
+
+          if (
+            mode === 'ralph' &&
+            effectiveSessionId &&
+            typeof mergedRaw.owner_omx_session_id !== 'string'
+          ) {
+            mergedRaw.owner_omx_session_id = effectiveSessionId;
+          }
+
+          if (mode === 'ralph') {
+            const originalPhase = mergedRaw.current_phase;
+            const validation = validateAndNormalizeRalphState(mergedRaw);
+            if (!validation.ok || !validation.state) {
+              validationError = validation.error || `ralph.current_phase must be one of: ${RALPH_PHASES.join(', ')}`;
+              return;
+            }
+            if (
+              typeof originalPhase === 'string' &&
+              typeof validation.state.current_phase === 'string' &&
+              validation.state.current_phase !== originalPhase
+            ) {
+              validation.state.ralph_phase_normalized_from = originalPhase;
+            }
+            Object.assign(mergedRaw, validation.state);
+            ensureRalphArtifacts = true;
+          }
 
           if (isTrackedWorkflowMode(mode) && mergedRaw.active === true) {
             try {
@@ -250,32 +277,6 @@ export async function executeStateOperation(
             }
           }
 
-          if (
-            mode === 'ralph' &&
-            effectiveSessionId &&
-            typeof mergedRaw.owner_omx_session_id !== 'string'
-          ) {
-            mergedRaw.owner_omx_session_id = effectiveSessionId;
-          }
-
-          if (mode === 'ralph') {
-            const originalPhase = mergedRaw.current_phase;
-            const validation = validateAndNormalizeRalphState(mergedRaw);
-            if (!validation.ok || !validation.state) {
-              validationError = validation.error || `ralph.current_phase must be one of: ${RALPH_PHASES.join(', ')}`;
-              return;
-            }
-            if (
-              typeof originalPhase === 'string' &&
-              typeof validation.state.current_phase === 'string' &&
-              validation.state.current_phase !== originalPhase
-            ) {
-              validation.state.ralph_phase_normalized_from = originalPhase;
-            }
-            Object.assign(mergedRaw, validation.state);
-            await ensureCanonicalRalphArtifacts(cwd, effectiveSessionId);
-          }
-
           const merged = withModeRuntimeContext(existing, mergedRaw);
           await writeAtomicFile(path, JSON.stringify(merged, null, 2));
         });
@@ -293,6 +294,9 @@ export async function executeStateOperation(
             await writeSkillActiveStateCopies(cwd, state, effectiveSessionId);
           }
         } else {
+          if (mode === 'ralph' && ensureRalphArtifacts) {
+            await ensureCanonicalRalphArtifacts(cwd, effectiveSessionId);
+          }
           const data = JSON.parse(await readFile(path, 'utf-8')) as Record<string, unknown>;
           await syncCanonicalSkillStateForMode({
             cwd,
