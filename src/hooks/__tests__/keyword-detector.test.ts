@@ -489,8 +489,8 @@ describe('keyword detector skill-active-state lifecycle', () => {
     }
   });
 
-  it('supports multi-skill forward handoff from ralplan to team + ralph in one prompt', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-multi-handoff-'));
+  it('preserves the planning skill when planning and execution workflows are invoked together', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-planning-precedence-'));
     const stateDir = join(cwd, '.omx', 'state');
     try {
       await mkdir(stateDir, { recursive: true });
@@ -503,12 +503,37 @@ describe('keyword detector skill-active-state lifecycle', () => {
       });
 
       assert.equal(result?.transition_error, undefined);
-      assert.equal(result?.transition_message, 'mode transiting: ralplan -> team');
-      assert.equal(result?.skill, 'team');
-      assert.deepEqual(result?.active_skills?.map((entry) => entry.skill), ['team', 'ralph']);
-      assert.equal(existsSync(join(stateDir, 'sessions', 'sess-multi', 'ralplan-state.json')), false);
-      assert.equal(existsSync(join(stateDir, 'team-state.json')), true);
-      assert.equal(existsSync(join(stateDir, 'sessions', 'sess-multi', 'ralph-state.json')), true);
+      assert.equal(result?.transition_message, undefined);
+      assert.equal(result?.skill, 'ralplan');
+      assert.deepEqual(result?.active_skills?.map((entry) => entry.skill), ['ralplan']);
+      assert.deepEqual(result?.deferred_skills, ['team', 'ralph']);
+      assert.equal(existsSync(join(stateDir, 'sessions', 'sess-multi', 'ralplan-state.json')), true);
+      assert.equal(existsSync(join(stateDir, 'team-state.json')), false);
+      assert.equal(existsSync(join(stateDir, 'sessions', 'sess-multi', 'ralph-state.json')), false);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('lets planning win even when execution appears first in the contiguous skill block', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-planning-beats-execution-'));
+    const stateDir = join(cwd, '.omx', 'state');
+    try {
+      await mkdir(stateDir, { recursive: true });
+
+      const result = await recordSkillActivation({
+        stateDir,
+        text: '$ralph $ralplan continue',
+        sessionId: 'sess-priority',
+        nowIso: '2026-04-10T00:00:00.000Z',
+      });
+
+      assert.equal(result?.transition_error, undefined);
+      assert.equal(result?.skill, 'ralplan');
+      assert.deepEqual(result?.active_skills?.map((entry) => entry.skill), ['ralplan']);
+      assert.deepEqual(result?.deferred_skills, ['ralph']);
+      assert.equal(existsSync(join(stateDir, 'sessions', 'sess-priority', 'ralplan-state.json')), true);
+      assert.equal(existsSync(join(stateDir, 'sessions', 'sess-priority', 'ralph-state.json')), false);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

@@ -27,6 +27,7 @@ import {
   buildWorkflowTransitionError,
   evaluateWorkflowTransition,
   isTrackedWorkflowMode,
+  type TrackedWorkflowMode,
 } from '../state/workflow-transition.js';
 import { reconcileWorkflowTransition } from '../state/workflow-transition-reconcile.js';
 
@@ -72,6 +73,7 @@ export interface SkillActiveState {
   transition_message?: string;
   transition_messages?: string[];
   requested_skills?: string[];
+  deferred_skills?: string[];
   [key: string]: unknown;
 }
 
@@ -96,6 +98,19 @@ interface StatefulSkillSeedConfig {
   includeIteration?: boolean;
   scope?: 'session' | 'root';
 }
+
+const PLANNING_LIKE_WORKFLOW_SKILLS = new Set<TrackedWorkflowMode>([
+  'deep-interview',
+  'ralplan',
+]);
+
+const EXECUTION_LIKE_WORKFLOW_SKILLS = new Set<TrackedWorkflowMode>([
+  'autopilot',
+  'ralph',
+  'team',
+  'ultrawork',
+  'ultraqa',
+]);
 
 const STATEFUL_SKILL_SEED_CONFIG: Record<StatefulSkillMode, StatefulSkillSeedConfig> = {
   'deep-interview': { mode: 'deep-interview', initialPhase: 'intent-first' },
@@ -454,6 +469,26 @@ export function detectPrimaryKeyword(text: string): KeywordMatch | null {
   return matches.length > 0 ? matches[0] : null;
 }
 
+function resolveRequestedWorkflowSkills(requestedWorkflowSkills: TrackedWorkflowMode[]): {
+  requestedSkills: TrackedWorkflowMode[];
+  deferredSkills: TrackedWorkflowMode[];
+} {
+  const firstPlanningSkill = requestedWorkflowSkills.find((skill) => PLANNING_LIKE_WORKFLOW_SKILLS.has(skill));
+  const hasExecutionSkill = requestedWorkflowSkills.some((skill) => EXECUTION_LIKE_WORKFLOW_SKILLS.has(skill));
+
+  if (!firstPlanningSkill || !hasExecutionSkill) {
+    return {
+      requestedSkills: requestedWorkflowSkills,
+      deferredSkills: [],
+    };
+  }
+
+  return {
+    requestedSkills: [firstPlanningSkill],
+    deferredSkills: requestedWorkflowSkills.filter((skill) => skill !== firstPlanningSkill),
+  };
+}
+
 export async function recordSkillActivation(input: RecordSkillActivationInput): Promise<SkillActiveState | null> {
   const match = detectPrimaryKeyword(input.text);
   if (!match) return null;
@@ -522,7 +557,9 @@ export async function recordSkillActivation(input: RecordSkillActivationInput): 
     const workflowMatches = extractExplicitSkillInvocations(input.text)
       .map((entry) => entry.skill)
       .filter(isTrackedWorkflowMode);
-    const requestedWorkflowSkills = workflowMatches.length > 0 ? workflowMatches : [match.skill];
+    const { requestedSkills: requestedWorkflowSkills, deferredSkills } = resolveRequestedWorkflowSkills(
+      workflowMatches.length > 0 ? workflowMatches : [match.skill],
+    );
 
     let nextWorkflowEntries = previousWorkflowEntries.map((entry) => ({ ...entry }));
     const transitionMessages: string[] = [];
@@ -625,6 +662,7 @@ export async function recordSkillActivation(input: RecordSkillActivationInput): 
       ...(transitionMessages[0] ? { transition_message: transitionMessages[0] } : {}),
       ...(transitionMessages.length > 0 ? { transition_messages: [...new Set(transitionMessages)] } : {}),
       ...(requestedWorkflowSkills.length > 1 ? { requested_skills: requestedWorkflowSkills } : {}),
+      ...(deferredSkills.length > 0 ? { deferred_skills: deferredSkills } : {}),
       ...(deepInterviewInputLock ? { input_lock: deepInterviewInputLock } : {}),
     };
 
