@@ -60,6 +60,7 @@ export interface WikiQueryOptions {
   tags?: string[];
   category?: WikiCategory;
   limit?: number;
+  logQuery?: boolean;
 }
 
 export interface WikiQueryMatch {

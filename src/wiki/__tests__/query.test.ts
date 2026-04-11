@@ -5,6 +5,7 @@
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { expect } from './test-helpers.js';
 import fsp from 'fs/promises';
+import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { queryWiki } from '../query.js';
@@ -144,5 +145,30 @@ describe('Wiki Query', () => {
     const results = queryWiki(tempDir, 'authentication');
     expect(results.length).toBe(1);
     expect(results[0].score).toBeGreaterThan(0);
+  });
+
+  it('logs query operations by default', async () => {
+    writePage(tempDir, makePage('auth.md', {
+      title: 'Authentication Flow',
+      content: '\n# Auth\n\nSessionStart authentication details.\n',
+    }));
+
+    queryWiki(tempDir, 'authentication');
+
+    const logPath = path.join(tempDir, '.omx', 'wiki', 'log.md');
+    expect(fs.existsSync(logPath)).toBe(true);
+    const logContent = await fsp.readFile(logPath, 'utf8');
+    expect(logContent).toContain('Query "authentication"');
+  });
+
+  it('can skip query logging for read-only callers', () => {
+    writePage(tempDir, makePage('runtime.md', {
+      title: 'Runtime Architecture',
+      content: '\n# Runtime\n\nSessionStart uses native hooks.\n',
+    }));
+
+    const results = queryWiki(tempDir, 'sessionstart', { logQuery: false });
+    expect(results.length).toBe(1);
+    expect(fs.existsSync(path.join(tempDir, '.omx', 'wiki', 'log.md'))).toBe(false);
   });
 });

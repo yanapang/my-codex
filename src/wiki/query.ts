@@ -80,7 +80,7 @@ export function queryWiki(
   queryText: string,
   options: WikiQueryOptions = {},
 ): WikiQueryMatch[] {
-  const { tags: filterTags, category, limit = 20 } = options;
+  const { tags: filterTags, category, limit = 20, logQuery = true } = options;
   const pages = readAllPages(root);
   const queryLower = queryText.toLowerCase();
   const queryTerms = tokenize(queryText);
@@ -150,13 +150,14 @@ export function queryWiki(
   matches.sort((a, b) => b.score - a.score);
   const limited = matches.slice(0, limit);
 
-  // Log the query operation
-  appendLog(root, {
-    timestamp: new Date().toISOString(),
-    operation: 'query',
-    pagesAffected: limited.map(m => m.page.filename),
-    summary: `Query "${queryText}" → ${limited.length} results (of ${matches.length} total)`,
-  });
+  if (logQuery) {
+    appendLog(root, {
+      timestamp: new Date().toISOString(),
+      operation: 'query',
+      pagesAffected: limited.map(m => m.page.filename),
+      summary: `Query "${queryText}" → ${limited.length} results (of ${matches.length} total)`,
+    });
+  }
 
   return limited;
 }
