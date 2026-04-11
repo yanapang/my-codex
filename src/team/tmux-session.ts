@@ -1345,6 +1345,13 @@ function sendLiteralTextOrThrow(target: string, text: string): void {
   }
 }
 
+function paneHasQueuedCodexSubmission(captured: string | null | undefined): boolean {
+  const normalized = normalizeTmuxCapture(captured ?? '');
+  if (normalized === '') return false;
+  return /messages to be submitted after next tool call/i.test(normalized)
+    || /press esc to interrupt and send immediately/i.test(normalized);
+}
+
 async function attemptSubmitRounds(
   target: string,
   text: string,
@@ -1369,7 +1376,13 @@ async function attemptSubmitRounds(
     }
     await sleep(140);
     const captured = await capturePaneAsync(target);
-    if (!normalizeTmuxCapture(captured).includes(normalizeTmuxCapture(text))) return true;
+    const normalizedCapture = normalizeTmuxCapture(captured);
+    if (
+      !normalizedCapture.includes(normalizeTmuxCapture(text))
+      && !paneHasQueuedCodexSubmission(captured)
+    ) {
+      return true;
+    }
     await sleep(140);
   }
   return false;
@@ -1583,11 +1596,20 @@ export async function sendToWorker(
   const verifyCapture = await capturePaneAsync(target);
   if (verifyCapture) {
     if (paneHasActiveTask(verifyCapture)) return;
-    if (!normalizeTmuxCapture(verifyCapture).includes(normalizeTmuxCapture(text))) return;
+    if (
+      !normalizeTmuxCapture(verifyCapture).includes(normalizeTmuxCapture(text))
+      && !paneHasQueuedCodexSubmission(verifyCapture)
+    ) {
+      return;
+    }
     // Draft still visible and no active task — one more C-m attempt.
     await sendKeyAsync(target, 'C-m');
     await sleep(150);
     await sendKeyAsync(target, 'C-m');
+    const finalCapture = await capturePaneAsync(target);
+    if (paneHasQueuedCodexSubmission(finalCapture)) {
+      throw new Error('sendToWorker: submit_queued_after_tool_call');
+    }
   }
 }
 
