@@ -388,6 +388,12 @@ export async function exploreCommand(args: string[]): Promise<void> {
   }
 
   if (result.status !== 0) {
+    if (harness.command === 'cargo' && result.stderr?.includes('rustup could not choose')) {
+      throw new Error(
+        '[explore] cargo is a rustup shim but no default toolchain is configured. ' +
+        'Run `rustup default stable`, set OMX_EXPLORE_BIN to a prebuilt binary, or run `omx doctor` for guidance.',
+      );
+    }
     process.exitCode = result.status ?? 1;
   }
 }
