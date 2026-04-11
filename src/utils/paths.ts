@@ -270,6 +270,11 @@ export function omxNotepadPath(projectRoot?: string): string {
   return join(projectRoot || process.cwd(), ".omx", "notepad.md");
 }
 
+/** oh-my-codex wiki directory (.omx/wiki/) */
+export function omxWikiDir(projectRoot?: string): string {
+  return join(projectRoot || process.cwd(), ".omx", "wiki");
+}
+
 /** oh-my-codex plans directory (.omx/plans/) */
 export function omxPlansDir(projectRoot?: string): string {
   return join(projectRoot || process.cwd(), ".omx", "plans");

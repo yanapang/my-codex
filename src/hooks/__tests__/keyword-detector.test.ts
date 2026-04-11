@@ -212,6 +212,9 @@ describe('keyword registry coverage', () => {
     assert.ok(registryKeywords.has('ouroboros'));
     assert.ok(registryKeywords.has("don't assume"));
     assert.ok(registryKeywords.has('interview me'));
+    assert.ok(registryKeywords.has('wiki query'));
+    assert.ok(registryKeywords.has('wiki add'));
+    assert.ok(registryKeywords.has('wiki lint'));
   });
 });
 

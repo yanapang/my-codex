@@ -9,6 +9,7 @@ const ALL_SERVERS: readonly McpServerName[] = [
   'memory',
   'code_intel',
   'trace',
+  'wiki',
 ] as const;
 
 const SERVER_DISABLE_ENV: Record<McpServerName, string> = {
@@ -16,6 +17,7 @@ const SERVER_DISABLE_ENV: Record<McpServerName, string> = {
   memory: 'OMX_MEMORY_SERVER_DISABLE_AUTO_START',
   code_intel: 'OMX_CODE_INTEL_SERVER_DISABLE_AUTO_START',
   trace: 'OMX_TRACE_SERVER_DISABLE_AUTO_START',
+  wiki: 'OMX_WIKI_SERVER_DISABLE_AUTO_START',
 };
 
 const SERVER_ENTRYPOINTS: Array<{ server: McpServerName; file: string }> = [
@@ -23,6 +25,7 @@ const SERVER_ENTRYPOINTS: Array<{ server: McpServerName; file: string }> = [
   { server: 'memory', file: 'src/mcp/memory-server.ts' },
   { server: 'code_intel', file: 'src/mcp/code-intel-server.ts' },
   { server: 'trace', file: 'src/mcp/trace-server.ts' },
+  { server: 'wiki', file: 'src/mcp/wiki-server.ts' },
 ];
 
 describe('mcp bootstrap auto-start guard', () => {
