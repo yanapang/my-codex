@@ -1909,6 +1909,39 @@ esac
     }
   });
 
+  it("does not block Stop when the current session Ralph state is cancelled even if stale root fallback remains", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-cancelled-session-ralph-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      await mkdir(join(stateDir, "sessions", "sess-current"), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: "sess-current", cwd });
+      await writeJson(join(stateDir, "sessions", "sess-current", "ralph-state.json"), {
+        active: false,
+        current_phase: "cancelled",
+        completed_at: "2026-04-10T23:30:38.000Z",
+        session_id: "sess-current",
+      });
+      await writeJson(join(stateDir, "ralph-state.json"), {
+        active: true,
+        current_phase: "starting",
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-current",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("does not block Stop from root Ralph fallback when an explicit session_id is present and session.json points to another worktree", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-root-fallback-cwd-mismatch-"));
     try {
@@ -2324,6 +2357,48 @@ esac
     }
   });
 
+  it("does not suppress native auto-nudge from active root deep-interview state when the current scoped mode state is explicitly inactive", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-auto-nudge-inactive-scoped-mode-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      await mkdir(join(stateDir, "sessions", "sess-stop-auto-inactive-mode"), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: "sess-stop-auto-inactive-mode" });
+      await writeJson(join(stateDir, "sessions", "sess-stop-auto-inactive-mode", "deep-interview-state.json"), {
+        active: false,
+        mode: "deep-interview",
+        current_phase: "completed",
+      });
+      await writeJson(join(stateDir, "deep-interview-state.json"), {
+        active: true,
+        mode: "deep-interview",
+        current_phase: "intent-first",
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-stop-auto-inactive-mode",
+          thread_id: "thread-stop-auto-inactive-mode",
+          turn_id: "turn-stop-auto-inactive-mode-1",
+          last_assistant_message: "Keep going and finish the cleanup.",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.deepEqual(result.outputJson, {
+        decision: "block",
+        reason: DEFAULT_AUTO_NUDGE_RESPONSE,
+        stopReason: "auto_nudge",
+        systemMessage:
+          "OMX native Stop detected a stall/permission-style handoff and continued the turn automatically.",
+      });
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("re-fires team Stop output for a later fresh Stop reply while the team is still active", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-team-refire-"));
     try {
@@ -2409,6 +2484,61 @@ esac
 
       assert.equal(result.omxEventName, "stop");
       assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers the current session team state over a stale root team fallback during Stop", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-current-session-team-preferred-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      await mkdir(join(stateDir, "sessions", "sess-current"), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: "sess-current" });
+      await writeJson(join(stateDir, "sessions", "sess-current", "team-state.json"), {
+        active: true,
+        current_phase: "starting",
+        team_name: "current-team",
+        session_id: "sess-current",
+      });
+      await writeJson(join(stateDir, "team", "current-team", "phase.json"), {
+        current_phase: "team-verify",
+        max_fix_attempts: 3,
+        current_fix_attempt: 1,
+        transitions: [],
+        updated_at: new Date().toISOString(),
+      });
+      await writeJson(join(stateDir, "team-state.json"), {
+        active: true,
+        current_phase: "starting",
+        team_name: "stale-root-team",
+        session_id: "sess-other",
+      });
+      await writeJson(join(stateDir, "team", "stale-root-team", "phase.json"), {
+        current_phase: "team-exec",
+        max_fix_attempts: 3,
+        current_fix_attempt: 0,
+        transitions: [],
+        updated_at: new Date().toISOString(),
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-current",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.deepEqual(result.outputJson, {
+        decision: "block",
+        reason:
+          `OMX team pipeline is still active (current-team) at phase team-verify; continue coordinating until the team reaches a terminal phase.${TEAM_STOP_COMMIT_GUIDANCE}`,
+        stopReason: "team_team-verify",
+        systemMessage: "OMX team pipeline is still active at phase team-verify.",
+      });
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

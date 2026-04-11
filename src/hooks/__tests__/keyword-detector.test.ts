@@ -607,6 +607,51 @@ describe('keyword detector skill-active-state lifecycle', () => {
     }
   });
 
+  it('preserves active team root state when planning follow-up defers a simultaneous $team re-entry', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-team-planning-followup-'));
+    const stateDir = join(cwd, '.omx', 'state');
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        join(stateDir, 'team-state.json'),
+        JSON.stringify({
+          active: true,
+          mode: 'team',
+          current_phase: 'team-verify',
+          started_at: '2026-04-08T00:00:00.000Z',
+          updated_at: '2026-04-08T00:05:00.000Z',
+          team_name: 'review-team',
+          session_id: 'sess-team-root',
+        }, null, 2),
+      );
+
+      const result = await recordSkillActivation({
+        stateDir,
+        text: '$ralplan $team tighten the approved execution handoff',
+        sessionId: 'sess-team-followup',
+        nowIso: '2026-04-10T00:15:00.000Z',
+      });
+
+      assert.ok(result);
+      assert.equal(result?.skill, 'ralplan');
+      assert.equal(result?.initialized_mode, 'ralplan');
+      assert.deepEqual(result?.active_skills?.map((entry) => entry.skill), ['ralplan']);
+      assert.deepEqual(result?.deferred_skills, ['team']);
+
+      const modeState = JSON.parse(
+        await readFile(join(stateDir, 'team-state.json'), 'utf-8'),
+      ) as { mode: string; active: boolean; current_phase: string; team_name?: string; session_id?: string };
+      assert.equal(modeState.mode, 'team');
+      assert.equal(modeState.active, true);
+      assert.equal(modeState.current_phase, 'team-verify');
+      assert.equal(modeState.team_name, 'review-team');
+      assert.equal(modeState.session_id, 'sess-team-root');
+      assert.equal(existsSync(join(stateDir, 'sessions', 'sess-team-followup', 'team-state.json')), false);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('preserves root team state when $ralph is activated for the current session', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-team-ralph-'));
     const stateDir = join(cwd, '.omx', 'state');
@@ -1115,6 +1160,25 @@ describe('applyRalplanGate', () => {
       const result = applyRalplanGate(['team'], 'team으로 해줘', { cwd });
       assert.equal(result.gateApplied, false);
       assert.deepEqual(result.keywords, ['team']);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('does not re-enter ralplan for a short approved ralph follow-up', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-gate-followup-ralph-'));
+    try {
+      const plansDir = join(cwd, '.omx', 'plans');
+      await mkdir(plansDir, { recursive: true });
+      await writeFile(
+        join(plansDir, 'prd-issue-832.md'),
+        '# Approved plan\n\nLaunch hint: omx ralph "Execute approved issue 832 plan"\n',
+      );
+      await writeFile(join(plansDir, 'test-spec-issue-832.md'), '# Test spec\n');
+
+      const result = applyRalplanGate(['ralph'], 'ralph please', { cwd, priorSkill: 'ralplan' });
+      assert.equal(result.gateApplied, false);
+      assert.deepEqual(result.keywords, ['ralph']);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
