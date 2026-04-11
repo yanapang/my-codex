@@ -452,8 +452,8 @@ describe("codex native hook dispatch", () => {
     }
   });
 
-  it("surfaces multi-skill prompt-submit output for ralplan -> team + ralph", async () => {
-    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-transition-multi-"));
+  it("keeps the planning skill active when planning and execution workflows are invoked together", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-planning-precedence-"));
     try {
       await mkdir(join(cwd, ".omx", "state"), { recursive: true });
 
@@ -475,9 +475,10 @@ describe("codex native hook dispatch", () => {
       assert.match(message, /\$ralplan" -> ralplan/);
       assert.match(message, /\$team" -> team/);
       assert.match(message, /\$ralph" -> ralph/);
-      assert.match(message, /mode transiting: ralplan -> team \+ ralph/);
-      assert.match(message, /active skills: team, ralph\./);
-      assert.match(message, /Use the durable OMX team runtime via `omx team \.\.\.`/);
+      assert.doesNotMatch(message, /mode transiting:/);
+      assert.match(message, /planning preserved over simultaneous execution follow-up; deferred skills: team, ralph\./);
+      assert.match(message, /skill: ralplan activated and initial state initialized at \.omx\/state\/sessions\/sess-multi-1\/ralplan-state\.json; write subsequent updates via omx_state MCP\./);
+      assert.doesNotMatch(message, /Use the durable OMX team runtime via `omx team \.\.\.`/);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

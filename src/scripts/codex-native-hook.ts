@@ -439,14 +439,16 @@ function buildAdditionalContextMessage(prompt: string, skillState?: SkillActiveS
   const matches = detectKeywords(prompt);
   const match = detectPrimaryKeyword(prompt);
   if (!match) return null;
-  const requestedSkills = matches.map((entry) => entry.skill);
   const detectedKeywordMessage = matches.length > 1
     ? `OMX native UserPromptSubmit detected workflow keywords ${matches.map((entry) => `"${entry.keyword}" -> ${entry.skill}`).join(", ")}.`
     : `OMX native UserPromptSubmit detected workflow keyword "${match.keyword}" -> ${match.skill}.`;
   const activeSkills = Array.isArray(skillState?.active_skills)
     ? skillState.active_skills.map((entry) => entry.skill)
     : [];
-  const teamDetected = activeSkills.includes("team") || requestedSkills.includes("team");
+  const deferredSkills = Array.isArray(skillState?.deferred_skills)
+    ? skillState.deferred_skills
+    : [];
+  const teamDetected = activeSkills.includes("team");
   const combinedTransitionMessage = (() => {
     if (!skillState?.transition_message) return null;
     if (matches.length <= 1 || activeSkills.length <= 1) return skillState.transition_message;
@@ -468,6 +470,9 @@ function buildAdditionalContextMessage(prompt: string, skillState?: SkillActiveS
       detectedKeywordMessage,
       combinedTransitionMessage,
       activeSkills.length > 1 ? `active skills: ${activeSkills.join(", ")}.` : null,
+      deferredSkills.length > 0
+        ? `planning preserved over simultaneous execution follow-up; deferred skills: ${deferredSkills.join(", ")}.`
+        : null,
       skillState.initialized_mode && skillState.initialized_state_path
         ? `skill: ${skillState.initialized_mode} activated and initial state initialized at ${skillState.initialized_state_path}; write subsequent updates via omx_state MCP.`
         : null,
@@ -486,6 +491,9 @@ function buildAdditionalContextMessage(prompt: string, skillState?: SkillActiveS
     return [
       detectedKeywordMessage,
       activeSkills.length > 1 ? `active skills: ${activeSkills.join(", ")}.` : null,
+      deferredSkills.length > 0
+        ? `planning preserved over simultaneous execution follow-up; deferred skills: ${deferredSkills.join(", ")}.`
+        : null,
       initializedStateMessage,
       "Use the durable OMX team runtime via `omx team ...` for coordinated execution; do not replace it with in-process fanout.",
       "If you need help, run `omx team --help`.",
@@ -497,6 +505,9 @@ function buildAdditionalContextMessage(prompt: string, skillState?: SkillActiveS
     return [
       detectedKeywordMessage,
       activeSkills.length > 1 ? `active skills: ${activeSkills.join(", ")}.` : null,
+      deferredSkills.length > 0
+        ? `planning preserved over simultaneous execution follow-up; deferred skills: ${deferredSkills.join(", ")}.`
+        : null,
       `skill: ${skillState.initialized_mode} activated and initial state initialized at ${skillState.initialized_state_path}; write subsequent updates via omx_state MCP.`,
       "Follow AGENTS.md routing and preserve workflow transition and planning-safety rules.",
     ].join(" ");

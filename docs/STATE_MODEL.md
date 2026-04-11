@@ -172,17 +172,17 @@ $ralplan $team $ralph ship this fix
 Expected result:
 
 1. `ralplan` is recognized as the planning source
-2. `team` is activated through the allowlisted forward handoff
-3. `ralph` is added as an allowed overlap with `team`
-4. final active skills are `team`, `ralph`
+2. simultaneous execution follow-ups are deferred instead of auto-starting
+3. final active skill remains `ralplan`
+4. deferred execution skills are surfaced in native-hook output for traceability
 5. native hook output should describe all explicit skills, not only the primary one
 
 Recommended message shape:
 
 - detected keywords summary
-- transition summary, e.g. `mode transiting: ralplan -> team + ralph`
-- final active skills summary
-- team runtime hint when `team` is among final active skills
+- deferred-skill summary, e.g. `planning preserved over simultaneous execution follow-up; deferred skills: team, ralph`
+- final active skill / initialized state summary
+- team runtime hint only when `team` is actually among the final active skills
 
 ## Audit fields for auto-complete
 
