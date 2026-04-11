@@ -64,16 +64,36 @@ export interface ExploreSparkShellRoute {
 }
 
 const MAX_WIKI_CONTEXT_RESULTS = 5;
+const WEAK_WIKI_NOTE =
+  'Wiki evidence is weak or missing. Fall back to broader repository search and recommend that the user build an initial project wiki under .omx/wiki/ if this repo benefits from persistent project knowledge.';
 
 function formatWikiContextBlock(prompt: string, cwd: string): string | null {
   const wikiDir = getWikiDir(cwd);
-  if (!existsSync(wikiDir)) return null;
+  if (!existsSync(wikiDir)) {
+    return [
+      '[OMX Wiki Status]',
+      WEAK_WIKI_NOTE,
+      '',
+      '[Original Explore Prompt]',
+      prompt,
+    ].join('\n');
+  }
   const matches = queryWiki(cwd, prompt, { limit: MAX_WIKI_CONTEXT_RESULTS, logQuery: false });
-  if (matches.length === 0) return null;
+  if (matches.length === 0) {
+    return [
+      '[OMX Wiki Status]',
+      `${WEAK_WIKI_NOTE} Existing wiki pages did not match this prompt strongly enough.`,
+      '',
+      '[Original Explore Prompt]',
+      prompt,
+    ].join('\n');
+  }
 
   const lines = [
     '[OMX Wiki Context]',
     'Use these wiki matches first before falling back to broader repository search.',
+    'If repository inspection contradicts wiki claims, prefer repository-backed facts in the final answer and add a short wiki mismatch warning.',
+    'If any factual disagreement is detected, include a `## Wiki mismatch` section explaining the disagreement and the safer repo-backed conclusion.',
     ...matches.flatMap((match, index) => [
       `${index + 1}. ${match.page.frontmatter.title} (${match.page.filename})`,
       `   tags: ${match.page.frontmatter.tags.join(', ') || 'none'} | category: ${match.page.frontmatter.category} | score: ${match.score}`,

@@ -289,6 +289,8 @@ describe('buildExplorePromptWithWikiContext', () => {
       const prompt = buildExplorePromptWithWikiContext('how does session-start work', wd);
       assert.match(prompt, /\[OMX Wiki Context\]/);
       assert.match(prompt, /Runtime Architecture/);
+      assert.match(prompt, /prefer repository-backed facts/i);
+      assert.match(prompt, /Wiki mismatch/);
       assert.match(prompt, /Original Explore Prompt/);
       assert.equal(existsSync(join(wd, '.omx', 'wiki', 'log.md')), false);
     } finally {
@@ -329,10 +331,24 @@ describe('buildExplorePromptWithWikiContext', () => {
     }
   });
 
-  it('returns the original prompt when no wiki pages match', async () => {
+  it('warns when wiki pages are missing or too weak', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-explore-no-wiki-'));
     try {
-      assert.equal(buildExplorePromptWithWikiContext('find auth', wd), 'find auth');
+      const prompt = buildExplorePromptWithWikiContext('find auth', wd);
+      assert.match(prompt, /\[OMX Wiki Status\]/);
+      assert.match(prompt, /build an initial project wiki/i);
+      assert.match(prompt, /Original Explore Prompt/);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('warns when the wiki directory is missing entirely', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-explore-missing-wiki-'));
+    try {
+      const prompt = buildExplorePromptWithWikiContext('find auth', wd);
+      assert.match(prompt, /Wiki evidence is weak or missing/i);
+      assert.match(prompt, /build an initial project wiki/i);
     } finally {
       await rm(wd, { recursive: true, force: true });
     }
@@ -568,14 +584,14 @@ describe('resolveExploreHarnessCommand', () => {
 
 describe('buildExploreHarnessArgs', () => {
   it('includes cwd, prompt, prompt contract, and constrained model settings', () => {
-    const args = buildExploreHarnessArgs('find auth', '/repo', {
+    const wd = join(tmpdir(), 'omx-explore-arg-test');
+    const args = buildExploreHarnessArgs('find auth', wd, {
       OMX_EXPLORE_SPARK_MODEL: 'spark-model',
     } as NodeJS.ProcessEnv, '/pkg');
-    assert.deepEqual(args, [
-      '--cwd',
-      '/repo',
-      '--prompt',
-      'find auth',
+    assert.deepEqual(args.slice(0, 3), ['--cwd', wd, '--prompt']);
+    assert.match(args[3] || '', /Original Explore Prompt/);
+    assert.match(args[3] || '', /find auth/);
+    assert.deepEqual(args.slice(4), [
       '--prompt-file',
       '/pkg/prompts/explore-harness.md',
       '--model-spark',
