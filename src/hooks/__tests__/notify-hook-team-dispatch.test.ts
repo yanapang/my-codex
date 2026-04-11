@@ -801,6 +801,61 @@ exit 0
     }
   });
 
+  it('releases the global dispatch lock before slow tmux injection so mailbox sends do not wedge mid-run', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
+    const previousLockTimeout = process.env.OMX_DISPATCH_LOCK_TIMEOUT_MS;
+    const previousRuntimeBridge = process.env.OMX_RUNTIME_BRIDGE;
+    try {
+      process.env.OMX_DISPATCH_LOCK_TIMEOUT_MS = '1000';
+      process.env.OMX_RUNTIME_BRIDGE = '0';
+
+      await initTeamState('alpha', 'task', 'executor', 1, cwd);
+      await enqueueDispatchRequest('alpha', {
+        kind: 'inbox',
+        to_worker: 'worker-1',
+        worker_index: 1,
+        trigger_message: 'startup ping',
+      }, cwd);
+
+      const modulePath = new URL('../../../dist/scripts/notify-hook/team-dispatch.js', import.meta.url).pathname;
+      const mod = await import(pathToFileURL(modulePath).href);
+      const slowDrain = mod.drainPendingTeamDispatch({
+        cwd,
+        maxPerTick: 1,
+        injector: async () => {
+          await sleep(1_200);
+          return { ok: true, reason: 'tmux_send_keys_confirmed' };
+        },
+      });
+
+      await sleep(100);
+      await assert.doesNotReject(async () => {
+        await enqueueDispatchRequest('alpha', {
+          kind: 'mailbox',
+          to_worker: 'worker-1',
+          worker_index: 1,
+          trigger_message: 'check mailbox',
+          message_id: 'msg-1',
+        }, cwd);
+      });
+
+      const result = await slowDrain;
+      assert.equal(result.processed, 1);
+      assert.equal(result.failed, 0);
+      const requests = JSON.parse(
+        await readFile(join(cwd, '.omx', 'state', 'team', 'alpha', 'dispatch', 'requests.json'), 'utf-8'),
+      ) as Array<{ request_id?: string; kind?: string; status?: string }>;
+      const mailboxRequest = requests.find((entry) => entry.kind === 'mailbox');
+      assert.equal(mailboxRequest?.status, 'pending');
+    } finally {
+      if (typeof previousLockTimeout === 'string') process.env.OMX_DISPATCH_LOCK_TIMEOUT_MS = previousLockTimeout;
+      else delete process.env.OMX_DISPATCH_LOCK_TIMEOUT_MS;
+      if (typeof previousRuntimeBridge === 'string') process.env.OMX_RUNTIME_BRIDGE = previousRuntimeBridge;
+      else delete process.env.OMX_RUNTIME_BRIDGE;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('leaves unconfirmed injection as pending for retry (#391)', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-hook-team-dispatch-'));
     try {
