@@ -2102,17 +2102,19 @@ esac
     }
   });
 
-  it("still allows native auto-nudge when deep-interview state is active", async () => {
-    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-auto-nudge-deep-interview-lock-"));
+  it("does not auto-continue native Stop while deep-interview is waiting on an intent-first question", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-auto-nudge-deep-interview-question-"));
     try {
       const stateDir = join(cwd, ".omx", "state");
-      await mkdir(join(stateDir, "sessions", "sess-stop-auto-lock"), { recursive: true });
-      await writeJson(join(stateDir, "session.json"), { session_id: "sess-stop-auto-lock" });
-      await writeJson(join(stateDir, "sessions", "sess-stop-auto-lock", "skill-active-state.json"), {
+      await mkdir(join(stateDir, "sessions", "sess-stop-auto-question"), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: "sess-stop-auto-question" });
+      await writeJson(join(stateDir, "sessions", "sess-stop-auto-question", "skill-active-state.json"), {
         version: 1,
         active: true,
         skill: "deep-interview",
         phase: "planning",
+        session_id: "sess-stop-auto-question",
+        thread_id: "thread-stop-auto-question",
         input_lock: {
           active: true,
           scope: "deep-interview-auto-approval",
@@ -2120,31 +2122,31 @@ esac
           message: "Deep interview is active; auto-approval shortcuts are blocked until the interview finishes.",
         },
       });
-      await writeJson(join(stateDir, "sessions", "sess-stop-auto-lock", "deep-interview-state.json"), {
+      await writeJson(join(stateDir, "sessions", "sess-stop-auto-question", "deep-interview-state.json"), {
         active: true,
-        current_phase: "planning",
+        mode: "deep-interview",
+        current_phase: "intent-first",
       });
 
       const result = await dispatchCodexNativeHook(
         {
           hook_event_name: "Stop",
           cwd,
-          session_id: "sess-stop-auto-lock",
-          thread_id: "thread-stop-auto-lock",
-          turn_id: "turn-stop-auto-lock-1",
-          last_assistant_message: "Keep going and finish the cleanup from here.",
+          session_id: "sess-stop-auto-question",
+          thread_id: "thread-stop-auto-question",
+          turn_id: "turn-stop-auto-question-1",
+          last_assistant_message: [
+            "Round 2 | Target: Decision boundary | Ambiguity: 24%",
+            "",
+            "If an existing project spider still declares session_mode = \"owned\", should ZenX fail loudly so the stale attribute is removed, or should it ignore the attribute and initialize the session pool anyway?",
+            "Keep going once I have your answer.",
+          ].join("\n"),
         },
         { cwd },
       );
 
       assert.equal(result.omxEventName, "stop");
-      assert.deepEqual(result.outputJson, {
-        decision: "block",
-        reason: DEFAULT_AUTO_NUDGE_RESPONSE,
-        stopReason: "auto_nudge",
-        systemMessage:
-          "OMX native Stop detected a stall/permission-style handoff and continued the turn automatically.",
-      });
+      assert.equal(result.outputJson, null);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
