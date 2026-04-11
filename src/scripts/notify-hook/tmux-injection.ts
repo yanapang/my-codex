@@ -210,7 +210,15 @@ export async function resolvePaneTarget(target: any, expectedCwd: any, modePane:
     const expectedSessionTarget = safeString(managedContext.expectedTmuxSessionName).trim();
     const sessionIdTarget = safeString(managedContext.invocationSessionId).trim();
     const stateSessionTarget = safeString(managedContext.sessionState?.session_id).trim();
-    const allowedSessionTargets = new Set([expectedSessionTarget, sessionIdTarget, stateSessionTarget].filter(Boolean));
+    const nativeSessionTarget = safeString(managedContext.nativeSessionId).trim();
+    const canonicalSessionTarget = safeString(managedContext.canonicalSessionId).trim();
+    const allowedSessionTargets = new Set([
+      expectedSessionTarget,
+      sessionIdTarget,
+      stateSessionTarget,
+      nativeSessionTarget,
+      canonicalSessionTarget,
+    ].filter(Boolean));
     if (!allowedSessionTargets.has(explicitSessionTarget)) {
       return { paneTarget: null, reason: 'target_session_not_managed' };
     }

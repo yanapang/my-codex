@@ -172,6 +172,41 @@ describe('notify-hook/operational-events – buildOperationalContext', () => {
       else process.env.TMUX = originalTmux;
     }
   });
+
+  it('writes PR lifecycle details into the repo baseline registry as best effort state', async () => {
+    const { buildOperationalContext } = await loadModule('notify-hook/operational-events.js');
+    const { mkdtemp, rm, writeFile, readFile } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { execFileSync } = await import('node:child_process');
+
+    const repo = await mkdtemp(join(tmpdir(), 'omx-opctx-baseline-'));
+    try {
+      execFileSync('git', ['init'], { cwd: repo, stdio: 'ignore' });
+      execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo, stdio: 'ignore' });
+      execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: repo, stdio: 'ignore' });
+      await writeFile(join(repo, 'README.md'), 'hello\n', 'utf-8');
+      execFileSync('git', ['add', 'README.md'], { cwd: repo, stdio: 'ignore' });
+      execFileSync('git', ['commit', '-m', 'init'], { cwd: repo, stdio: 'ignore' });
+      execFileSync('git', ['checkout', '-b', 'feature/opctx-pr'], { cwd: repo, stdio: 'ignore' });
+
+      const context = buildOperationalContext({
+        cwd: repo,
+        normalizedEvent: 'pr-merged',
+        text: 'Merged issue #1407 via PR #1416',
+        prUrl: 'https://github.com/Yeachan-Heo/oh-my-codex/pull/1416',
+      });
+
+      assert.equal(context.branch, 'feature/opctx-pr');
+      const baseline = JSON.parse(await readFile(join(repo, '.omx', 'state', 'current-task-baseline.json'), 'utf-8'));
+      const entry = baseline.tasks.find((item: { branch_name: string }) => item.branch_name === 'feature/opctx-pr');
+      assert.equal(entry.issue_number, 1407);
+      assert.equal(entry.pr_number, 1416);
+      assert.equal(entry.status, 'merged');
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('notify-hook/operational-events – deriveAssistantSignalEvents', () => {
@@ -199,24 +234,25 @@ describe('notify-hook/operational-events – deriveAssistantSignalEvents', () =>
 // auto-nudge.js – detectStallPattern
 // ---------------------------------------------------------------------------
 describe('notify-hook/auto-nudge – detectStallPattern', () => {
-  it('detects default stall patterns case-insensitively', async () => {
+  it('detects default continuation patterns case-insensitively', async () => {
     const { detectStallPattern, DEFAULT_STALL_PATTERNS } = await loadModule('notify-hook/auto-nudge.js');
-    assert.equal(detectStallPattern('Would you like me to continue?', DEFAULT_STALL_PATTERNS), true);
-    assert.equal(detectStallPattern('WOULD YOU LIKE me to continue?', DEFAULT_STALL_PATTERNS), true);
-    assert.equal(detectStallPattern('Shall I proceed?', DEFAULT_STALL_PATTERNS), true);
-    assert.equal(detectStallPattern('If you want, I can refactor.', DEFAULT_STALL_PATTERNS), true);
-    assert.equal(detectStallPattern('Let me know if you need more help.', DEFAULT_STALL_PATTERNS), true);
-    assert.equal(detectStallPattern('Ready to proceed whenever you are.', DEFAULT_STALL_PATTERNS), true);
-    assert.equal(detectStallPattern('I’M READY TO take the next step.', DEFAULT_STALL_PATTERNS), true);
     assert.equal(detectStallPattern('KEEP GOING and I will finish the patch.', DEFAULT_STALL_PATTERNS), true);
+    assert.equal(detectStallPattern('Continue with the existing cleanup from here.', DEFAULT_STALL_PATTERNS), true);
   });
 
-  it('detects team-worker follow-up phrases like continue with and next step', async () => {
+  it('detects team-worker continuation phrases like continue with and keep going', async () => {
     const { detectStallPattern, DEFAULT_STALL_PATTERNS } = await loadModule('notify-hook/auto-nudge.js');
     assert.equal(detectStallPattern('I can continue with the worker follow-up from here.', DEFAULT_STALL_PATTERNS), true);
-    assert.equal(detectStallPattern('The next step is to finish the worker handoff.', DEFAULT_STALL_PATTERNS), true);
-    assert.equal(detectStallPattern('The NEXT STEPS would be running tests and posting the summary.', DEFAULT_STALL_PATTERNS), true);
     assert.equal(detectStallPattern('We can pick up with the cleanup after this.', DEFAULT_STALL_PATTERNS), true);
+  });
+
+  it('does not treat permission-seeking or planning prompts as auto-nudge stalls', async () => {
+    const { detectStallPattern, DEFAULT_STALL_PATTERNS } = await loadModule('notify-hook/auto-nudge.js');
+    assert.equal(detectStallPattern('Would you like me to continue?', DEFAULT_STALL_PATTERNS), false);
+    assert.equal(detectStallPattern('Shall I proceed?', DEFAULT_STALL_PATTERNS), false);
+    assert.equal(detectStallPattern('If you want, I can refactor.', DEFAULT_STALL_PATTERNS), false);
+    assert.equal(detectStallPattern('Ready to proceed whenever you are.', DEFAULT_STALL_PATTERNS), false);
+    assert.equal(detectStallPattern('I can continue with the plan from here.', DEFAULT_STALL_PATTERNS), false);
   });
 
   it('returns false when no stall pattern present', async () => {
@@ -250,7 +286,7 @@ describe('notify-hook/auto-nudge – detectStallPattern', () => {
   it('focuses detection on the last few lines (hotZone)', async () => {
     const { detectStallPattern, DEFAULT_STALL_PATTERNS } = await loadModule('notify-hook/auto-nudge.js');
     // Stall phrase only in the last line — should detect
-    const text = 'Line 1\nLine 2\nLine 3\nLine 4\nWould you like me to continue?';
+    const text = 'Line 1\nLine 2\nLine 3\nLine 4\nKeep going and finish the patch.';
     assert.equal(detectStallPattern(text, DEFAULT_STALL_PATTERNS), true);
   });
 
@@ -317,6 +353,15 @@ describe('notify-hook/auto-nudge – normalizeAutoNudgeConfig', () => {
     // Empty array → fall back to defaults
     const cfg = normalizeAutoNudgeConfig({ patterns: [] });
     assert.deepEqual(cfg.patterns, DEFAULT_STALL_PATTERNS);
+  });
+});
+
+describe('notify-hook/auto-nudge – resolveEffectiveAutoNudgeResponse', () => {
+  it('maps legacy approval-style responses to a non-authorizing continuation message', async () => {
+    const { DEFAULT_AUTO_NUDGE_RESPONSE, resolveEffectiveAutoNudgeResponse } = await loadModule('notify-hook/auto-nudge.js');
+    assert.equal(resolveEffectiveAutoNudgeResponse('yes, proceed'), DEFAULT_AUTO_NUDGE_RESPONSE);
+    assert.equal(resolveEffectiveAutoNudgeResponse('continue'), DEFAULT_AUTO_NUDGE_RESPONSE);
+    assert.equal(resolveEffectiveAutoNudgeResponse('custom follow-up'), 'custom follow-up');
   });
 });
 

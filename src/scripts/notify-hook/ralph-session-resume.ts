@@ -1,7 +1,8 @@
 import { existsSync } from 'fs';
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'fs/promises';
-import { dirname, join } from 'path';
+import { dirname, join, resolve } from 'path';
 import { captureTmuxPaneFromEnv } from '../../state/mode-state-context.js';
+import { readUsableSessionState } from '../../hooks/session.js';
 import { resolveCodexPane } from '../tmux-hook-engine.js';
 import { safeString } from './utils.js';
 
@@ -128,7 +129,7 @@ function isActiveRalphCandidate(state: Record<string, unknown> | null): state is
 }
 
 async function readCurrentOmxSessionId(stateDir: string): Promise<string> {
-  const session = await readJson(join(stateDir, 'session.json'));
+  const session = await readUsableSessionState(resolve(stateDir, '..', '..'));
   const sessionId = safeString(session?.session_id).trim();
   return SESSION_ID_PATTERN.test(sessionId) ? sessionId : '';
 }

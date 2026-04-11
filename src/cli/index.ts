@@ -75,6 +75,7 @@ import {
   isMsysOrGitBash,
   isNativeWindows,
   isTmuxAvailable,
+  mitigateCopyModeUnderlineArtifacts,
 } from "../team/tmux-session.js";
 import { getPackageRoot } from "../utils/package.js";
 import { codexConfigPath, rememberOmxLaunchContext, resolveOmxEntryPath } from "../utils/paths.js";
@@ -234,6 +235,7 @@ const ALLOWED_SHELLS = new Set([
   "/usr/local/bin/bash",
   "/usr/local/bin/zsh",
   "/usr/local/bin/fish",
+  "/opt/homebrew/bin/zsh",
 ]);
 const WINDOWS_DETACHED_BOOTSTRAP_DELAY_MS = 2500;
 const CODEX_VERSION_FLAGS = new Set(["--version", "-V"]);
@@ -342,6 +344,16 @@ export function resolveCodexHomeForLaunch(
     return join(cwd, ".codex");
   }
   return undefined;
+}
+
+export function resolveCodexConfigPathForLaunch(
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const codexHomeOverride = resolveCodexHomeForLaunch(cwd, env);
+  return codexHomeOverride
+    ? join(codexHomeOverride, "config.toml")
+    : codexConfigPath();
 }
 
 export function resolveSetupScopeArg(args: string[]): SetupScope | undefined {
@@ -932,7 +944,7 @@ export async function launchWithHud(args: string[]): Promise<void> {
   // TOML parser rejects duplicates, so we repair before spawning the CLI.
   try {
     const repaired = await repairConfigIfNeeded(
-      codexConfigPath(),
+      resolveCodexConfigPathForLaunch(launchCwd, process.env),
       getPackageRoot(),
     );
     if (repaired) {
@@ -1013,7 +1025,7 @@ export async function execWithOverlay(args: string[]): Promise<void> {
 
   try {
     const repaired = await repairConfigIfNeeded(
-      codexConfigPath(),
+      resolveCodexConfigPathForLaunch(launchCwd, process.env),
       getPackageRoot(),
     );
     if (repaired) {
@@ -1815,6 +1827,10 @@ export function buildDetachedSessionFinalizeSteps(
       name: "set-mouse",
       args: ["set-option", "-t", sessionName, "mouse", "on"],
     });
+    steps.push({
+      name: "sanitize-copy-mode-style",
+      args: [],
+    });
   }
   steps.push({
     name: "attach-session",
@@ -2152,7 +2168,7 @@ ${launchAppendix}`
   await writeSessionModelInstructionsFile(cwd, sessionId, sessionInstructions);
 
   // 3. Write session state
-  await resetSessionMetrics(cwd);
+  await resetSessionMetrics(cwd, sessionId);
   await writeSessionStart(cwd, sessionId);
 
   // 4. Start notify fallback watcher (best effort)
@@ -2414,6 +2430,14 @@ function runCodex(
             );
           }
           for (const finalizeStep of finalizeSteps) {
+            if (finalizeStep.name === "sanitize-copy-mode-style") {
+              try {
+                mitigateCopyModeUnderlineArtifacts(sessionName);
+              } catch (err) {
+                process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+              }
+              continue;
+            }
             const stdio =
               finalizeStep.name === "attach-session" ? "inherit" : "ignore";
             try {

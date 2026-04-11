@@ -2,6 +2,7 @@ import { appendFile, readFile, writeFile, mkdir, rm, rename, readdir } from 'fs/
 import { join, dirname, resolve, sep } from 'path';
 import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
+import { readUsableSessionState } from '../hooks/session.js';
 import { omxStateDir } from '../utils/paths.js';
 import { isTerminalPhase, type TeamPhase, type TerminalPhase } from './orchestrator.js';
 import {
@@ -531,17 +532,7 @@ function resolvePermissionsSnapshot(env: NodeJS.ProcessEnv): PermissionsSnapshot
 async function resolveLeaderSessionId(cwd: string, env: NodeJS.ProcessEnv): Promise<string> {
   const fromEnv = readEnvValue(env, ['OMX_SESSION_ID', 'CODEX_SESSION_ID', 'SESSION_ID']);
   if (fromEnv) return fromEnv;
-
-  const sessionPath = join(omxStateDir(cwd), 'session.json');
-  try {
-    if (!existsSync(sessionPath)) return '';
-    const raw = await readFile(sessionPath, 'utf8');
-    const parsed = JSON.parse(raw) as { session_id?: unknown };
-    if (typeof parsed.session_id === 'string' && parsed.session_id.trim() !== '') return parsed.session_id.trim();
-  } catch {
-    // best effort
-  }
-  return '';
+  return (await readUsableSessionState(cwd))?.session_id ?? '';
 }
 
 function normalizeTask(task: TeamTask): TeamTaskV2 {

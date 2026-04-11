@@ -13,7 +13,8 @@ import { omxStateDir } from '../utils/paths.js';
 import { findGitLayout, readGitLayoutFile } from '../utils/git-layout.js';
 import { getDefaultBridge, isBridgeEnabled } from '../runtime/bridge.js';
 import type { RuntimeSnapshot } from '../runtime/bridge.js';
-import { getReadScopedStatePaths } from '../mcp/state-paths.js';
+import { getReadScopedStateFilePaths, getReadScopedStatePaths } from '../mcp/state-paths.js';
+import { readUsableSessionState } from '../hooks/session.js';
 import { listActiveSkills, readVisibleSkillActiveState } from '../state/skill-active.js';
 import type {
   RalphStateForHud,
@@ -41,15 +42,6 @@ async function readJsonFile<T>(path: string): Promise<T | null> {
   } catch {
     return null;
   }
-}
-
-async function readScopedModeState<T>(cwd: string, mode: string): Promise<T | null> {
-  const candidates = await getReadScopedStatePaths(mode, cwd);
-  for (const candidate of candidates) {
-    const state = await readJsonFile<T>(candidate);
-    if (state) return state;
-  }
-  return null;
 }
 
 async function readSessionAwareModeState<T>(cwd: string, mode: string): Promise<T | null> {
@@ -113,22 +105,22 @@ export function normalizeHudConfig(raw: HudConfig | null | undefined): ResolvedH
 }
 
 export async function readRalphState(cwd: string): Promise<RalphStateForHud | null> {
-  const state = await readScopedModeState<RalphStateForHud>(cwd, 'ralph');
+  const state = await readSessionAwareModeState<RalphStateForHud>(cwd, 'ralph');
   return state?.active ? state : null;
 }
 
 export async function readUltraworkState(cwd: string): Promise<UltraworkStateForHud | null> {
-  const state = await readScopedModeState<UltraworkStateForHud>(cwd, 'ultrawork');
+  const state = await readSessionAwareModeState<UltraworkStateForHud>(cwd, 'ultrawork');
   return state?.active ? state : null;
 }
 
 export async function readAutopilotState(cwd: string): Promise<AutopilotStateForHud | null> {
-  const state = await readScopedModeState<AutopilotStateForHud>(cwd, 'autopilot');
+  const state = await readSessionAwareModeState<AutopilotStateForHud>(cwd, 'autopilot');
   return state?.active ? state : null;
 }
 
 export async function readRalplanState(cwd: string): Promise<RalplanStateForHud | null> {
-  const state = await readScopedModeState<RalplanStateForHud>(cwd, 'ralplan');
+  const state = await readSessionAwareModeState<RalplanStateForHud>(cwd, 'ralplan');
   return state?.active ? state : null;
 }
 
@@ -139,7 +131,7 @@ interface DeepInterviewRawState extends DeepInterviewStateForHud {
 }
 
 export async function readDeepInterviewState(cwd: string): Promise<DeepInterviewStateForHud | null> {
-  const state = await readScopedModeState<DeepInterviewRawState>(cwd, 'deep-interview');
+  const state = await readSessionAwareModeState<DeepInterviewRawState>(cwd, 'deep-interview');
   if (!state?.active) return null;
 
   return {
@@ -149,17 +141,17 @@ export async function readDeepInterviewState(cwd: string): Promise<DeepInterview
 }
 
 export async function readAutoresearchState(cwd: string): Promise<AutoresearchStateForHud | null> {
-  const state = await readScopedModeState<AutoresearchStateForHud>(cwd, 'autoresearch');
+  const state = await readSessionAwareModeState<AutoresearchStateForHud>(cwd, 'autoresearch');
   return state?.active ? state : null;
 }
 
 export async function readUltraqaState(cwd: string): Promise<UltraqaStateForHud | null> {
-  const state = await readScopedModeState<UltraqaStateForHud>(cwd, 'ultraqa');
+  const state = await readSessionAwareModeState<UltraqaStateForHud>(cwd, 'ultraqa');
   return state?.active ? state : null;
 }
 
 export async function readTeamState(cwd: string): Promise<TeamStateForHud | null> {
-  const state = await readScopedModeState<TeamStateForHud>(cwd, 'team');
+  const state = await readSessionAwareModeState<TeamStateForHud>(cwd, 'team');
   return state?.active ? state : null;
 }
 
@@ -168,11 +160,14 @@ export async function readMetrics(cwd: string): Promise<HudMetrics | null> {
 }
 
 export async function readHudNotifyState(cwd: string): Promise<HudNotifyState | null> {
-  return readJsonFile<HudNotifyState>(join(omxStateDir(cwd), 'hud-state.json'));
+  const [hudStatePath] = await getReadScopedStateFilePaths('hud-state.json', cwd, undefined, {
+    rootFallback: false,
+  });
+  return readJsonFile<HudNotifyState>(hudStatePath);
 }
 
 export async function readSessionState(cwd: string): Promise<SessionStateForHud | null> {
-  const state = await readJsonFile<SessionStateForHud>(join(omxStateDir(cwd), 'session.json'));
+  const state = await readUsableSessionState(cwd);
   return state?.session_id ? state : null;
 }
 

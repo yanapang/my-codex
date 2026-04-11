@@ -84,6 +84,10 @@ async function waitForExit(
   stderr: string[],
   stdout: string[],
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return { code: child.exitCode, signal: child.signalCode };
+  }
+
   try {
     const [code, signal] = (await Promise.race([
       once(child, 'exit') as Promise<[number | null, NodeJS.Signals | null]>,

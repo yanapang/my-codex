@@ -15,6 +15,9 @@ import {
   normalizeAutoNudgeSignatureText,
   resolveAutoNudgeSignature,
 } from './notify-hook/auto-nudge.js';
+import {
+  readScopedJsonIfExists,
+} from './notify-hook/state-io.js';
 import { checkPaneReadyForTeamSendKeys } from './notify-hook/team-tmux-guard.js';
 import {
   checkWorkerPanesAlive,
@@ -24,11 +27,12 @@ import {
 } from './notify-hook/team-leader-nudge.js';
 import { DEFAULT_MARKER } from './tmux-hook-engine.js';
 import { isTerminalPhase } from './notify-hook/utils.js';
-import { isSessionStale, readSessionState } from '../hooks/session.js';
+import { isSessionStale, isSessionStateAuthoritativeForCwd, readSessionState } from '../hooks/session.js';
 import {
   DEFAULT_SUBAGENT_ACTIVE_WINDOW_MS,
   readSubagentSessionSummary,
 } from '../subagents/tracker.js';
+import { listNotifyCanonicalActiveTeams } from './notify-hook/active-team.js';
 
 function argValue(name: string, fallback = ''): string {
   const idx = process.argv.indexOf(name);
@@ -507,8 +511,10 @@ async function resolveActiveModeState(mode: string): Promise<ActiveModeResult> {
   let currentSessionIsLive = false;
   const session = await readSessionState(cwd);
   if (session?.session_id) {
-    currentSessionId = safeString(session.session_id).trim();
-    currentSessionIsLive = !isSessionStale(session);
+    if (isSessionStateAuthoritativeForCwd(session, cwd)) {
+      currentSessionId = safeString(session.session_id).trim();
+      currentSessionIsLive = !isSessionStale(session);
+    }
     if (currentSessionId && currentSessionIsLive) {
       candidateDirs.push(join(stateDir, 'sessions', currentSessionId));
     }
@@ -561,19 +567,23 @@ async function resolveActiveRalphState(): Promise<ActiveModeResult> {
 
 async function resolveActiveTeamState(): Promise<ActiveTeamResult> {
   const candidateDirs: string[] = [];
-  const sessionPath = join(stateDir, 'session.json');
-  try {
-    const session = JSON.parse(await readFile(sessionPath, 'utf-8')) as Record<string, unknown>;
-    const sessionId = safeString(session?.session_id).trim();
-    if (sessionId) {
-      candidateDirs.push(join(stateDir, 'sessions', sessionId));
+  let currentSessionId = '';
+  let currentSessionIsLive = false;
+  const session = await readSessionState(cwd);
+  if (session?.session_id) {
+    currentSessionId = safeString(session.session_id).trim();
+    currentSessionIsLive = !isSessionStale(session);
+    if (currentSessionId && currentSessionIsLive) {
+      candidateDirs.push(join(stateDir, 'sessions', currentSessionId));
     }
-  } catch {
-    // No active session file; fall back to root state only.
   }
   if (!candidateDirs.includes(stateDir)) candidateDirs.push(stateDir);
 
   for (const dir of candidateDirs) {
+    if (dir === stateDir && currentSessionId) {
+      continue;
+    }
+
     const path = join(dir, 'team-state.json');
     if (!existsSync(path)) continue;
     const parsed = await readFile(path, 'utf-8')
@@ -619,6 +629,52 @@ async function resolveActiveTeamState(): Promise<ActiveTeamResult> {
       state: parsed,
       team_name: teamName,
       pane_count: paneStatus.paneCount,
+    };
+  }
+
+  const canonicalFallbackTeams = await listNotifyCanonicalActiveTeams(cwd, currentSessionId).catch(() => []);
+  for (const team of canonicalFallbackTeams) {
+    const teamConfigDir = join(stateDir, 'team', team.teamName);
+    const manifestPath = join(teamConfigDir, 'manifest.v2.json');
+    const configPath = join(teamConfigDir, 'config.json');
+    const teamConfigPath = existsSync(manifestPath) ? manifestPath : configPath;
+    const teamConfig = existsSync(teamConfigPath)
+      ? await readFile(teamConfigPath, 'utf-8')
+        .then((content) => JSON.parse(content) as Record<string, unknown>)
+        .catch(() => null)
+      : null;
+    const tmuxSession = safeString(teamConfig?.tmux_session).trim();
+    if (!tmuxSession) continue;
+
+    const workers = Array.isArray(teamConfig?.workers) ? teamConfig.workers as Array<Record<string, unknown>> : [];
+    const workerPaneIds: string[] = workers
+      .map((worker) => safeString(worker?.pane_id).trim())
+      .filter(Boolean);
+    const paneStatus = await checkWorkerPanesAlive(tmuxSession, workerPaneIds as any);
+    if (!paneStatus.alive) continue;
+
+    return {
+      active: true,
+      reason: team.source,
+      path: team.path,
+      state: {
+        active: true,
+        team_name: team.teamName,
+        current_phase: team.phase,
+      },
+      team_name: team.teamName,
+      pane_count: paneStatus.paneCount,
+    };
+  }
+
+  if (currentSessionId) {
+    return {
+      active: false,
+      reason: currentSessionIsLive ? 'blocked_by_current_session' : 'stale_current_session',
+      path: '',
+      state: null,
+      team_name: '',
+      pane_count: 0,
     };
   }
 
@@ -750,7 +806,7 @@ async function readRalphProgressGate(
     }
   }
 
-  const hudState = await readJsonObject(join(stateDir, 'hud-state.json'));
+  const hudState = await readScopedJsonIfExists(stateDir, 'hud-state.json', undefined, null);
   if (!hudState || typeof hudState !== 'object') {
     return { allow: false, reason: 'progress_missing', progress_at: '', subagent_session_id: subagentSessionId };
   }
@@ -1160,19 +1216,18 @@ async function readJsonObject(path: string): Promise<Record<string, unknown> | n
 }
 
 async function readAutoNudgeCount(): Promise<number> {
-  const parsed = await readJsonObject(join(stateDir, 'auto-nudge-state.json'));
+  const parsed = await readScopedJsonIfExists(stateDir, 'auto-nudge-state.json', undefined, null);
   return Math.max(0, Math.trunc(asNumber(parsed?.nudgeCount as string | number | undefined, 0)));
 }
 
 async function readAutoNudgeState(): Promise<Record<string, unknown> | null> {
-  return readJsonObject(join(stateDir, 'auto-nudge-state.json'));
+  return readScopedJsonIfExists(stateDir, 'auto-nudge-state.json', undefined, null);
 }
 
 async function runFallbackAutoNudgeTick(): Promise<void> {
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
-  const hudStatePath = join(stateDir, 'hud-state.json');
-  const hudState = await readJsonObject(hudStatePath);
+  const hudState = await readScopedJsonIfExists(stateDir, 'hud-state.json', undefined, null);
 
   lastFallbackAutoNudge = {
     ...lastFallbackAutoNudge,
@@ -1641,8 +1696,8 @@ async function runDispatchDrainTick(): Promise<boolean> {
 
 async function shouldSuppressInteractiveFallbackTicks(): Promise<boolean> {
   const [deepInterviewStateActive, deepInterviewInputLockActive] = await Promise.all([
-    isDeepInterviewStateActive(stateDir),
-    isDeepInterviewInputLockActive(stateDir),
+    isDeepInterviewStateActive(stateDir, undefined),
+    isDeepInterviewInputLockActive(stateDir, undefined),
   ]);
   return deepInterviewStateActive || deepInterviewInputLockActive;
 }

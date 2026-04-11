@@ -9,6 +9,7 @@ import {
   LONG_CONFIG_FLAG,
   MODEL_FLAG,
 } from '../cli/constants.js';
+import { getAgent } from '../agents/definitions.js';
 import {
   buildCapturePaneArgv as sharedBuildCapturePaneArgv,
   buildVisibleCapturePaneArgv as sharedBuildVisibleCapturePaneArgv,
@@ -60,6 +61,17 @@ const GEMINI_APPROVAL_MODE_FLAG = '--approval-mode';
 const GEMINI_APPROVAL_MODE_YOLO = 'yolo';
 const OMX_LEADER_NODE_PATH_ENV = 'OMX_LEADER_NODE_PATH';
 const OMX_LEADER_CLI_PATH_ENV = 'OMX_LEADER_CLI_PATH';
+const TMUX_NO_UNDERLINE_STYLE_FLAGS = [
+  'nounderscore',
+  'nodouble-underscore',
+  'nocurly-underscore',
+  'nodotted-underscore',
+  'nodashed-underscore',
+] as const;
+const TMUX_COPY_MODE_STYLE_OPTIONS = [
+  'mode-style',
+  'copy-mode-selection-style',
+] as const;
 
 export type TeamWorkerCli = 'codex' | 'claude' | 'gemini';
 type TeamWorkerCliMode = 'auto' | TeamWorkerCli;
@@ -102,6 +114,45 @@ function runTmux(args: string[]): { ok: true; stdout: string } | { ok: false; st
     return { ok: false, stderr: (result.stderr || '').trim() || `tmux exited ${result.status}` };
   }
   return { ok: true, stdout: (result.stdout || '').trim() };
+}
+
+function appendNoUnderlineStyleFlags(style: string): string {
+  const normalized = style
+    .split(/[,\s]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+  const combined = [...normalized];
+  for (const flag of TMUX_NO_UNDERLINE_STYLE_FLAGS) {
+    if (!combined.includes(flag)) combined.push(flag);
+  }
+  return combined.join(',');
+}
+
+function sanitizeTmuxStyleOption(sessionTarget: string, optionName: string): boolean {
+  const shown = runTmux(['show-options', '-gv', '-t', sessionTarget, optionName]);
+  if (!shown.ok) return false;
+
+  const current = shown.stdout.trim();
+  if (current === '') return false;
+
+  const sanitized = appendNoUnderlineStyleFlags(current);
+  if (sanitized === current) return true;
+
+  const result = runTmux(['set-option', '-t', sessionTarget, optionName, sanitized]);
+  return result.ok;
+}
+
+export function mitigateCopyModeUnderlineArtifacts(sessionTarget: string): boolean {
+  const normalizedTarget = sessionTarget.trim();
+  if (normalizedTarget === '') return false;
+
+  let applied = false;
+  for (const optionName of TMUX_COPY_MODE_STYLE_OPTIONS) {
+    if (sanitizeTmuxStyleOption(normalizedTarget, optionName)) {
+      applied = true;
+    }
+  }
+  return applied;
 }
 
 export function hasCurrentTmuxClientContext(): boolean {
@@ -603,12 +654,27 @@ export function resolveTeamWorkerCliPlan(
   });
 }
 
-export function translateWorkerLaunchArgsForCli(workerCli: TeamWorkerCli, args: string[], initialPrompt?: string): string[] {
+function shouldGrantExecutionBypassForRole(workerRole?: string): boolean {
+  const normalizedRole = workerRole?.trim().toLowerCase();
+  if (!normalizedRole) return true;
+  const agent = getAgent(normalizedRole);
+  if (!agent) return true;
+  return agent.tools === 'execution';
+}
+
+export function translateWorkerLaunchArgsForCli(
+  workerCli: TeamWorkerCli,
+  args: string[],
+  initialPrompt?: string,
+  workerRole?: string,
+): string[] {
   if (workerCli === 'codex') return [...args];
   if (workerCli === 'gemini') {
     const model = extractModelOverride(args);
     const geminiModel = model && /gemini/i.test(model) ? model : null;
-    const translatedArgs = [GEMINI_APPROVAL_MODE_FLAG, GEMINI_APPROVAL_MODE_YOLO];
+    const translatedArgs = shouldGrantExecutionBypassForRole(workerRole)
+      ? [GEMINI_APPROVAL_MODE_FLAG, GEMINI_APPROVAL_MODE_YOLO]
+      : [];
     const trimmedPrompt = initialPrompt?.trim();
     if (trimmedPrompt) translatedArgs.push(GEMINI_PROMPT_INTERACTIVE_FLAG, trimmedPrompt);
     if (geminiModel) translatedArgs.push(MODEL_FLAG, geminiModel);
@@ -618,7 +684,7 @@ export function translateWorkerLaunchArgsForCli(workerCli: TeamWorkerCli, args: 
   // Claude workers must launch with exactly one permissions bypass flag.
   // All other launch args are dropped to avoid Codex-only flags and model/config overrides.
   void args;
-  return [CLAUDE_SKIP_PERMISSIONS_FLAG];
+  return shouldGrantExecutionBypassForRole(workerRole) ? [CLAUDE_SKIP_PERMISSIONS_FLAG] : [];
 }
 
 function commandExists(binary: string): boolean {
@@ -693,6 +759,7 @@ export function buildWorkerStartupCommand(
   extraEnv: Record<string, string> = {},
   workerCliOverride?: TeamWorkerCli,
   initialPrompt?: string,
+  workerRole?: string,
 ): string {
   const processSpec = buildWorkerProcessLaunchSpec(
     teamName,
@@ -702,8 +769,9 @@ export function buildWorkerStartupCommand(
     extraEnv,
     workerCliOverride,
     initialPrompt,
+    workerRole,
   );
-  const resolvedLeaderNodePath = resolveLeaderNodePath();
+  const resolvedLeaderNodePath = processSpec.env[OMX_LEADER_NODE_PATH_ENV]?.trim() || resolveLeaderNodePath();
   const leaderNodeDir = /[\\/]/.test(resolvedLeaderNodePath)
     ? resolvedLeaderNodePath.replace(/[\\/][^\\/]+$/, '')
     : '';
@@ -734,7 +802,7 @@ export function buildWorkerStartupCommand(
   const inner = `${rcPrefix}${pathPrefix}${cliInvocation}`;
   const envParts = Object.entries(processSpec.env).map(([key, value]) => `${key}=${value}`);
 
-  return `env ${envParts.map(shellQuoteSingle).join(' ')} ${shellQuoteSingle(launchSpec.shell)} -lc ${shellQuoteSingle(inner)}`;
+  return `env ${envParts.map(shellQuoteSingle).join(' ')} ${shellQuoteSingle(launchSpec.shell)} -c ${shellQuoteSingle(inner)}`;
 }
 
 export function buildWorkerProcessLaunchSpec(
@@ -745,12 +813,15 @@ export function buildWorkerProcessLaunchSpec(
   extraEnv: Record<string, string> = {},
   workerCliOverride?: TeamWorkerCli,
   initialPrompt?: string,
+  workerRole?: string,
 ): WorkerProcessLaunchSpec {
   const effectiveEnv: NodeJS.ProcessEnv = { ...process.env, ...extraEnv };
   const fullLaunchArgs = resolveWorkerLaunchArgs(launchArgs, cwd, effectiveEnv);
   const workerCli = workerCliOverride ?? resolveTeamWorkerCli(fullLaunchArgs, effectiveEnv);
-  const cliLaunchArgs = translateWorkerLaunchArgsForCli(workerCli, fullLaunchArgs, initialPrompt);
-  const effectiveCliLaunchArgs = workerCli === 'codex' && !cliLaunchArgs.includes(CODEX_BYPASS_FLAG)
+  const cliLaunchArgs = translateWorkerLaunchArgsForCli(workerCli, fullLaunchArgs, initialPrompt, workerRole);
+  const effectiveCliLaunchArgs = workerCli === 'codex'
+    && shouldGrantExecutionBypassForRole(workerRole)
+    && !cliLaunchArgs.includes(CODEX_BYPASS_FLAG)
     ? [...cliLaunchArgs, CODEX_BYPASS_FLAG]
     : cliLaunchArgs;
   const workerCodexHomeOverride = typeof effectiveEnv.CODEX_HOME === 'string'
@@ -764,10 +835,11 @@ export function buildWorkerProcessLaunchSpec(
   const platformSpec = isNativeWindows()
     ? buildPlatformCommandSpec(workerCli, effectiveCliLaunchArgs, process.platform, effectiveEnv)
     : { command: resolvedCliPath, args: effectiveCliLaunchArgs };
+  const resolvedLauncherPath = platformSpec.resolvedPath || resolvedCliPath;
   const workerEnv: Record<string, string> = {
     OMX_TEAM_WORKER: `${teamName}/worker-${workerIndex}`,
     [OMX_LEADER_NODE_PATH_ENV]: resolveLeaderNodePath(),
-    [OMX_LEADER_CLI_PATH_ENV]: resolvedCliPath,
+    [OMX_LEADER_CLI_PATH_ENV]: resolvedLauncherPath,
     ...(workerCli === 'codex'
       ? readActiveProviderEnvOverrides(
           effectiveEnv,
@@ -850,6 +922,7 @@ export function createTeamSession(
     initialPrompt?: string;
     launchArgs?: string[];
     workerCli?: TeamWorkerCli;
+    workerRole?: string;
   }> = [],
 ): TeamSession {
   if (!isTmuxAvailable()) {
@@ -915,6 +988,7 @@ export function createTeamSession(
         workerEnv,
         workerCliPlan[i - 1],
         startup.initialPrompt,
+        startup.workerRole,
       );
       // First split creates the right side from leader. Remaining splits stack on the right.
       const splitDirection = i === 1 ? '-h' : '-v';
@@ -1121,6 +1195,10 @@ export function enableMouseScrolling(sessionTarget: string): boolean {
   // Enable OSC 52 so copy-selection-and-cancel propagates selected text to
   // the terminal's clipboard without requiring xclip or pbcopy. (closes #206)
   runTmux(['set-option', '-t', sessionTarget, 'set-clipboard', 'on']);
+
+  // Mouse selection enters tmux copy-mode. Keep the mitigation session-scoped
+  // so OMX does not mutate users' global tmux style defaults. (issue #1448)
+  mitigateCopyModeUnderlineArtifacts(sessionTarget);
 
   return true;
 }
@@ -1565,6 +1643,19 @@ export function isWorkerAlive(sessionName: string, workerIndex: number, workerPa
   }
 }
 
+export function isWorkerPaneOpen(sessionName: string, workerIndex: number, workerPaneId?: string): boolean {
+  const result = runTmux([
+    'list-panes',
+    '-t', paneTarget(sessionName, workerIndex, workerPaneId),
+    '-F',
+    '#{pane_dead}',
+  ]);
+  if (!result.ok) return false;
+  const line = result.stdout.split('\n')[0]?.trim();
+  if (!line) return false;
+  return line !== '1';
+}
+
 // Kill a specific worker: send C-c, then C-d, then kill-pane if still alive.
 // leaderPaneId: when provided, the kill is skipped entirely if workerPaneId matches it.
 export async function killWorker(sessionName: string, workerIndex: number, workerPaneId?: string, leaderPaneId?: string): Promise<void> {
@@ -1619,6 +1710,12 @@ export interface PaneTeardownOptions {
   graceMs?: number;
 }
 
+export interface SharedSessionShutdownTopology {
+  livePaneIds: string[];
+  leaderPaneId: string | null;
+  hudPaneIds: string[];
+}
+
 function normalizePaneTarget(value: string | null | undefined): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
@@ -1656,6 +1753,39 @@ function normalizePaneTargets(
   }
 
   return { killablePaneIds, excluded };
+}
+
+export function resolveSharedSessionShutdownTopology(
+  sessionName: string,
+  preferredLeaderPaneId?: string | null,
+): SharedSessionShutdownTopology {
+  const panes = listPanes(sessionName);
+  const livePaneIds = panes
+    .map((pane) => normalizePaneTarget(pane.paneId))
+    .filter((paneId): paneId is string => Boolean(paneId));
+  const fallbackLeaderPaneId = normalizePaneTarget(preferredLeaderPaneId);
+  if (panes.length === 0) {
+    return {
+      livePaneIds,
+      leaderPaneId: fallbackLeaderPaneId,
+      hudPaneIds: [],
+    };
+  }
+
+  const resolvedLeaderPaneId = normalizePaneTarget(
+    chooseTeamLeaderPaneId(panes, fallbackLeaderPaneId ?? ''),
+  ) ?? fallbackLeaderPaneId;
+  const hudPaneIds = panes
+    .filter((pane) => pane.paneId !== resolvedLeaderPaneId)
+    .filter((pane) => isHudWatchPane(pane))
+    .map((pane) => pane.paneId)
+    .filter((paneId) => paneId.startsWith('%'));
+
+  return {
+    livePaneIds,
+    leaderPaneId: resolvedLeaderPaneId,
+    hudPaneIds,
+  };
 }
 
 /**

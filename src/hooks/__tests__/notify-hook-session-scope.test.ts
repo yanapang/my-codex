@@ -191,6 +191,41 @@ describe('notify-hook session-scoped iteration updates', () => {
     }
   });
 
+  it('prefers the canonical OMX session scope over a different native payload session id for notify sidefiles', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-notify-canonical-session-'));
+    try {
+      const stateDir = join(wd, '.omx', 'state');
+      const canonicalSessionId = 'omx-canonical-session';
+      const nativeSessionId = 'codex-native-session';
+      const canonicalDir = join(stateDir, 'sessions', canonicalSessionId);
+      await mkdir(canonicalDir, { recursive: true });
+      await writeFile(join(stateDir, 'session.json'), JSON.stringify({
+        session_id: canonicalSessionId,
+        native_session_id: nativeSessionId,
+        started_at: new Date().toISOString(),
+        cwd: wd,
+      }));
+
+      const result = runNotifyHook({
+        cwd: wd,
+        session_id: nativeSessionId,
+        type: 'agent-turn-complete',
+        thread_id: 'th-canonical',
+        turn_id: 'tu-canonical',
+        input_messages: [],
+        last_assistant_message: 'ok',
+      });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+
+      assert.equal(existsSync(join(canonicalDir, 'hud-state.json')), true);
+      assert.equal(existsSync(join(canonicalDir, 'notify-hook-state.json')), true);
+      assert.equal(existsSync(join(stateDir, 'sessions', nativeSessionId, 'hud-state.json')), false);
+      assert.equal(existsSync(join(stateDir, 'sessions', nativeSessionId, 'notify-hook-state.json')), false);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it('persists visual-verdict feedback from runtime assistant output', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-notify-visual-'));
     try {

@@ -67,6 +67,26 @@ function withoutTeamTestWorkerEnv<T>(fn: () => T): T {
   }
 }
 
+function withMockPromptModeCodexAllowed<T>(fn: () => T): T {
+  const previous = process.env.OMX_TEST_ALLOW_NONTTY_CODEX_PROMPT;
+  process.env.OMX_TEST_ALLOW_NONTTY_CODEX_PROMPT = '1';
+  let restoreImmediately = true;
+  const restore = () => {
+    if (typeof previous === 'string') process.env.OMX_TEST_ALLOW_NONTTY_CODEX_PROMPT = previous;
+    else delete process.env.OMX_TEST_ALLOW_NONTTY_CODEX_PROMPT;
+  };
+  try {
+    const result = fn();
+    if (result instanceof Promise) {
+      restoreImmediately = false;
+      return result.finally(restore) as T;
+    }
+    return result;
+  } finally {
+    if (restoreImmediately) restore();
+  }
+}
+
 async function runNodeCli(
   args: string[],
   options: {
@@ -266,6 +286,52 @@ describe('teamCommand shutdown --force parsing', () => {
     const teamArgs = ['shutdown', '--force', 'my-team'];
     const force = teamArgs.includes('--force');
     assert.equal(force, true);
+  });
+
+  it('persists cancelled team mode state on shutdown even when no team mode state existed beforehand', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-team-shutdown-mode-state-'));
+    const previousCwd = process.cwd();
+    const originalLog = console.log;
+    const originalWarn = console.warn;
+    const logs: string[] = [];
+    const warns: string[] = [];
+
+    try {
+      process.chdir(wd);
+      await mkdir(join(wd, '.omx', 'state'), { recursive: true });
+      await writeFile(
+        join(wd, '.omx', 'state', 'session.json'),
+        JSON.stringify({ session_id: 'sess-team-shutdown-state' }),
+      );
+      await initTeamState(
+        'team-shutdown-mode-state',
+        'persist cancelled team mode state after shutdown',
+        'executor',
+        1,
+        wd,
+      );
+
+      console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
+      console.warn = (...args: unknown[]) => warns.push(args.map(String).join(' '));
+
+      await teamCommand(['shutdown', 'team-shutdown-mode-state', '--force']);
+
+      const state = await readModeState('team', wd);
+      assert.ok(state);
+      assert.equal(state?.active, false);
+      assert.equal(state?.current_phase, 'cancelled');
+      assert.equal(state?.team_name, 'team-shutdown-mode-state');
+      assert.equal(warns.length, 0);
+      assert.ok(
+        logs.some((line) =>
+          line.includes('Team shutdown complete: team-shutdown-mode-state')),
+      );
+    } finally {
+      console.log = originalLog;
+      console.warn = originalWarn;
+      process.chdir(previousCwd);
+      await rm(wd, { recursive: true, force: true });
+    }
   });
 
   it('parses --confirm-issues from shutdown args', () => {
@@ -1756,7 +1822,8 @@ process.on('SIGTERM', () => process.exit(0));
         return true;
       }) as typeof process.stderr.write;
 
-      await withoutTeamTestWorkerEnv(() => teamCommand(['1:executor', teamTask]));
+      await withMockPromptModeCodexAllowed(() =>
+        withoutTeamTestWorkerEnv(() => teamCommand(['1:executor', teamTask])));
       await new Promise((resolve) => setTimeout(resolve, 500));
 
       logs.length = 0;
@@ -1822,7 +1889,8 @@ process.on('SIGTERM', () => process.exit(0));
       process.env.OMX_TEAM_WORKER_LAUNCH_MODE = 'prompt';
       process.env.OMX_TEAM_WORKER_CLI = 'codex';
 
-      await withoutTeamTestWorkerEnv(() => teamCommand(['1:executor', teamTask]));
+      await withMockPromptModeCodexAllowed(() =>
+        withoutTeamTestWorkerEnv(() => teamCommand(['1:executor', teamTask])));
 
       const startedState = await readModeState('team', wd);
       assert.equal(startedState?.active, true);
@@ -1882,7 +1950,8 @@ process.on('SIGTERM', () => process.exit(0));
       process.env.OMX_TEAM_WORKER_LAUNCH_MODE = 'prompt';
       process.env.OMX_TEAM_WORKER_CLI = 'codex';
 
-      await withoutTeamTestWorkerEnv(() => teamCommand(['1:executor', teamTask]));
+      await withMockPromptModeCodexAllowed(() =>
+        withoutTeamTestWorkerEnv(() => teamCommand(['1:executor', teamTask])));
       await writeFile(
         join(wd, '.omx', 'state', 'team', teamName, 'phase.json'),
         JSON.stringify({

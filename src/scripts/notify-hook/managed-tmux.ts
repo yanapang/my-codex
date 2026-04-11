@@ -56,6 +56,10 @@ export function resolveInvocationSessionId(payload: any): string {
   ).trim();
 }
 
+function readNativeSessionId(sessionState: { native_session_id?: unknown; codex_session_id?: unknown }): string {
+  return safeString(sessionState.native_session_id || sessionState.codex_session_id || '').trim();
+}
+
 function readCurrentTmuxSessionName(): string {
   if (!process.env.TMUX) return '';
   try {
@@ -138,20 +142,25 @@ export async function resolveManagedSessionContext(cwd: string, payload: any, { 
     if (resolvePath(safeString(sessionState.cwd || cwd)) !== resolvePath(cwd)) {
       return { managed: false, reason: 'cwd_mismatch', invocationSessionId, sessionState, expectedTmuxSessionName: '', currentTmuxSessionName: '' };
     }
-    if (safeString(sessionState.session_id).trim() !== invocationSessionId) {
+    const canonicalSessionId = safeString(sessionState.session_id).trim();
+    const nativeSessionId = readNativeSessionId(sessionState);
+    const allowedInvocationIds = new Set([canonicalSessionId, nativeSessionId].filter(Boolean));
+    if (!allowedInvocationIds.has(invocationSessionId)) {
       return { managed: false, reason: 'session_id_mismatch', invocationSessionId, sessionState, expectedTmuxSessionName: '', currentTmuxSessionName: '' };
     }
     if (isSessionStale(sessionState)) {
       return { managed: false, reason: 'stale_session', invocationSessionId, sessionState, expectedTmuxSessionName: '', currentTmuxSessionName: '' };
     }
 
-    const expectedTmuxSessionName = buildExpectedManagedTmuxSessionName(cwd, invocationSessionId);
+    const expectedTmuxSessionName = buildExpectedManagedTmuxSessionName(cwd, canonicalSessionId || invocationSessionId);
     const currentTmuxSessionName = readCurrentTmuxSessionName();
     if (currentTmuxSessionName && currentTmuxSessionName === expectedTmuxSessionName) {
       return {
         managed: true,
         reason: 'tmux_session_match',
         invocationSessionId,
+        canonicalSessionId,
+        nativeSessionId,
         sessionState,
         expectedTmuxSessionName,
         currentTmuxSessionName,
@@ -163,6 +172,8 @@ export async function resolveManagedSessionContext(cwd: string, payload: any, { 
         managed: true,
         reason: currentTmuxSessionName ? 'pid_ancestry_match_tmux_mismatch' : 'pid_ancestry_match',
         invocationSessionId,
+        canonicalSessionId,
+        nativeSessionId,
         sessionState,
         expectedTmuxSessionName,
         currentTmuxSessionName: '',
@@ -173,6 +184,8 @@ export async function resolveManagedSessionContext(cwd: string, payload: any, { 
       managed: false,
       reason: currentTmuxSessionName ? 'tmux_session_mismatch' : 'pid_ancestry_mismatch',
       invocationSessionId,
+      canonicalSessionId,
+      nativeSessionId,
       sessionState,
       expectedTmuxSessionName,
       currentTmuxSessionName,

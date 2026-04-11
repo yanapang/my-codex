@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { shouldAutoStartMcpServer, type McpServerName } from '../bootstrap.js';
+import { isParentProcessAlive, shouldAutoStartMcpServer, type McpServerName } from '../bootstrap.js';
 
 const ALL_SERVERS: readonly McpServerName[] = [
   'state',
@@ -51,6 +51,30 @@ describe('mcp bootstrap auto-start guard', () => {
   });
 });
 
+describe('mcp parent watchdog liveness checks', () => {
+  it('treats missing or root-like parent pids as gone', () => {
+    assert.equal(isParentProcessAlive(0, () => true), false);
+    assert.equal(isParentProcessAlive(1, () => true), false);
+    assert.equal(isParentProcessAlive(Number.NaN, () => true), false);
+  });
+
+  it('treats kill(0) success as parent alive', () => {
+    assert.equal(isParentProcessAlive(42, () => true), true);
+  });
+
+  it('treats ESRCH as parent gone and EPERM as still alive', () => {
+    const missing = Object.assign(new Error('missing'), { code: 'ESRCH' });
+    const denied = Object.assign(new Error('denied'), { code: 'EPERM' });
+
+    assert.equal(isParentProcessAlive(42, () => {
+      throw missing;
+    }), false);
+    assert.equal(isParentProcessAlive(42, () => {
+      throw denied;
+    }), true);
+  });
+});
+
 describe('mcp shared stdio lifecycle contract', () => {
   it('keeps shared stdio lifecycle wiring in bootstrap', async () => {
     const src = await readFile(join(process.cwd(), 'src/mcp/bootstrap.ts'), 'utf8');
@@ -58,6 +82,9 @@ describe('mcp shared stdio lifecycle contract', () => {
     assert.match(src, /StdioServerTransport/, 'bootstrap should own stdio transport creation');
     assert.match(src, /server\.connect\(/, 'bootstrap should own MCP server connection');
     assert.match(src, /stdin/i, 'bootstrap should react to stdin/client disconnect');
+    assert.match(src, /parent_gone/, 'bootstrap should watch for the parent process disappearing');
+    assert.match(src, /isParentProcessAlive\(trackedParentPid\)/, 'bootstrap should probe parent liveness directly');
+    assert.match(src, /process\.exit\(0\)/, 'bootstrap should force child exit after shutdown completes');
     assert.match(src, /SIGTERM/, 'bootstrap should handle SIGTERM');
     assert.match(src, /SIGINT/, 'bootstrap should handle SIGINT');
   });

@@ -48,6 +48,7 @@ import {
   waitForWorkerReady,
   paneIsBootstrapping,
   dismissTrustPromptIfPresent,
+  mitigateCopyModeUnderlineArtifacts,
 } from '../tmux-session.js';
 import { HUD_RESIZE_RECONCILE_DELAY_SECONDS, HUD_TMUX_TEAM_HEIGHT_LINES } from '../../hud/constants.js';
 import * as tmuxSessionModule from '../tmux-session.js';
@@ -714,7 +715,7 @@ describe('buildWorkerStartupCommand', () => {
     }
   });
 
-  it('uses zsh with ~/.zshrc and exec codex', () => {
+  it('uses zsh with ~/.zshrc and non-login shell exec semantics', () => {
     const prevShell = process.env.SHELL;
     process.env.SHELL = '/bin/zsh';
     const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
@@ -724,9 +725,30 @@ describe('buildWorkerStartupCommand', () => {
         buildWorkerStartupCommand('alpha', 2),
       );
       assert.match(cmd, /OMX_TEAM_WORKER=alpha\/worker-2/);
-      assert.match(cmd, /'\/bin\/zsh' -lc/);
+      assert.match(cmd, /'\/bin\/zsh' -c/);
+      assert.doesNotMatch(cmd, /'\/bin\/zsh' -lc\b/);
       assert.match(cmd, /source ~\/\.zshrc/);
       assert.match(cmd, /exec .*codex/);
+    } finally {
+      if (typeof prevShell === 'string') process.env.SHELL = prevShell;
+      else delete process.env.SHELL;
+      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
+      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+    }
+  });
+
+  it('accepts Homebrew zsh as a supported worker shell without falling back', () => {
+    const prevShell = process.env.SHELL;
+    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+    process.env.SHELL = '/opt/homebrew/bin/zsh';
+    process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
+    try {
+      const cmd = withMockedExistsSync((candidate) => candidate === '/opt/homebrew/bin/zsh', () =>
+        buildWorkerStartupCommand('alpha', 2),
+      );
+      assert.match(cmd, /'\/opt\/homebrew\/bin\/zsh' -c/);
+      assert.doesNotMatch(cmd, /'\/bin\/sh' -c/);
+      assert.match(cmd, /source ~\/\.zshrc/);
     } finally {
       if (typeof prevShell === 'string') process.env.SHELL = prevShell;
       else delete process.env.SHELL;
@@ -1161,6 +1183,74 @@ describe('buildWorkerStartupCommand', () => {
     }
   });
 
+  it('uses the resolved node-hosted Codex launcher in native Windows startup commands', async () => {
+    const fakeRoot = await mkdtemp(join(tmpdir(), 'omx-worker-startup-win32-node-hosted-'));
+    const fakeBin = join(fakeRoot, 'node_modules', '.bin');
+    const prevPath = process.env.PATH;
+    const prevPathext = process.env.PATHEXT;
+    const prevShell = process.env.SHELL;
+    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+    const prevLeaderNodePath = process.env.OMX_LEADER_NODE_PATH;
+    const prevMsystem = process.env.MSYSTEM;
+    const prevOstype = process.env.OSTYPE;
+    const prevWsl = process.env.WSL_DISTRO_NAME;
+    const prevWslInterop = process.env.WSL_INTEROP;
+    const origPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+    process.env.PATH = fakeBin;
+    process.env.PATHEXT = '.CMD;.PS1';
+    process.env.SHELL = '/bin/zsh';
+    process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
+    process.env.OMX_LEADER_NODE_PATH = 'C:\\Program Files\\nodejs\\node.exe';
+    delete process.env.MSYSTEM;
+    delete process.env.OSTYPE;
+    delete process.env.WSL_DISTRO_NAME;
+    delete process.env.WSL_INTEROP;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    try {
+      const codexCmdPath = join(fakeBin, 'codex.cmd');
+      const codexJsPath = join(fakeRoot, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+      await mkdir(fakeBin, { recursive: true });
+      await mkdir(join(fakeRoot, 'node_modules', '@openai', 'codex', 'bin'), { recursive: true });
+      await writeFile(codexCmdPath, '@echo off\r\n');
+      await writeFile(codexJsPath, '');
+
+      const cmd = buildWorkerStartupCommand('alpha', 1, ['--model', 'gpt-5'], 'C:\\repo');
+      const prefix = 'powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -EncodedCommand ';
+      assert.ok(cmd.startsWith(prefix));
+
+      const decoded = Buffer.from(cmd.slice(prefix.length), 'base64').toString('utf16le');
+      assert.match(decoded, new RegExp(escapeRegExp(`$env:OMX_LEADER_CLI_PATH = '${codexJsPath}'`)));
+      assert.match(
+        decoded,
+        new RegExp(
+          escapeRegExp(`& '${process.execPath}' '${codexJsPath}' '--model' 'gpt-5' '--dangerously-bypass-approvals-and-sandbox'`),
+        ),
+      );
+      assert.doesNotMatch(decoded, new RegExp(escapeRegExp(codexCmdPath)));
+    } finally {
+      if (origPlatform) Object.defineProperty(process, 'platform', origPlatform);
+      if (typeof prevPath === 'string') process.env.PATH = prevPath;
+      else delete process.env.PATH;
+      if (typeof prevPathext === 'string') process.env.PATHEXT = prevPathext;
+      else delete process.env.PATHEXT;
+      if (typeof prevShell === 'string') process.env.SHELL = prevShell;
+      else delete process.env.SHELL;
+      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
+      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+      if (typeof prevLeaderNodePath === 'string') process.env.OMX_LEADER_NODE_PATH = prevLeaderNodePath;
+      else delete process.env.OMX_LEADER_NODE_PATH;
+      if (typeof prevMsystem === 'string') process.env.MSYSTEM = prevMsystem;
+      else delete process.env.MSYSTEM;
+      if (typeof prevOstype === 'string') process.env.OSTYPE = prevOstype;
+      else delete process.env.OSTYPE;
+      if (typeof prevWsl === 'string') process.env.WSL_DISTRO_NAME = prevWsl;
+      else delete process.env.WSL_DISTRO_NAME;
+      if (typeof prevWslInterop === 'string') process.env.WSL_INTEROP = prevWslInterop;
+      else delete process.env.WSL_INTEROP;
+      await rm(fakeRoot, { recursive: true, force: true });
+    }
+  });
+
   it('falls back to bash when SHELL is unsupported and zsh candidates are unavailable', () => {
     const prevShell = process.env.SHELL;
     const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
@@ -1190,7 +1280,8 @@ describe('buildWorkerStartupCommand', () => {
       const cmd = withMockedExistsSync((candidate) => candidate === '/opt/custom/fish', () =>
         buildWorkerStartupCommand('alpha', 1, [], process.cwd()),
       );
-      assert.match(cmd, /'\/bin\/sh' -lc\b/, 'must launch workers through /bin/sh when no supported shells exist');
+      assert.match(cmd, /'\/bin\/sh' -c\b/, 'must launch workers through /bin/sh when no supported shells exist');
+      assert.doesNotMatch(cmd, /'\/bin\/sh' -lc\b/);
       assert.doesNotMatch(cmd, /\.zshrc|\.bashrc/, 'must not source zsh/bash rc files for /bin/sh fallback');
     } finally {
       if (typeof prevShell === 'string') process.env.SHELL = prevShell;
@@ -1231,6 +1322,13 @@ describe('team worker CLI helpers', () => {
     );
   });
 
+  it('translateWorkerLaunchArgsForCli keeps read-only claude roles out of skip-permissions mode', () => {
+    assert.deepEqual(
+      translateWorkerLaunchArgsForCli('claude', ['--model', 'claude-3-7-sonnet'], undefined, 'architect'),
+      [],
+    );
+  });
+
   it('translateWorkerLaunchArgsForCli emits gemini approval-mode by default and adds -i when initial prompt is provided', () => {
     assert.deepEqual(
       translateWorkerLaunchArgsForCli('gemini', ['--model', 'gemini-2.0-pro', '--json']),
@@ -1254,6 +1352,13 @@ describe('team worker CLI helpers', () => {
     assert.deepEqual(
       translateWorkerLaunchArgsForCli('gemini', ['--model', 'gpt-5.3-codex-spark'], 'Read worker inbox'),
       ['--approval-mode', 'yolo', '-i', 'Read worker inbox'],
+    );
+  });
+
+  it('translateWorkerLaunchArgsForCli keeps planning/read-only gemini roles out of yolo mode', () => {
+    assert.deepEqual(
+      translateWorkerLaunchArgsForCli('gemini', ['--model', 'gemini-2.0-pro'], 'Read worker inbox', 'planner'),
+      ['-i', 'Read worker inbox', '--model', 'gemini-2.0-pro'],
     );
   });
 
@@ -1392,6 +1497,27 @@ describe('team worker launch mode helpers', () => {
     }
   });
 
+  it('buildWorkerProcessLaunchSpec does not force codex bypass for read-only roles', () => {
+    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+    process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
+    try {
+      const spec = buildWorkerProcessLaunchSpec(
+        'alpha-team',
+        2,
+        ['--model', 'gpt-5.3-codex-spark'],
+        '/tmp/workspace',
+        { OMX_TEAM_STATE_ROOT: '/tmp/workspace/.omx/state' },
+        'codex',
+        undefined,
+        'explore',
+      );
+      assert.deepEqual(spec.args, ['--model', 'gpt-5.3-codex-spark']);
+    } finally {
+      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
+      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+    }
+  });
+
   it('buildWorkerProcessLaunchSpec includes leader node and CLI path env vars', () => {
     const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
     process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
@@ -1474,6 +1600,66 @@ describe('team worker launch mode helpers', () => {
       if (typeof prevWslInterop === 'string') process.env.WSL_INTEROP = prevWslInterop;
       else delete process.env.WSL_INTEROP;
       await rm(fakeBin, { recursive: true, force: true });
+    }
+  });
+
+  it('buildWorkerProcessLaunchSpec records the resolved node-hosted Codex launcher on native Windows', async () => {
+    const fakeRoot = await mkdtemp(join(tmpdir(), 'omx-worker-spec-win32-node-hosted-'));
+    const fakeBin = join(fakeRoot, 'node_modules', '.bin');
+    const prevPath = process.env.PATH;
+    const prevPathext = process.env.PATHEXT;
+    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+    const prevMsystem = process.env.MSYSTEM;
+    const prevOstype = process.env.OSTYPE;
+    const prevWsl = process.env.WSL_DISTRO_NAME;
+    const prevWslInterop = process.env.WSL_INTEROP;
+    const origPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+    process.env.PATH = fakeBin;
+    process.env.PATHEXT = '.CMD;.PS1';
+    process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
+    delete process.env.MSYSTEM;
+    delete process.env.OSTYPE;
+    delete process.env.WSL_DISTRO_NAME;
+    delete process.env.WSL_INTEROP;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    try {
+      const codexCmdPath = join(fakeBin, 'codex.cmd');
+      const codexJsPath = join(fakeRoot, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+      await mkdir(fakeBin, { recursive: true });
+      await mkdir(join(fakeRoot, 'node_modules', '@openai', 'codex', 'bin'), { recursive: true });
+      await writeFile(codexCmdPath, '@echo off\r\n');
+      await writeFile(codexJsPath, '');
+
+      const spec = buildWorkerProcessLaunchSpec(
+        'beta-team',
+        1,
+        ['--model', 'gpt-5'],
+        'C:\\workspace',
+        {},
+        'codex',
+      );
+
+      assert.equal(spec.command, process.execPath);
+      assert.deepEqual(spec.args, [codexJsPath, '--model', 'gpt-5', '--dangerously-bypass-approvals-and-sandbox']);
+      assert.equal(spec.env.OMX_LEADER_CLI_PATH, codexJsPath);
+      assert.notEqual(spec.env.OMX_LEADER_CLI_PATH, codexCmdPath);
+    } finally {
+      if (origPlatform) Object.defineProperty(process, 'platform', origPlatform);
+      if (typeof prevPath === 'string') process.env.PATH = prevPath;
+      else delete process.env.PATH;
+      if (typeof prevPathext === 'string') process.env.PATHEXT = prevPathext;
+      else delete process.env.PATHEXT;
+      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
+      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+      if (typeof prevMsystem === 'string') process.env.MSYSTEM = prevMsystem;
+      else delete process.env.MSYSTEM;
+      if (typeof prevOstype === 'string') process.env.OSTYPE = prevOstype;
+      else delete process.env.OSTYPE;
+      if (typeof prevWsl === 'string') process.env.WSL_DISTRO_NAME = prevWsl;
+      else delete process.env.WSL_DISTRO_NAME;
+      if (typeof prevWslInterop === 'string') process.env.WSL_INTEROP = prevWslInterop;
+      else delete process.env.WSL_INTEROP;
+      await rm(fakeRoot, { recursive: true, force: true });
     }
   });
 
@@ -2669,6 +2855,13 @@ describe('enableMouseScrolling session scoping (issue #817)', () => {
       (tmuxLogPath) => `#!/bin/sh
 printf '%s\n' "$*" >> "${tmuxLogPath}"
 case "$1" in
+  show-options)
+    if [ "$2" = "-gv" ] && [ "$3" = "-t" ] && [ "$4" = "omx-team-x" ] && [ "$5" = "mode-style" ]; then
+      printf '%s\n' 'bg=yellow,fg=black,underscore'
+      exit 0
+    fi
+    exit 1
+    ;;
   set-option)
     if [ "$2" = "-t" ]; then
       exit 0
@@ -2685,8 +2878,58 @@ esac
         const tmuxLog = await readFile(logPath, 'utf-8');
         assert.match(tmuxLog, /set-option -t omx-team-x mouse on/);
         assert.match(tmuxLog, /set-option -t omx-team-x set-clipboard on/);
+        assert.match(
+          tmuxLog,
+          /set-option -t omx-team-x mode-style bg=yellow,fg=black,underscore,nounderscore,nodouble-underscore,nocurly-underscore,nodotted-underscore,nodashed-underscore/,
+        );
         assert.doesNotMatch(tmuxLog, /bind-key/);
         assert.doesNotMatch(tmuxLog, /terminal-overrides/);
+      },
+    );
+  });
+});
+
+describe('mitigateCopyModeUnderlineArtifacts', () => {
+  it('best-effort sanitizes copy-mode style options without requiring global tmux changes', async () => {
+    await withMockTmuxFixture(
+      'omx-tmux-sanitize-copy-style-',
+      (tmuxLogPath) => `#!/bin/sh
+printf '%s\n' "$*" >> "${tmuxLogPath}"
+case "$1" in
+  show-options)
+    if [ "$2" = "-gv" ] && [ "$3" = "-t" ] && [ "$4" = "omx-team-x" ] && [ "$5" = "mode-style" ]; then
+      printf '%s\n' 'bg=yellow,fg=black,underscore'
+      exit 0
+    fi
+    if [ "$2" = "-gv" ] && [ "$3" = "-t" ] && [ "$4" = "omx-team-x" ] && [ "$5" = "copy-mode-selection-style" ]; then
+      printf '%s\n' 'fg=white,bg=blue,curly-underscore'
+      exit 0
+    fi
+    exit 1
+    ;;
+  set-option)
+    if [ "$2" = "-t" ]; then
+      exit 0
+    fi
+    exit 1
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`,
+      async ({ logPath }) => {
+        assert.equal(mitigateCopyModeUnderlineArtifacts('omx-team-x'), true);
+        const tmuxLog = await readFile(logPath, 'utf-8');
+        assert.match(
+          tmuxLog,
+          /set-option -t omx-team-x mode-style bg=yellow,fg=black,underscore,nounderscore,nodouble-underscore,nocurly-underscore,nodotted-underscore,nodashed-underscore/,
+        );
+        assert.match(
+          tmuxLog,
+          /set-option -t omx-team-x copy-mode-selection-style fg=white,bg=blue,curly-underscore,nounderscore,nodouble-underscore,nocurly-underscore,nodotted-underscore,nodashed-underscore/,
+        );
+        assert.doesNotMatch(tmuxLog, /set-option -g/);
       },
     );
   });

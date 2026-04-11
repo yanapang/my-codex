@@ -28,6 +28,7 @@ import {
   resolveSetupScopeArg,
   readPersistedSetupPreferences,
   readPersistedSetupScope,
+  resolveCodexConfigPathForLaunch,
   resolveCodexHomeForLaunch,
   buildDetachedSessionBootstrapSteps,
   buildDetachedTmuxSessionName,
@@ -1027,6 +1028,23 @@ describe("project launch scope helpers", () => {
     }
   });
 
+  it("uses project config.toml for launch repair when persisted scope is project", async () => {
+    const wd = await mkdtemp(join(tmpdir(), "omx-launch-scope-"));
+    try {
+      await mkdir(join(wd, ".omx"), { recursive: true });
+      await writeFile(
+        join(wd, ".omx", "setup-scope.json"),
+        JSON.stringify({ scope: "project" }),
+      );
+      assert.equal(
+        resolveCodexConfigPathForLaunch(wd, {}),
+        join(wd, ".codex", "config.toml"),
+      );
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it("keeps explicit CODEX_HOME override from env", async () => {
     const wd = await mkdtemp(join(tmpdir(), "omx-launch-scope-"));
     try {
@@ -1040,6 +1058,25 @@ describe("project launch scope helpers", () => {
           CODEX_HOME: "/tmp/explicit-codex-home",
         }),
         "/tmp/explicit-codex-home",
+      );
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it("uses explicit CODEX_HOME config.toml for launch repair overrides", async () => {
+    const wd = await mkdtemp(join(tmpdir(), "omx-launch-scope-"));
+    try {
+      await mkdir(join(wd, ".omx"), { recursive: true });
+      await writeFile(
+        join(wd, ".omx", "setup-scope.json"),
+        JSON.stringify({ scope: "project" }),
+      );
+      assert.equal(
+        resolveCodexConfigPathForLaunch(wd, {
+          CODEX_HOME: "/tmp/explicit-codex-home",
+        }),
+        "/tmp/explicit-codex-home/config.toml",
       );
     } finally {
       await rm(wd, { recursive: true, force: true });
@@ -1382,7 +1419,7 @@ describe("detached tmux new-session sequencing", () => {
     assert.match(leaderCmd!, /exit \$status/);
   });
 
-  it("detached leader command executes codex and cleanup without shell-quote breakage", async () => {
+  it("detached leader command preserves cwd and cleanup without shell-quote breakage", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-detached-leader-"));
     const fakeBin = join(cwd, "bin");
     const logPath = join(cwd, "leader.log");
@@ -1393,10 +1430,12 @@ describe("detached tmux new-session sequencing", () => {
         join(fakeBin, "codex"),
         `#!/bin/sh
 printf 'codex:%s\\n' "$*" >> "${logPath}"
+printf 'codex-pwd:%s\\n' "$(pwd)" >> "${logPath}"
 exit 0
 `,
       );
       await chmod(join(fakeBin, "codex"), 0o755);
+      await writeFile(join(cwd, ".profile"), "cd ..\n");
       await writeFile(
         join(fakeBin, "tmux"),
         `#!/bin/sh
@@ -1434,7 +1473,7 @@ exit 0
       const leaderCmd = steps[0]?.args.at(-1);
       assert.equal(typeof leaderCmd, "string");
 
-      execFileSync("/bin/sh", ["-lc", leaderCmd!], {
+      execFileSync("/bin/sh", ["-c", leaderCmd!], {
         cwd,
         env: {
           ...process.env,
@@ -1446,6 +1485,10 @@ exit 0
 
       const log = await readFile(logPath, "utf-8");
       assert.match(log, /codex:--dangerously-bypass-approvals-and-sandbox/);
+      assert.match(
+        log,
+        new RegExp(`codex-pwd:${cwd.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+      );
       assert.match(log, /tmux:display-message -p #\{socket_path\}/);
       assert.match(log, /tmux:show-options -sv extended-keys/);
       assert.match(log, /tmux:set-option -sq extended-keys always/);
@@ -1691,7 +1734,26 @@ exit 0
     );
     assert.deepEqual(
       steps.map((step) => step.name),
-      ["set-mouse", "attach-session"],
+      ["set-mouse", "sanitize-copy-mode-style", "attach-session"],
+    );
+  });
+
+  it("buildDetachedSessionFinalizeSteps sanitizes copy-mode styling before attach when mouse mode is enabled", () => {
+    const steps = buildDetachedSessionFinalizeSteps(
+      "omx-demo",
+      "%12",
+      "3",
+      true,
+    );
+    assert.equal(
+      steps.findIndex((step) => step.name === "sanitize-copy-mode-style")
+      > steps.findIndex((step) => step.name === "set-mouse"),
+      true,
+    );
+    assert.equal(
+      steps.findIndex((step) => step.name === "attach-session")
+      > steps.findIndex((step) => step.name === "sanitize-copy-mode-style"),
+      true,
     );
   });
 
@@ -1777,6 +1839,23 @@ describe("buildTmuxPaneCommand", () => {
     assert.ok(!result.includes(" -lc "), "should not use a login shell");
     assert.ok(result.includes("source ~/.zshrc"), "should source .zshrc");
     assert.ok(result.includes("exec "), "should exec the command");
+  });
+
+  it("keeps Homebrew zsh instead of downgrading to /bin/sh", () => {
+    const result = buildTmuxPaneCommand(
+      "codex",
+      ["--model", "gpt-5"],
+      "/opt/homebrew/bin/zsh",
+    );
+    assert.ok(
+      result.startsWith("'/opt/homebrew/bin/zsh' -c "),
+      "should preserve Homebrew zsh when SHELL points to it",
+    );
+    assert.ok(
+      !result.startsWith("'/bin/sh' -c "),
+      "should not fall back to /bin/sh for supported Homebrew zsh",
+    );
+    assert.ok(result.includes("source ~/.zshrc"), "should source .zshrc");
   });
 
   it("wraps command with bash profile sourcing while preserving tmux cwd", () => {

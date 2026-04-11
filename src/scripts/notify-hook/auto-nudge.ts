@@ -4,11 +4,18 @@
  * automatically send a continuation prompt so the agent keeps working.
  */
 
-import { readFile, writeFile } from 'fs/promises';
-import { join } from 'path';
+import { mkdir, readFile, writeFile } from 'fs/promises';
+import { dirname, join } from 'path';
 import { homedir } from 'os';
 import { asNumber, safeString } from './utils.js';
-import { readJsonIfExists, getScopedStateDirsForCurrentSession, readdir } from './state-io.js';
+import {
+  getScopedStateDirsForCurrentSession,
+  getScopedStatePath,
+  readJsonIfExists,
+  readScopedJsonIfExists,
+  readdir,
+  writeScopedJson,
+} from './state-io.js';
 import { runProcess } from './process-runner.js';
 import { logTmuxHookEvent } from './log.js';
 import { evaluatePaneInjectionReadiness, mapPaneInjectionReadinessReason, sendPaneInput } from './team-tmux-guard.js';
@@ -26,6 +33,7 @@ import {
 export const SKILL_ACTIVE_STATE_FILE = 'skill-active-state.json';
 export const DEEP_INTERVIEW_BLOCKED_APPROVAL_INPUTS = ['yes', 'y', 'proceed', 'continue', 'ok', 'sure', 'go ahead', 'next i should'];
 export const DEEP_INTERVIEW_INPUT_LOCK_MESSAGE = 'Deep interview is active; auto-approval shortcuts are blocked until the interview finishes.';
+export const DEFAULT_AUTO_NUDGE_RESPONSE = 'continue with the current task only if it is already authorized';
 const DEEP_INTERVIEW_ERROR_PATTERNS = [' error', ' failed', ' failure', ' exception', 'unable to continue', 'cannot continue', 'could not continue'];
 const DEEP_INTERVIEW_ABORT_PATTERNS = ['aborted', 'cancelled', 'canceled'];
 const DEEP_INTERVIEW_ABORT_INPUTS = new Set(['abort', 'cancel', 'stop']);
@@ -171,29 +179,30 @@ export function inferSkillPhaseFromText(text, currentPhase = 'planning') {
   return normalizeSkillPhase(currentPhase);
 }
 
-async function loadSkillActiveState(stateDir) {
-  const raw = await readJsonIfExists(join(stateDir, SKILL_ACTIVE_STATE_FILE), null);
+async function loadSkillActiveState(stateDir, sessionId) {
+  const raw = await readScopedJsonIfExists(stateDir, SKILL_ACTIVE_STATE_FILE, sessionId, null);
   return normalizeSkillActiveState(raw);
 }
 
-async function persistSkillActiveState(stateDir, state) {
-  await writeFile(join(stateDir, SKILL_ACTIVE_STATE_FILE), JSON.stringify(state, null, 2)).catch(() => {});
+async function persistSkillActiveState(stateDir, sessionId, state) {
+  await writeScopedJson(stateDir, SKILL_ACTIVE_STATE_FILE, sessionId, state).catch(() => {});
 }
 
 
-export async function isDeepInterviewStateActive(stateDir) {
-  const modeState = await readJsonIfExists(join(stateDir, 'deep-interview-state.json'), null);
+export async function isDeepInterviewStateActive(stateDir, sessionId) {
+  const modeState = await readScopedJsonIfExists(stateDir, 'deep-interview-state.json', sessionId, null);
   return Boolean(modeState && modeState.active === true);
 }
 
-export async function isDeepInterviewInputLockActive(stateDir) {
-  const skillState = await loadSkillActiveState(stateDir);
+export async function isDeepInterviewInputLockActive(stateDir, sessionId) {
+  const skillState = await loadSkillActiveState(stateDir, sessionId);
   return isDeepInterviewAutoApprovalLocked(skillState);
 }
 
 export async function resolveAutoNudgeSignature(stateDir, payload, lastMessage = '') {
   const normalizedMessage = normalizeAutoNudgeSignatureText(lastMessage);
-  const hudState = await readJsonIfExists(join(stateDir, 'hud-state.json'), null);
+  const invocationSessionId = resolveInvocationSessionId(payload);
+  const hudState = await readScopedJsonIfExists(stateDir, 'hud-state.json', invocationSessionId, null);
   const hudTurnAt = safeString(hudState?.last_turn_at).trim();
   const hudTurnCount = Number.isFinite(hudState?.turn_count) ? hudState.turn_count : null;
   const hudMessage = normalizeAutoNudgeSignatureText(hudState?.last_agent_output || hudState?.last_agent_message || '');
@@ -218,68 +227,63 @@ function latestUserInputFromPayload(payload) {
 }
 
 export const DEFAULT_STALL_PATTERNS = [
-  'if you want',
-  'would you like',
-  'shall i',
-  'next i can',
   'continue with',
   'continue on',
-  'do you want me to',
-  'let me know if',
-  'do you want',
-  'want me to',
-  'let me know',
-  'just let me know',
-  'i can also',
-  'i could also',
   'pick up with',
-  'next step',
-  'next steps',
-  'ready to proceed',
-  'i\'m ready to',
   'keep going',
-  'should i',
-  'whenever you',
-  'say go',
-  'say yes',
-  'type continue',
   'and i\'ll continue',
-  'and i\'ll proceed',
   'keep driving',
   'keep pushing',
   'move forward',
   'drive forward',
-  'proceed from here',
   'i\'ll continue from',
 ];
 
 const SEMANTIC_STALL_PROMPT_PATTERNS = [
-  /\bif you want\b/g,
-  /\bwould you like\b/g,
-  /\bshall i\b/g,
-  /\bshould i\b/g,
-  /\bdo you want(?: me)? to\b/g,
-  /\bwant me to\b/g,
-  /\blet me know(?: if)?\b/g,
-  /\bjust let me know\b/g,
-  /\bi can also\b/g,
-  /\bi could also\b/g,
-  /\bnext i can\b/g,
   /\bcontinue (?:with|on)\b/g,
   /\bpick up with\b/g,
-  /\bnext steps?\b/g,
-  /\bready to proceed\b/g,
-  /\bi'?m ready to\b/g,
   /\bkeep going\b/g,
-  /\bwhenever you\b/g,
-  /\bsay (?:go|yes)\b/g,
-  /\btype continue\b/g,
-  /\band i'?ll (?:continue|proceed)\b/g,
+  /\band i'?ll continue\b/g,
   /\bkeep (?:driving|pushing)\b/g,
   /\bmove forward\b/g,
   /\bdrive forward\b/g,
-  /\bproceed from here\b/g,
   /\bi'?ll continue from\b/g,
+];
+
+const PLANNING_ONLY_STALL_PATTERNS = [
+  'plan',
+  'planning',
+  'approach',
+  'proposal',
+  'options',
+  'review',
+  'feedback',
+  'spec',
+  'design',
+  'next step',
+  'next steps',
+  'ready to proceed',
+];
+
+const PERMISSION_SEEKING_STALL_PATTERNS = [
+  'if you want',
+  'would you like',
+  'shall i',
+  'should i',
+  'do you want me to',
+  'do you want',
+  'want me to',
+  'let me know if',
+  'let me know',
+  'just let me know',
+  'i can also',
+  'i could also',
+  'next i can',
+  'whenever you',
+  'say go',
+  'say yes',
+  'type continue',
+  'proceed from here',
 ];
 
 function normalizeStallDetectionText(text) {
@@ -313,6 +317,34 @@ export function normalizeAutoNudgeSignatureText(text) {
   }
 
   return normalized;
+}
+
+function normalizePatternList(patterns) {
+  return patterns.map((pattern) => normalizeStallDetectionText(pattern)).filter(Boolean);
+}
+
+function usesDefaultStallPatterns(patterns) {
+  const normalizedPatterns = normalizePatternList(patterns);
+  const normalizedDefaults = normalizePatternList(DEFAULT_STALL_PATTERNS);
+  return normalizedPatterns.length === normalizedDefaults.length
+    && normalizedPatterns.every((pattern, index) => pattern === normalizedDefaults[index]);
+}
+
+function matchesNormalizedPatterns(normalizedText, normalizedPatterns) {
+  if (!normalizedText || normalizedPatterns.length === 0) return false;
+  const tail = normalizedText.slice(-800);
+  const lines = tail.split('\n').filter((line) => line.trim());
+  const hotZone = lines.slice(-3).join('\n');
+  if (normalizedPatterns.some((pattern) => hotZone.includes(pattern))) return true;
+  return normalizedPatterns.some((pattern) => tail.includes(pattern));
+}
+
+function looksLikePlanningOnlyContinuation(normalizedText) {
+  return matchesNormalizedPatterns(normalizedText, normalizePatternList(PLANNING_ONLY_STALL_PATTERNS));
+}
+
+function looksLikePermissionSeekingContinuation(normalizedText) {
+  return matchesNormalizedPatterns(normalizedText, normalizePatternList(PERMISSION_SEEKING_STALL_PATTERNS));
 }
 
 function summarizePaneCaptureForLog(captured, maxLines = 6) {
@@ -358,6 +390,12 @@ export function normalizeAutoNudgeConfig(raw) {
   };
 }
 
+export function resolveEffectiveAutoNudgeResponse(response) {
+  const normalized = safeString(response).trim();
+  if (!normalized) return DEFAULT_AUTO_NUDGE_RESPONSE;
+  return isBlockedAutoApprovalInput(normalized) ? DEFAULT_AUTO_NUDGE_RESPONSE : normalized;
+}
+
 export async function loadAutoNudgeConfig() {
   const codexHomePath = process.env.CODEX_HOME || join(homedir(), '.codex');
   const configPath = join(codexHomePath, '.omx-config.json');
@@ -373,16 +411,16 @@ async function localTmuxInjectionDisabled(cwd) {
   return tmuxHookExplicitlyDisablesInjection(raw);
 }
 
-export function detectStallPattern(text, patterns) {
+export function detectStallPattern(text, patterns, currentPhase = '') {
   if (!text || typeof text !== 'string') return false;
   const normalized = normalizeStallDetectionText(text);
   if (!normalized) return false;
-  const tail = normalized.slice(-800);
-  const normalizedPatterns = patterns.map((pattern) => normalizeStallDetectionText(pattern)).filter(Boolean);
-  const lines = tail.split('\n').filter((line) => line.trim());
-  const hotZone = lines.slice(-3).join('\n');
-  if (normalizedPatterns.some((pattern) => hotZone.includes(pattern))) return true;
-  return normalizedPatterns.some((pattern) => tail.includes(pattern));
+  const normalizedPatterns = normalizePatternList(patterns);
+  if (!matchesNormalizedPatterns(normalized, normalizedPatterns)) return false;
+  if (!usesDefaultStallPatterns(patterns)) return true;
+  if (looksLikePermissionSeekingContinuation(normalized)) return false;
+  if (safeString(currentPhase).trim().toLowerCase() === 'planning') return false;
+  return !looksLikePlanningOnlyContinuation(normalized);
 }
 
 export async function capturePane(paneId, lines = 10) {
@@ -426,6 +464,7 @@ export async function resolveNudgePaneTarget(stateDir: any, cwd = '', payload: a
 
 export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
   const config = await loadAutoNudgeConfig();
+  const effectiveResponse = resolveEffectiveAutoNudgeResponse(config.response);
   if (!config.enabled) return;
   if (await localTmuxInjectionDisabled(cwd)) {
     await logTmuxHookEvent(logsDir, {
@@ -450,7 +489,8 @@ export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
 
   const lastMessage = safeString(payload['last-assistant-message'] || payload.last_assistant_message || '');
   const latestUserInput = latestUserInputFromPayload(payload);
-  let skillState = await loadSkillActiveState(stateDir);
+  const invocationSessionId = resolveInvocationSessionId(payload);
+  let skillState = await loadSkillActiveState(stateDir, invocationSessionId);
   let releaseReason = null;
 
   try {
@@ -460,23 +500,23 @@ export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
       skillState.active = inferredPhase !== 'completing';
       skillState.updated_at = new Date().toISOString();
       releaseReason = inferDeepInterviewReleaseReason({ skillState, latestUserInput, lastMessage });
-      await persistSkillActiveState(stateDir, skillState);
+      await persistSkillActiveState(stateDir, invocationSessionId, skillState);
     }
 
-    const nudgeStatePath = join(stateDir, 'auto-nudge-state.json');
-    let nudgeState = await readJsonIfExists(nudgeStatePath, null);
+    const nudgeStatePath = await getScopedStatePath(stateDir, 'auto-nudge-state.json', invocationSessionId);
+    let nudgeState = await readScopedJsonIfExists(stateDir, 'auto-nudge-state.json', invocationSessionId, null);
     if (!nudgeState || typeof nudgeState !== 'object') {
       nudgeState = { nudgeCount: 0, lastNudgeAt: '', lastSignature: '', lastSemanticSignature: '' };
     }
     const paneId = await resolveNudgePaneTarget(stateDir, cwd, payload);
 
-    let detected = detectStallPattern(lastMessage, config.patterns);
+    let detected = detectStallPattern(lastMessage, config.patterns, skillState?.phase);
     let source = 'payload';
     let captured = '';
 
     if (!detected && paneId) {
       captured = await capturePane(paneId);
-      detected = detectStallPattern(captured, config.patterns);
+      detected = detectStallPattern(captured, config.patterns, skillState?.phase);
       source = 'capture-pane';
     }
 
@@ -523,6 +563,7 @@ export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
     if (!isFallbackWatcherSource && config.stallMs > 0) {
       nudgeState.pendingSignature = signature;
       nudgeState.pendingSince = new Date().toISOString();
+      await mkdir(dirname(nudgeStatePath), { recursive: true }).catch(() => {});
       await writeFile(nudgeStatePath, JSON.stringify(nudgeState, null, 2)).catch(() => {});
       await logTmuxHookEvent(logsDir, {
         timestamp: new Date().toISOString(),
@@ -556,10 +597,10 @@ export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
         timestamp: new Date().toISOString(),
         type: 'auto_nudge_blocked',
         pane_id: paneId,
-        response: config.response,
+        response: effectiveResponse,
         source,
         blocked_by: 'deep-interview-lock',
-        block_kind: isBlockedAutoApprovalInput(config.response, skillState.input_lock?.blocked_inputs)
+        block_kind: isBlockedAutoApprovalInput(effectiveResponse, skillState.input_lock?.blocked_inputs)
           ? 'blocked-auto-approval'
           : 'input-lock-active',
         message: blockedMessage,
@@ -576,7 +617,7 @@ export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
     try {
       const sendResult = await sendPaneInput({
         paneTarget: paneId,
-        prompt: `${config.response} ${DEFAULT_MARKER}`,
+        prompt: `${effectiveResponse} ${DEFAULT_MARKER}`,
         submitKeyPresses: 2,
         submitDelayMs: 100,
       });
@@ -590,20 +631,14 @@ export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
       nudgeState.lastSemanticSignature = semanticSignature;
       nudgeState.pendingSignature = '';
       nudgeState.pendingSince = '';
+      await mkdir(dirname(nudgeStatePath), { recursive: true }).catch(() => {});
       await writeFile(nudgeStatePath, JSON.stringify(nudgeState, null, 2)).catch(() => {});
-
-      if (skillState && skillState.phase === 'planning') {
-        skillState.phase = 'executing';
-        skillState.active = true;
-        skillState.updated_at = nowIso;
-        await persistSkillActiveState(stateDir, skillState);
-      }
 
       await logTmuxHookEvent(logsDir, {
         timestamp: nowIso,
         type: 'auto_nudge',
         pane_id: paneId,
-        response: config.response,
+        response: effectiveResponse,
         source,
         nudge_count: nudgeState.nudgeCount,
       });
@@ -618,7 +653,7 @@ export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
   } finally {
     if (releaseReason && skillState && isDeepInterviewAutoApprovalLocked(skillState)) {
       releaseDeepInterviewInputLock(skillState, releaseReason, new Date().toISOString());
-      await persistSkillActiveState(stateDir, skillState).catch(() => {});
+      await persistSkillActiveState(stateDir, invocationSessionId, skillState).catch(() => {});
     }
   }
 }

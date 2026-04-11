@@ -10,6 +10,8 @@ import { initTeamState, enqueueDispatchRequest, readDispatchRequest } from '../.
 import { buildWindowsMsysBackgroundHelperBootstrapScript } from '../../cli/index.js';
 import { writeSessionStart } from '../session.js';
 
+const DEFAULT_AUTO_NUDGE_RESPONSE = 'continue with the current task only if it is already authorized';
+
 async function appendLine(path: string, line: object): Promise<void> {
   const prev = await readFile(path, 'utf-8');
   const content = prev + `${JSON.stringify(line)}\n`;
@@ -40,6 +42,97 @@ async function readJsonLines(path: string): Promise<Array<Record<string, unknown
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+async function writeCanonicalWatcherTeamFixture(
+  wd: string,
+  {
+    teamName = 'dispatch-team',
+    sessionId = 'sess-current',
+    ownerSessionId = sessionId,
+    coarseState = 'missing',
+    terminal = false,
+  }: {
+    teamName?: string;
+    sessionId?: string;
+    ownerSessionId?: string;
+    coarseState?: 'missing' | 'inactive' | 'active';
+    terminal?: boolean;
+  } = {},
+): Promise<void> {
+  const stateDir = join(wd, '.omx', 'state');
+  const teamDir = join(stateDir, 'team', teamName);
+  const nowIso = new Date().toISOString();
+
+  await mkdir(join(wd, '.omx', 'logs'), { recursive: true });
+  await mkdir(join(teamDir, 'workers'), { recursive: true });
+  await writeFile(join(stateDir, 'session.json'), JSON.stringify({ session_id: sessionId }, null, 2));
+  if (coarseState !== 'missing') {
+    await writeFile(join(stateDir, 'team-state.json'), JSON.stringify({
+      active: coarseState === 'active',
+      team_name: teamName,
+      current_phase: terminal ? 'complete' : 'team-exec',
+      ...(terminal ? { completed_at: nowIso } : {}),
+    }, null, 2));
+  }
+  await writeFile(join(stateDir, 'hud-state.json'), JSON.stringify({
+    last_turn_at: new Date(Date.now() - 300_000).toISOString(),
+    turn_count: 3,
+  }, null, 2));
+  const manifest = {
+    schema_version: 2,
+    name: teamName,
+    task: 'canonical watcher fallback repro',
+    leader: {
+      session_id: ownerSessionId,
+      worker_id: 'leader-fixed',
+      role: 'coordinator',
+    },
+    policy: {
+      worker_launch_mode: 'interactive',
+      display_mode: 'split_pane',
+      dispatch_mode: 'hook_preferred_with_fallback',
+      dispatch_ack_timeout_ms: 2000,
+    },
+    governance: {
+      delegation_only: false,
+      plan_approval_required: false,
+      nested_teams_allowed: false,
+      one_team_per_leader_session: true,
+      cleanup_requires_all_workers_inactive: true,
+    },
+    lifecycle_profile: 'default',
+    permissions_snapshot: {
+      approval_mode: 'never',
+      sandbox_mode: 'danger-full-access',
+      network_access: true,
+    },
+    tmux_session: `${teamName}:0`,
+    leader_pane_id: '%42',
+    hud_pane_id: null,
+    resize_hook_name: null,
+    resize_hook_target: null,
+    worker_count: 1,
+    next_task_id: 1,
+    workers: [
+      { name: 'worker-1', index: 1, pane_id: '%42', role: 'executor' },
+    ],
+    created_at: nowIso,
+  };
+  await writeFile(join(teamDir, 'manifest.v2.json'), JSON.stringify(manifest, null, 2));
+  await writeFile(join(teamDir, 'config.json'), JSON.stringify({
+    name: teamName,
+    tmux_session: `${teamName}:0`,
+    leader_pane_id: '%42',
+    workers: [
+      { name: 'worker-1', pane_id: '%42' },
+    ],
+  }, null, 2));
+  await writeFile(join(teamDir, 'phase.json'), JSON.stringify({
+    current_phase: terminal ? 'complete' : 'team-exec',
+    updated_at: nowIso,
+    transitions: terminal ? [{ from: 'team-exec', to: 'complete', at: nowIso }] : [],
+  }, null, 2));
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -73,6 +166,10 @@ async function waitForExit(child: ReturnType<typeof spawn>, timeoutMs: number = 
       throw new Error(`process ${child.pid ?? 'unknown'} did not exit within ${timeoutMs}ms`);
     }),
   ]);
+}
+
+function defaultAutoNudgePattern(targetPane: string): RegExp {
+  return new RegExp(`send-keys -t ${targetPane} -l ${DEFAULT_AUTO_NUDGE_RESPONSE.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')} \\[OMX_TMUX_INJECT\\]`);
 }
 
 function buildFakeTmux(
@@ -623,10 +720,11 @@ describe('notify-fallback watcher', () => {
         autoNudge: { enabled: true, delaySec: 0, ttlMs: 30_000 },
       }, null, 2));
       await writeSessionStart(wd, 'sess-managed-fallback');
-      await writeFile(join(wd, '.omx', 'state', 'hud-state.json'), JSON.stringify({
+      await mkdir(join(wd, '.omx', 'state', 'sessions', 'sess-managed-fallback'), { recursive: true });
+      await writeFile(join(wd, '.omx', 'state', 'sessions', 'sess-managed-fallback', 'hud-state.json'), JSON.stringify({
         last_turn_at: new Date(Date.now() - 6_000).toISOString(),
         turn_count: 7,
-        last_agent_output: 'If you want, I can keep going from here.',
+        last_agent_output: 'Keep going and finish the cleanup from here.',
       }, null, 2));
       await writeFile(join(wd, '.omx', 'state', 'notify-fallback.pid'), JSON.stringify({
         pid: process.pid,
@@ -661,7 +759,7 @@ describe('notify-fallback watcher', () => {
       assert.equal(result.status, 0, result.stderr || result.stdout);
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf8').catch(() => '');
-      assert.doesNotMatch(tmuxLog, /send-keys -t %42 -l yes, proceed \[OMX_TMUX_INJECT\]/);
+      assert.doesNotMatch(tmuxLog, defaultAutoNudgePattern('%42'));
 
       const watcherState = JSON.parse(await readFile(join(wd, '.omx', 'state', 'notify-fallback-state.json'), 'utf-8'));
       assert.equal(watcherState.pid, process.pid, 'authority backoff should preserve the primary watcher state owner');
@@ -732,7 +830,7 @@ describe('notify-fallback watcher', () => {
       const tmuxLog = await readFile(tmuxLogPath, 'utf8').catch(() => '');
       assert.doesNotMatch(tmuxLog, /Ralph loop active continue/);
       assert.doesNotMatch(tmuxLog, /Team dispatch-team:/);
-      assert.doesNotMatch(tmuxLog, /yes, proceed \[OMX_TMUX_INJECT\]/);
+      assert.doesNotMatch(tmuxLog, new RegExp(`${DEFAULT_AUTO_NUDGE_RESPONSE.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')} \\[OMX_TMUX_INJECT\\]`));
     } finally {
       await rm(wd, { recursive: true, force: true });
     }
@@ -803,7 +901,7 @@ describe('notify-fallback watcher', () => {
       const tmuxLog = await readFile(tmuxLogPath, 'utf8').catch(() => '');
       assert.doesNotMatch(tmuxLog, /Ralph loop active continue/);
       assert.doesNotMatch(tmuxLog, /Team dispatch-team:/);
-      assert.doesNotMatch(tmuxLog, /yes, proceed \[OMX_TMUX_INJECT\]/);
+      assert.doesNotMatch(tmuxLog, new RegExp(`${DEFAULT_AUTO_NUDGE_RESPONSE.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')} \\[OMX_TMUX_INJECT\\]`));
     } finally {
       await rm(wd, { recursive: true, force: true });
     }
@@ -844,6 +942,7 @@ describe('notify-fallback watcher', () => {
           encoding: 'utf-8',
           env: buildCleanNotifyEnv({
             PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+            OMX_SESSION_ID: 'sess-canonical-inactive',
           }),
         },
       );
@@ -874,6 +973,43 @@ describe('notify-fallback watcher', () => {
         && entry.source === 'notify_fallback_watcher'
         && entry.transport === 'send-keys'
         && entry.result === 'sent'));
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('runs leader nudge checks from canonical fallback when coarse team-state is inactive', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-leader-nudge-canonical-inactive-'));
+    const fakeBinDir = join(wd, 'fake-bin');
+    const tmuxLogPath = join(wd, 'tmux.log');
+    try {
+      await mkdir(fakeBinDir, { recursive: true });
+      await writeCanonicalWatcherTeamFixture(wd, {
+        teamName: 'dispatch-team',
+        sessionId: 'sess-canonical-inactive',
+        ownerSessionId: 'sess-canonical-inactive',
+        coarseState: 'inactive',
+      });
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+
+      const watcherScript = new URL('../../../dist/scripts/notify-fallback-watcher.js', import.meta.url).pathname;
+      const notifyHook = new URL('../../../dist/scripts/notify-hook.js', import.meta.url).pathname;
+      const result = spawnSync(
+        process.execPath,
+        [watcherScript, '--once', '--cwd', wd, '--notify-script', notifyHook],
+        {
+          encoding: 'utf-8',
+          env: buildCleanNotifyEnv({
+            PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+            OMX_SESSION_ID: 'sess-canonical-inactive',
+          }),
+        },
+      );
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+
+      const tmuxLog = await readFile(tmuxLogPath, 'utf8');
+      assert.match(tmuxLog, /send-keys -t %42 -l Team dispatch-team: leader stale, \d+ worker pane\(s\) still active\./);
     } finally {
       await rm(wd, { recursive: true, force: true });
     }
@@ -927,6 +1063,7 @@ describe('notify-fallback watcher', () => {
           encoding: 'utf-8',
           env: buildCleanNotifyEnv({
             PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+            OMX_SESSION_ID: 'sess-canonical-inactive',
           }),
         },
       );
@@ -1150,10 +1287,11 @@ exit 0
         autoNudge: { enabled: true, delaySec: 0, ttlMs: 30_000 },
       }, null, 2));
       await writeSessionStart(wd, 'sess-managed-fallback');
-      await writeFile(join(wd, '.omx', 'state', 'hud-state.json'), JSON.stringify({
+      await mkdir(join(wd, '.omx', 'state', 'sessions', 'sess-managed-fallback'), { recursive: true });
+      await writeFile(join(wd, '.omx', 'state', 'sessions', 'sess-managed-fallback', 'hud-state.json'), JSON.stringify({
         last_turn_at: new Date(Date.now() - 6_000).toISOString(),
         turn_count: 7,
-        last_agent_output: 'If you want, I can keep going from here.',
+        last_agent_output: 'Keep going and finish the cleanup from here.',
       }, null, 2));
 
       const watcherScript = new URL('../../../dist/scripts/notify-fallback-watcher.js', import.meta.url).pathname;
@@ -1177,7 +1315,7 @@ exit 0
       assert.equal(result.status, 0, result.stderr || result.stdout);
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf8');
-      assert.match(tmuxLog, /send-keys -t %42 -l yes, proceed \[OMX_TMUX_INJECT\]/);
+      assert.match(tmuxLog, defaultAutoNudgePattern('%42'));
 
       const watcherStatePath = join(wd, '.omx', 'state', 'notify-fallback-state.json');
       const watcherState = JSON.parse(await readFile(watcherStatePath, 'utf-8'));
@@ -1209,10 +1347,11 @@ exit 0
         target: { type: 'pane', value: '%42' },
       }, null, 2));
       await writeSessionStart(wd, 'sess-managed-fallback');
-      await writeFile(join(wd, '.omx', 'state', 'hud-state.json'), JSON.stringify({
+      await mkdir(join(wd, '.omx', 'state', 'sessions', 'sess-managed-fallback'), { recursive: true });
+      await writeFile(join(wd, '.omx', 'state', 'sessions', 'sess-managed-fallback', 'hud-state.json'), JSON.stringify({
         last_turn_at: new Date(Date.now() - 6_000).toISOString(),
         turn_count: 7,
-        last_agent_output: 'If you want, I can keep going from here.',
+        last_agent_output: 'Keep going and finish the cleanup from here.',
       }, null, 2));
 
       const watcherScript = new URL('../../../dist/scripts/notify-fallback-watcher.js', import.meta.url).pathname;
@@ -1235,7 +1374,7 @@ exit 0
       assert.equal(result.status, 0, result.stderr || result.stdout);
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf8').catch(() => '');
-      assert.doesNotMatch(tmuxLog, /send-keys -t %42 -l yes, proceed \[OMX_TMUX_INJECT\]/);
+      assert.doesNotMatch(tmuxLog, defaultAutoNudgePattern('%42'));
     } finally {
       await rm(wd, { recursive: true, force: true });
     }
@@ -1259,7 +1398,7 @@ exit 0
       await writeFile(join(wd, '.omx', 'state', 'hud-state.json'), JSON.stringify({
         last_turn_at: new Date(Date.now() - 6_000).toISOString(),
         turn_count: 9,
-        last_agent_output: 'If you want, I can keep going from here.',
+        last_agent_output: 'Keep going and finish the cleanup from here.',
       }, null, 2));
 
       const watcherScript = new URL('../../../dist/scripts/notify-fallback-watcher.js', import.meta.url).pathname;
@@ -1281,7 +1420,7 @@ exit 0
       assert.equal(result.status, 0, result.stderr || result.stdout);
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf8').catch(() => '');
-      assert.doesNotMatch(tmuxLog, /send-keys -t %42 -l yes, proceed \[OMX_TMUX_INJECT\]/);
+      assert.doesNotMatch(tmuxLog, defaultAutoNudgePattern('%42'));
 
       const watcherStatePath = join(wd, '.omx', 'state', 'notify-fallback-state.json');
       const watcherState = JSON.parse(await readFile(watcherStatePath, 'utf-8'));
@@ -1313,7 +1452,7 @@ exit 0
       await writeFile(join(wd, '.omx', 'state', 'hud-state.json'), JSON.stringify({
         last_turn_at: new Date(Date.now() - 1_000).toISOString(),
         turn_count: 8,
-        last_agent_output: 'If you want, I can keep going from here.',
+        last_agent_output: 'Keep going and finish the cleanup from here.',
       }, null, 2));
 
       const watcherScript = new URL('../../../dist/scripts/notify-fallback-watcher.js', import.meta.url).pathname;
@@ -1335,7 +1474,7 @@ exit 0
       assert.equal(result.status, 0, result.stderr || result.stdout);
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf8').catch(() => '');
-      assert.doesNotMatch(tmuxLog, /send-keys -t %42 -l yes, proceed \[OMX_TMUX_INJECT\]/);
+      assert.doesNotMatch(tmuxLog, defaultAutoNudgePattern('%42'));
 
       const watcherStatePath = join(wd, '.omx', 'state', 'notify-fallback-state.json');
       const watcherState = JSON.parse(await readFile(watcherStatePath, 'utf-8'));
@@ -1352,7 +1491,7 @@ exit 0
     const tmuxLogPath = join(wd, 'tmux.log');
     const codexHome = join(wd, 'codex-home');
     const lastTurnAt = new Date(Date.now() - 6_000).toISOString();
-    const lastMessage = 'If you want, I can keep going from here.';
+    const lastMessage = 'Keep going and finish the cleanup from here.';
     try {
       await mkdir(join(wd, '.omx', 'logs'), { recursive: true });
       await mkdir(join(wd, '.omx', 'state'), { recursive: true });
@@ -1394,7 +1533,7 @@ exit 0
       assert.equal(result.status, 0, result.stderr || result.stdout);
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf8').catch(() => '');
-      assert.doesNotMatch(tmuxLog, /send-keys -t %42 -l yes, proceed \[OMX_TMUX_INJECT\]/);
+      assert.doesNotMatch(tmuxLog, defaultAutoNudgePattern('%42'));
 
       const watcherStatePath = join(wd, '.omx', 'state', 'notify-fallback-state.json');
       const watcherState = JSON.parse(await readFile(watcherStatePath, 'utf-8'));
@@ -1411,7 +1550,7 @@ exit 0
     const tmuxLogPath = join(wd, 'tmux.log');
     const codexHome = join(wd, 'codex-home');
     const lastTurnAt = '2026-03-01T00:00:00.000Z';
-    const lastMessage = 'If you want, I can keep going from here.';
+    const lastMessage = 'Keep going and finish the cleanup from here.';
     try {
       await mkdir(join(wd, '.omx', 'logs'), { recursive: true });
       await mkdir(join(wd, '.omx', 'state'), { recursive: true });
@@ -1453,7 +1592,7 @@ exit 0
       assert.equal(result.status, 0, result.stderr || result.stdout);
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf8').catch(() => '');
-      assert.doesNotMatch(tmuxLog, /send-keys -t %42 -l yes, proceed \[OMX_TMUX_INJECT\]/);
+      assert.doesNotMatch(tmuxLog, defaultAutoNudgePattern('%42'));
 
       const watcherStatePath = join(wd, '.omx', 'state', 'notify-fallback-state.json');
       const watcherState = JSON.parse(await readFile(watcherStatePath, 'utf-8'));
@@ -1802,7 +1941,7 @@ exit 0
         owner_omx_session_id: omxSessionId,
         owner_codex_session_id: codexSessionId,
       }, null, 2));
-      await writeFile(join(stateDir, 'hud-state.json'), JSON.stringify({
+      await writeFile(join(stateDir, 'sessions', omxSessionId, 'hud-state.json'), JSON.stringify({
         last_progress_at: new Date(Date.now() - 61_000).toISOString(),
       }, null, 2));
       await writeFile(statePath, JSON.stringify({
@@ -2568,7 +2707,7 @@ exit 0
         current_phase: 'executing',
         tmux_pane_id: '%42',
       }, null, 2));
-      await writeFile(join(stateDir, 'hud-state.json'), JSON.stringify({
+      await writeFile(join(sessionStateDir, 'hud-state.json'), JSON.stringify({
         last_progress_at: new Date(Date.now() - 61_000).toISOString(),
       }, null, 2));
       await writeFile(join(stateDir, 'notify-fallback-state.json'), JSON.stringify({
@@ -2734,6 +2873,149 @@ exit 0
       assert.ok(logEntries.some((entry: { type?: string; reason?: string }) => (
         entry.type === 'watcher_stop' && entry.reason === 'parent_gone'
       )));
+    } finally {
+      if (child && isPidAlive(child.pid)) {
+        child.kill('SIGTERM');
+        await waitForExit(child, 4000).catch(() => {});
+      }
+      await rm(wd, { recursive: true, force: true });
+      await rm(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it('stays alive after parent exit when coarse team-state is missing but canonical team is active for the current session', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-parent-gone-canonical-team-'));
+    const tempHome = await mkdtemp(join(tmpdir(), 'omx-fallback-parent-gone-canonical-home-'));
+    const fakeBinDir = join(wd, 'fake-bin');
+    const tmuxLogPath = join(wd, 'tmux.log');
+    let child: ReturnType<typeof spawn> | undefined;
+
+    try {
+      await mkdir(fakeBinDir, { recursive: true });
+      await writeCanonicalWatcherTeamFixture(wd, {
+        teamName: 'dispatch-team',
+        sessionId: 'sess-parent-canonical',
+        ownerSessionId: 'sess-parent-canonical',
+      });
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+
+      const watcherScript = new URL('../../../dist/scripts/notify-fallback-watcher.js', import.meta.url).pathname;
+      const notifyHook = new URL('../../../dist/scripts/notify-hook.js', import.meta.url).pathname;
+      const logPath = join(wd, '.omx', 'logs', `notify-fallback-${new Date().toISOString().split('T')[0]}.jsonl`);
+
+      const shortLivedParent = spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 10)'], {
+        stdio: 'ignore',
+      });
+      assert.ok(shortLivedParent.pid, 'expected short-lived parent pid');
+      const parentPid = shortLivedParent.pid as number;
+      await once(shortLivedParent, 'exit');
+
+      child = spawn(
+        process.execPath,
+        [
+          watcherScript,
+          '--cwd',
+          wd,
+          '--notify-script',
+          notifyHook,
+          '--poll-ms',
+          '50',
+          '--parent-pid',
+          String(parentPid),
+          '--max-lifetime-ms',
+          '5000',
+        ],
+        {
+          cwd: wd,
+          stdio: 'ignore',
+          env: buildCleanNotifyEnv({ HOME: tempHome, PATH: `${fakeBinDir}:${process.env.PATH || ''}` }),
+        }
+      );
+
+      await waitFor(async () => isPidAlive(child?.pid), 4000, 50);
+      await waitFor(async () => {
+        const logEntries = (await readFile(logPath, 'utf-8').catch(() => ''))
+          .trim()
+          .split('\n')
+          .filter(Boolean)
+          .map((line) => JSON.parse(line));
+        return logEntries.some((entry: { type?: string; reason?: string }) => (
+          entry.type === 'watcher_parent_guard' && entry.reason === 'parent_gone_deferred_for_active_team'
+        ));
+      }, 4000, 50);
+
+      assert.ok(isPidAlive(child.pid), 'expected watcher to stay alive while canonical team panes remain active');
+    } finally {
+      if (child && isPidAlive(child.pid)) {
+        child.kill('SIGTERM');
+        await waitForExit(child, 4000).catch(() => {});
+      }
+      await rm(wd, { recursive: true, force: true });
+      await rm(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it('does not defer parent-loss shutdown when canonical owner session is blank and coarse team-state is missing', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-parent-gone-ownerless-team-'));
+    const tempHome = await mkdtemp(join(tmpdir(), 'omx-fallback-parent-gone-ownerless-home-'));
+    const fakeBinDir = join(wd, 'fake-bin');
+    const tmuxLogPath = join(wd, 'tmux.log');
+    let child: ReturnType<typeof spawn> | undefined;
+
+    try {
+      await mkdir(fakeBinDir, { recursive: true });
+      await writeCanonicalWatcherTeamFixture(wd, {
+        teamName: 'dispatch-team',
+        sessionId: 'sess-parent-ownerless',
+        ownerSessionId: '',
+      });
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+
+      const watcherScript = new URL('../../../dist/scripts/notify-fallback-watcher.js', import.meta.url).pathname;
+      const notifyHook = new URL('../../../dist/scripts/notify-hook.js', import.meta.url).pathname;
+      const logPath = join(wd, '.omx', 'logs', `notify-fallback-${new Date().toISOString().split('T')[0]}.jsonl`);
+
+      const shortLivedParent = spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 10)'], {
+        stdio: 'ignore',
+      });
+      assert.ok(shortLivedParent.pid, 'expected short-lived parent pid');
+      const parentPid = shortLivedParent.pid as number;
+      await once(shortLivedParent, 'exit');
+
+      child = spawn(
+        process.execPath,
+        [
+          watcherScript,
+          '--cwd',
+          wd,
+          '--notify-script',
+          notifyHook,
+          '--poll-ms',
+          '50',
+          '--parent-pid',
+          String(parentPid),
+          '--max-lifetime-ms',
+          '5000',
+        ],
+        {
+          cwd: wd,
+          stdio: 'ignore',
+          env: buildCleanNotifyEnv({ HOME: tempHome, PATH: `${fakeBinDir}:${process.env.PATH || ''}` }),
+        }
+      );
+
+      await waitForExit(child, 4000);
+      assert.equal(child.exitCode, 0);
+
+      const logEntries = (await readFile(logPath, 'utf-8')).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+      assert.ok(logEntries.some((entry: { type?: string; reason?: string }) => (
+        entry.type === 'watcher_stop' && entry.reason === 'parent_gone'
+      )));
+      assert.ok(!logEntries.some((entry: { type?: string; reason?: string }) => (
+        entry.type === 'watcher_parent_guard' && entry.reason === 'parent_gone_deferred_for_active_team'
+      )), 'ownerless canonical team must not defer parent-loss shutdown');
     } finally {
       if (child && isPidAlive(child.pid)) {
         child.kill('SIGTERM');

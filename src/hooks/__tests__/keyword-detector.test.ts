@@ -1,5 +1,6 @@
 import { describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -286,6 +287,139 @@ describe('keyword detector skill-active-state lifecycle', () => {
     }
   });
 
+  it('adds approved workflow overlaps without deleting the existing canonical state', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-overlap-'));
+    const stateDir = join(cwd, '.omx', 'state');
+    try {
+      await mkdir(stateDir, { recursive: true });
+
+      await recordSkillActivation({
+        stateDir,
+        text: '$team ship this',
+        sessionId: 'sess-overlap',
+        threadId: 'thread-overlap',
+        turnId: 'turn-1',
+        nowIso: '2026-02-26T00:00:00.000Z',
+      });
+
+      const result = await recordSkillActivation({
+        stateDir,
+        text: '$ralph continue verification',
+        sessionId: 'sess-overlap',
+        threadId: 'thread-overlap',
+        turnId: 'turn-2',
+        nowIso: '2026-02-26T00:05:00.000Z',
+      });
+
+      assert.ok(result);
+      assert.deepEqual(
+        result.active_skills?.map((entry) => entry.skill),
+        ['team', 'ralph'],
+      );
+
+      const persisted = JSON.parse(
+        await readFile(join(stateDir, 'sessions', 'sess-overlap', SKILL_ACTIVE_STATE_FILE), 'utf-8'),
+      ) as { active_skills?: Array<{ skill: string }> };
+      assert.deepEqual(
+        persisted.active_skills?.map((entry) => entry.skill),
+        ['team', 'ralph'],
+      );
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('hard-fails denied workflow overlaps without mutating current state', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-deny-'));
+    const stateDir = join(cwd, '.omx', 'state');
+    try {
+      await mkdir(stateDir, { recursive: true });
+
+      await recordSkillActivation({
+        stateDir,
+        text: '$team ship this',
+        sessionId: 'sess-deny',
+        threadId: 'thread-deny',
+        turnId: 'turn-1',
+        nowIso: '2026-02-26T00:00:00.000Z',
+      });
+
+      const denied = await recordSkillActivation({
+        stateDir,
+        text: '$autopilot do it too',
+        sessionId: 'sess-deny',
+        threadId: 'thread-deny',
+        turnId: 'turn-2',
+        nowIso: '2026-02-26T00:05:00.000Z',
+      });
+
+      assert.ok(denied?.transition_error);
+      assert.match(String(denied?.transition_error), /Unsupported workflow overlap: team \+ autopilot\./);
+      assert.match(String(denied?.transition_error), /`omx state clear --mode <mode>`/);
+      assert.match(String(denied?.transition_error), /`omx_state\.\*` MCP tools/);
+
+      const persisted = JSON.parse(
+        await readFile(join(stateDir, 'sessions', 'sess-deny', SKILL_ACTIVE_STATE_FILE), 'utf-8'),
+      ) as { active_skills?: Array<{ skill: string }> };
+      assert.deepEqual(persisted.active_skills?.map((entry) => entry.skill), ['team']);
+      assert.equal(
+        existsSync(join(stateDir, 'sessions', 'sess-deny', 'autopilot-state.json')),
+        false,
+      );
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('denies prompt-submit overlaps against the current session-visible canonical state', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-session-visible-'));
+    const stateDir = join(cwd, '.omx', 'state');
+    try {
+      await mkdir(join(stateDir, 'sessions', 'sess-visible'), { recursive: true });
+      await writeFile(
+        join(stateDir, SKILL_ACTIVE_STATE_FILE),
+        JSON.stringify({
+          version: 1,
+          active: true,
+          skill: 'team',
+          active_skills: [
+            { skill: 'team', phase: 'running', active: true },
+          ],
+        }, null, 2),
+      );
+      await writeFile(
+        join(stateDir, 'sessions', 'sess-visible', SKILL_ACTIVE_STATE_FILE),
+        JSON.stringify({
+          version: 1,
+          active: true,
+          skill: 'team',
+          session_id: 'sess-visible',
+          active_skills: [
+            { skill: 'team', phase: 'running', active: true },
+            { skill: 'ralph', phase: 'executing', active: true, session_id: 'sess-visible' },
+          ],
+        }, null, 2),
+      );
+
+      const allowed = await recordSkillActivation({
+        stateDir,
+        text: '$ultrawork continue',
+        sessionId: 'sess-visible',
+        nowIso: '2026-04-10T00:00:00.000Z',
+      });
+
+      assert.equal(allowed?.transition_error, undefined);
+      assert.equal(existsSync(join(stateDir, 'sessions', 'sess-visible', 'ultrawork-state.json')), true);
+
+      const persisted = JSON.parse(
+        await readFile(join(stateDir, 'sessions', 'sess-visible', SKILL_ACTIVE_STATE_FILE), 'utf-8'),
+      ) as { active_skills?: Array<{ skill: string }> };
+      assert.deepEqual(persisted.active_skills?.map((entry) => entry.skill), ['team', 'ralph', 'ultrawork']);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('seeds first-class state for ralplan prompt-submit activation', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-ralplan-'));
     const stateDir = join(cwd, '.omx', 'state');
@@ -309,6 +443,97 @@ describe('keyword detector skill-active-state lifecycle', () => {
       assert.equal(modeState.mode, 'ralplan');
       assert.equal(modeState.active, true);
       assert.equal(modeState.current_phase, 'planning');
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('auto-completes deep-interview during allowlisted forward handoff', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-handoff-'));
+    const stateDir = join(cwd, '.omx', 'state');
+    try {
+      await mkdir(join(stateDir, 'sessions', 'sess-handoff'), { recursive: true });
+      await writeFile(
+        join(stateDir, 'sessions', 'sess-handoff', SKILL_ACTIVE_STATE_FILE),
+        JSON.stringify({
+          version: 1,
+          active: true,
+          skill: 'deep-interview',
+          phase: 'planning',
+          session_id: 'sess-handoff',
+          active_skills: [{ skill: 'deep-interview', phase: 'planning', active: true, session_id: 'sess-handoff' }],
+        }, null, 2),
+      );
+      await writeFile(
+        join(stateDir, 'sessions', 'sess-handoff', 'deep-interview-state.json'),
+        JSON.stringify({ active: true, mode: 'deep-interview', current_phase: 'intent-first' }, null, 2),
+      );
+
+      const result = await recordSkillActivation({
+        stateDir,
+        text: '$ralplan implement the approved contract',
+        sessionId: 'sess-handoff',
+        nowIso: '2026-04-10T00:00:00.000Z',
+      });
+
+      assert.equal(result?.transition_error, undefined);
+      assert.equal(result?.transition_message, 'mode transiting: deep-interview -> ralplan');
+
+      const completed = JSON.parse(
+        await readFile(join(stateDir, 'sessions', 'sess-handoff', 'deep-interview-state.json'), 'utf-8'),
+      ) as { active?: boolean; current_phase?: string };
+      assert.equal(completed.active, false);
+      assert.equal(completed.current_phase, 'completed');
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves the planning skill when planning and execution workflows are invoked together', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-planning-precedence-'));
+    const stateDir = join(cwd, '.omx', 'state');
+    try {
+      await mkdir(stateDir, { recursive: true });
+
+      const result = await recordSkillActivation({
+        stateDir,
+        text: '$ralplan $team $ralph ship this fix',
+        sessionId: 'sess-multi',
+        nowIso: '2026-04-10T00:00:00.000Z',
+      });
+
+      assert.equal(result?.transition_error, undefined);
+      assert.equal(result?.transition_message, undefined);
+      assert.equal(result?.skill, 'ralplan');
+      assert.deepEqual(result?.active_skills?.map((entry) => entry.skill), ['ralplan']);
+      assert.deepEqual(result?.deferred_skills, ['team', 'ralph']);
+      assert.equal(existsSync(join(stateDir, 'sessions', 'sess-multi', 'ralplan-state.json')), true);
+      assert.equal(existsSync(join(stateDir, 'team-state.json')), false);
+      assert.equal(existsSync(join(stateDir, 'sessions', 'sess-multi', 'ralph-state.json')), false);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('lets planning win even when execution appears first in the contiguous skill block', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-planning-beats-execution-'));
+    const stateDir = join(cwd, '.omx', 'state');
+    try {
+      await mkdir(stateDir, { recursive: true });
+
+      const result = await recordSkillActivation({
+        stateDir,
+        text: '$ralph $ralplan continue',
+        sessionId: 'sess-priority',
+        nowIso: '2026-04-10T00:00:00.000Z',
+      });
+
+      assert.equal(result?.transition_error, undefined);
+      assert.equal(result?.skill, 'ralplan');
+      assert.deepEqual(result?.active_skills?.map((entry) => entry.skill), ['ralplan']);
+      assert.deepEqual(result?.deferred_skills, ['ralph']);
+      assert.equal(existsSync(join(stateDir, 'sessions', 'sess-priority', 'ralplan-state.json')), true);
+      assert.equal(existsSync(join(stateDir, 'sessions', 'sess-priority', 'ralph-state.json')), false);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
@@ -377,6 +602,59 @@ describe('keyword detector skill-active-state lifecycle', () => {
       assert.equal(modeState.active, true);
       assert.equal(modeState.current_phase, 'team-verify');
       assert.equal(modeState.team_name, 'review-team');
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves root team state when $ralph is activated for the current session', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-team-ralph-'));
+    const stateDir = join(cwd, '.omx', 'state');
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await recordSkillActivation({
+        stateDir,
+        text: '$team coordinate the rollout',
+        sessionId: 'sess-team-ralph',
+        nowIso: '2026-04-09T00:00:00.000Z',
+      });
+
+      const result = await recordSkillActivation({
+        stateDir,
+        text: '$ralph complete the approved plan',
+        sessionId: 'sess-team-ralph',
+        nowIso: '2026-04-09T00:05:00.000Z',
+      });
+
+      assert.ok(result);
+      assert.equal(result.skill, 'ralph');
+
+      const rootCanonical = JSON.parse(
+        await readFile(join(stateDir, SKILL_ACTIVE_STATE_FILE), 'utf-8'),
+      ) as { active_skills?: Array<{ skill: string; phase?: string; session_id?: string }> };
+      assert.deepEqual(
+        rootCanonical.active_skills?.map(({ skill, phase, session_id }) => ({
+          skill,
+          phase,
+          session_id,
+        })),
+        [{ skill: 'team', phase: 'planning', session_id: 'sess-team-ralph' }],
+      );
+
+      const sessionCanonical = JSON.parse(
+        await readFile(join(stateDir, 'sessions', 'sess-team-ralph', SKILL_ACTIVE_STATE_FILE), 'utf-8'),
+      ) as { active_skills?: Array<{ skill: string; phase?: string; session_id?: string }> };
+      assert.deepEqual(
+        sessionCanonical.active_skills?.map(({ skill, phase, session_id }) => ({
+          skill,
+          phase,
+          session_id,
+        })),
+        [
+          { skill: 'team', phase: 'planning', session_id: 'sess-team-ralph' },
+          { skill: 'ralph', phase: 'planning', session_id: 'sess-team-ralph' },
+        ],
+      );
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
@@ -646,8 +924,8 @@ describe('keyword detector skill-active-state lifecycle', () => {
     }
   });
 
-  it('resets activated_at when skill changes', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-skill-switch-'));
+  it('denies switching away from a standalone workflow without explicit clear', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-skill-switch-deny-'));
     const stateDir = join(cwd, '.omx', 'state');
     const statePath = join(stateDir, SKILL_ACTIVE_STATE_FILE);
     try {
@@ -673,8 +951,9 @@ describe('keyword detector skill-active-state lifecycle', () => {
       });
 
       assert.ok(result);
-      assert.equal(result.skill, 'ralph');
-      assert.equal(result.activated_at, '2026-02-26T00:00:00.000Z');
+      assert.equal(result.skill, 'autopilot');
+      assert.match(String(result.transition_error), /Unsupported workflow overlap: autopilot \+ ralph\./);
+      assert.equal(result.activated_at, '2026-02-25T00:00:00.000Z');
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
