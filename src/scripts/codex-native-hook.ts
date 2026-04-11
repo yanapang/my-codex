@@ -793,6 +793,28 @@ async function readBlockingSkillForStop(
   return null;
 }
 
+async function readStopAutoNudgePhase(
+  cwd: string,
+  sessionId: string,
+  threadId: string,
+): Promise<string> {
+  if (!sessionId.trim()) return "";
+
+  const canonicalState = await readVisibleSkillActiveState(cwd, sessionId);
+  const visibleEntries = canonicalState ? listActiveSkills(canonicalState) : [];
+  const deepInterview = visibleEntries.find((entry) => (
+    entry.skill === "deep-interview"
+    && matchesSkillStopContext(entry, canonicalState ?? {}, sessionId, threadId)
+  ));
+  if (!deepInterview) return "";
+
+  const modeState = await readStopSessionPinnedState("deep-interview-state.json", cwd, sessionId);
+  if (!modeState || modeState.active !== true) return "";
+
+  const modePhase = safeString(modeState.current_phase).trim().toLowerCase();
+  return modePhase === "intent-first" ? "planning" : "";
+}
+
 function buildRepeatableStopSignature(
   payload: CodexHookPayload,
   kind: string,
@@ -1097,10 +1119,11 @@ async function buildStopHookOutput(
       payload.last_assistant_message ?? payload.lastAssistantMessage,
     );
     const autoNudgeConfig = await loadAutoNudgeConfig();
+    const autoNudgePhase = await readStopAutoNudgePhase(cwd, canonicalSessionId, threadId);
 
     if (
       autoNudgeConfig.enabled
-      && detectStallPattern(lastAssistantMessage, autoNudgeConfig.patterns)
+      && detectStallPattern(lastAssistantMessage, autoNudgeConfig.patterns, autoNudgePhase)
     ) {
       const effectiveResponse = resolveEffectiveAutoNudgeResponse(autoNudgeConfig.response);
       return await maybeReturnRepeatableStopOutput(
