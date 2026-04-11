@@ -2683,6 +2683,15 @@ async function postLaunch(
     );
   }
 
+  // 2.5. Best-effort wiki session capture
+  try {
+    const { onSessionEnd } = await import("../wiki/lifecycle.js");
+    onSessionEnd({ cwd, session_id: sessionId });
+  } catch (err) {
+    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    // Non-fatal: wiki capture must never block session cleanup
+  }
+
   // 3. Cancel any still-active modes
   try {
     await cleanupPostLaunchModeStateFiles(cwd, sessionId);

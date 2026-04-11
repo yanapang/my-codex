@@ -43,6 +43,7 @@ import {
 import type { HookEventEnvelope } from "../hooks/extensibility/types.js";
 import { dispatchHookEvent } from "../hooks/extensibility/dispatcher.js";
 import { reconcileHudForPromptSubmit } from "../hud/reconcile.js";
+import { onSessionStart as buildWikiSessionStartContext } from "../wiki/lifecycle.js";
 
 type CodexHookEventName =
   | "SessionStart"
@@ -424,6 +425,11 @@ async function buildSessionStartContext(
     } catch {
       // best effort only
     }
+  }
+
+  const wikiContext = buildWikiSessionStartContext({ cwd });
+  if (wikiContext.additionalContext) {
+    sections.push(wikiContext.additionalContext);
   }
 
   const subagentSummary = await readSubagentSessionSummary(cwd, sessionId).catch(() => null);
