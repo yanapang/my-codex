@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, readdir as fsReaddir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -452,6 +453,22 @@ describe("cleanupPostLaunchModeStateFiles", () => {
     assert.equal(ralph.current_phase, "cancelled");
     assert.equal(typeof ralph.completed_at, "string");
     assert.equal(typeof ralph.last_turn_at, "string");
+    const rootCanonicalPath = join(stateDir, "skill-active-state.json");
+    const sessionCanonicalPath = join(sessionStateDir, "skill-active-state.json");
+    if (existsSync(rootCanonicalPath)) {
+      const rootCanonical = JSON.parse(
+        await readFile(rootCanonicalPath, "utf-8"),
+      ) as Record<string, unknown>;
+      assert.equal(rootCanonical.active, false);
+      assert.deepEqual(rootCanonical.active_skills, []);
+    }
+    if (existsSync(sessionCanonicalPath)) {
+      const sessionCanonical = JSON.parse(
+        await readFile(sessionCanonicalPath, "utf-8"),
+      ) as Record<string, unknown>;
+      assert.equal(sessionCanonical.active, false);
+      assert.deepEqual(sessionCanonical.active_skills, []);
+    }
     assert.deepEqual(warnings, []);
   });
 
@@ -522,6 +539,14 @@ describe("cleanupPostLaunchModeStateFiles", () => {
     ) as Record<string, unknown>;
     assert.equal(ultrawork.active, false);
     assert.equal(typeof ultrawork.completed_at, "string");
+    const canonicalPath = join(stateDir, "skill-active-state.json");
+    if (existsSync(canonicalPath)) {
+      const canonical = JSON.parse(
+        await readFile(canonicalPath, "utf-8"),
+      ) as Record<string, unknown>;
+      assert.equal(canonical.active, false);
+      assert.deepEqual(canonical.active_skills, []);
+    }
     assert.equal(await readFile(join(stateDir, "ralph-state.json"), "utf-8"), malformedState);
     assert.equal(warnings.length, 1);
     assert.match(warnings[0] ?? "", /skipped malformed mode state .*ralph-state\.json/);

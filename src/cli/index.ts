@@ -46,6 +46,8 @@ import {
   getStateDir,
   listModeStateFilesWithScopePreference,
 } from "../mcp/state-paths.js";
+import { syncCanonicalSkillStateForMode } from "../state/skill-active.js";
+import { isTrackedWorkflowMode } from "../state/workflow-transition.js";
 import { maybeCheckAndPromptUpdate } from "./update.js";
 import { maybePromptGithubStar } from "./star-prompt.js";
 import {
@@ -2064,6 +2066,17 @@ export async function cleanupPostLaunchModeStateFiles(
               path,
               JSON.stringify(buildRecoveredPostLaunchModeState(mode, completedAt), null, 2),
             );
+            if (isTrackedWorkflowMode(mode)) {
+              await syncCanonicalSkillStateForMode({
+                cwd,
+                mode,
+                active: false,
+                currentPhase: "cancelled",
+                sessionId: stateDir === getStateDir(cwd, sessionId) ? sessionId : undefined,
+                nowIso: completedAt,
+                source: "postLaunchCleanup",
+              });
+            }
           } catch (err) {
             writeWarn(
               `[omx] postLaunch: failed to recover mode state ${path}: ${err instanceof Error ? err.message : err}`,
@@ -2079,9 +2092,22 @@ export async function cleanupPostLaunchModeStateFiles(
       if (result.state.active !== true) continue;
 
       try {
+        const completedAt = now().toISOString();
         result.state.active = false;
-        result.state.completed_at = now().toISOString();
+        result.state.current_phase = "cancelled";
+        result.state.completed_at = completedAt;
         await writeFile(path, JSON.stringify(result.state, null, 2));
+        if (isTrackedWorkflowMode(mode)) {
+          await syncCanonicalSkillStateForMode({
+            cwd,
+            mode,
+            active: false,
+            currentPhase: "cancelled",
+            sessionId: stateDir === getStateDir(cwd, sessionId) ? sessionId : undefined,
+            nowIso: completedAt,
+            source: "postLaunchCleanup",
+          });
+        }
       } catch (err) {
         writeWarn(
           `[omx] postLaunch: failed to update mode state ${path}: ${err instanceof Error ? err.message : err}`,

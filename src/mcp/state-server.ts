@@ -53,6 +53,7 @@ import {
 
 const SUPPORTED_MODES = [
 	"autopilot",
+	"autoresearch",
 	"team",
 	"ralph",
 	"ultrawork",
