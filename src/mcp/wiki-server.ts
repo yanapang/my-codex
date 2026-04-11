@@ -17,6 +17,8 @@ import {
   readIndex,
   readPage,
   titleToSlug,
+  updateIndexUnsafe,
+  withWikiLock,
 } from '../wiki/index.js';
 import type { WikiCategory } from '../wiki/types.js';
 
@@ -146,6 +148,16 @@ export function buildWikiServerTools() {
         required: ['page'],
       },
     },
+    {
+      name: 'wiki_refresh',
+      description: 'Rebuild the wiki index and refresh derived metadata surfaces.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          workingDirectory: { type: 'string' },
+        },
+      },
+    },
   ];
 }
 
@@ -233,6 +245,19 @@ export async function handleWikiToolCall(request: {
           summary: `Deleted wiki page ${filename}`,
         });
         return text({ deleted: true, page: filename });
+      }
+
+      case 'wiki_refresh': {
+        withWikiLock(root, () => {
+          updateIndexUnsafe(root);
+        });
+        appendLog(root, {
+          timestamp: new Date().toISOString(),
+          operation: 'add',
+          pagesAffected: listPages(root),
+          summary: 'Refreshed wiki index and derived metadata surfaces',
+        });
+        return text({ refreshed: true, pages: listPages(root), index: readIndex(root) });
       }
 
       default:

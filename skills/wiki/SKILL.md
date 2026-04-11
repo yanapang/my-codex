@@ -35,6 +35,7 @@ wiki_add({ title: "Page Title", content: "...", tags: ["tag1"], category: "decis
 wiki_list()
 wiki_read({ page: "auth-architecture" })
 wiki_delete({ page: "outdated-page" })
+wiki_refresh()
 ```
 
 ## Categories

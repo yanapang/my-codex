@@ -36,4 +36,14 @@ describe('Wiki lifecycle hooks', () => {
     expect(wikiEntries.filter((entry: string) => entry.startsWith('session-log-'))).toHaveLength(0);
     expect(fs.existsSync(path.join(wikiDir, 'log.md'))).toBe(false);
   });
+
+  it('refreshes the wiki index after session-end capture', () => {
+    const wikiDir = ensureWikiDir(tempDir);
+
+    expect(onSessionEnd({ cwd: tempDir, session_id: 'session-abcdefgh' })).toEqual({ continue: true });
+
+    const indexPath = path.join(wikiDir, 'index.md');
+    expect(fs.existsSync(indexPath)).toBe(true);
+    expect(fs.readFileSync(indexPath, 'utf-8')).toContain('session-log');
+  });
 });

@@ -11,6 +11,7 @@ const REQUIRED_TOOLS = [
   'wiki_list',
   'wiki_read',
   'wiki_delete',
+  'wiki_refresh',
 ] as const;
 
 describe('mcp/wiki-server module contract', () => {

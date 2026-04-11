@@ -16,6 +16,7 @@ import {
   resolveCachedNativeBinaryCandidatePaths,
   getPackageVersion,
 } from './native-assets.js';
+import { getWikiDir, queryWiki } from '../wiki/index.js';
 
 export const EXPLORE_USAGE = [
   'Usage: omx explore --prompt "<prompt>"',
@@ -60,6 +61,33 @@ const EXPLICIT_SHELL_PREFIX_PATTERN = /^run\s+/i;
 export interface ExploreSparkShellRoute {
   argv: string[];
   reason: 'shell-native' | 'long-output';
+}
+
+const MAX_WIKI_CONTEXT_RESULTS = 5;
+
+function formatWikiContextBlock(prompt: string, cwd: string): string | null {
+  const wikiDir = getWikiDir(cwd);
+  if (!existsSync(wikiDir)) return null;
+  const matches = queryWiki(cwd, prompt, { limit: MAX_WIKI_CONTEXT_RESULTS, logQuery: false });
+  if (matches.length === 0) return null;
+
+  const lines = [
+    '[OMX Wiki Context]',
+    'Use these wiki matches first before falling back to broader repository search.',
+    ...matches.flatMap((match, index) => [
+      `${index + 1}. ${match.page.frontmatter.title} (${match.page.filename})`,
+      `   tags: ${match.page.frontmatter.tags.join(', ') || 'none'} | category: ${match.page.frontmatter.category} | score: ${match.score}`,
+      `   snippet: ${match.snippet}`,
+    ]),
+    '',
+    `[Original Explore Prompt]\n${prompt}`,
+  ];
+  return lines.join('\n');
+}
+
+export function buildExplorePromptWithWikiContext(prompt: string, cwd: string): string {
+  const wikiContext = formatWikiContextBlock(prompt, cwd);
+  return wikiContext ?? prompt;
 }
 
 function tokenizeExploreShellCommand(commandText: string): string[] | undefined {
@@ -333,9 +361,10 @@ export function buildExploreHarnessArgs(
   packageRoot = getPackageRoot(),
 ): string[] {
   const sparkModel = env[EXPLORE_SPARK_MODEL_ENV]?.trim() || getSparkDefaultModel();
+  const promptWithWikiContext = buildExplorePromptWithWikiContext(prompt, cwd);
   return [
     '--cwd', cwd,
-    '--prompt', prompt,
+    '--prompt', promptWithWikiContext,
     '--prompt-file', join(packageRoot, 'prompts', 'explore-harness.md'),
     '--model-spark', sparkModel,
     '--model-fallback', getMainDefaultModel(),

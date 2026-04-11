@@ -121,6 +121,8 @@ export function onSessionEnd(data: { cwd?: string; session_id?: string }): { con
         pagesAffected: [filename],
         summary: `Auto-captured session log for ${sessionId}`,
       });
+
+      updateIndexUnsafe(root);
     });
   } catch {
     // best effort only
