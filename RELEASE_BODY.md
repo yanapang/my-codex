@@ -48,6 +48,9 @@
 - HUD state anchored to active OMX session scope (PR [#1453](https://github.com/Yeachan-Heo/oh-my-codex/pull/1453))
 - Native session-id drift no longer hides team transport failures (PR [#1458](https://github.com/Yeachan-Heo/oh-my-codex/pull/1458))
 
+### Fixed — deep-interview
+- Stop auto-continuation no longer fires during the deep-interview intent-first questioning phase; that phase is now treated as planning for stall detection (PR [#1473](https://github.com/Yeachan-Heo/oh-my-codex/pull/1473), issue [#1472](https://github.com/Yeachan-Heo/oh-my-codex/issues/1472))
+
 ### Fixed — Explore harness
 - `omx explore` now emits a clear actionable error when cargo is a rustup shim with no default toolchain, instead of surfacing the raw rustup message (`src/cli/explore.ts`)
 

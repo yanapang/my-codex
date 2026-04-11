@@ -42,6 +42,9 @@ Team-runtime and multi-workflow state hardening, Windows reliability fixes, tmux
 - **HUD state session scope** — HUD state is now anchored to the active OMX session; cross-session HUD drift is eliminated. (PR [#1453](https://github.com/Yeachan-Heo/oh-my-codex/pull/1453))
 - **Native session-id drift** — native session-id drift no longer hides team transport failures from the HUD. (PR [#1458](https://github.com/Yeachan-Heo/oh-my-codex/pull/1458))
 
+#### deep-interview
+- **Stop auto-continuation in intent-first phase** — native Stop no longer fires auto-continuation while deep-interview is in its ask-user questioning phase; that phase is now treated as planning for stall detection. (PR [#1473](https://github.com/Yeachan-Heo/oh-my-codex/pull/1473), issue [#1472](https://github.com/Yeachan-Heo/oh-my-codex/issues/1472))
+
 #### Explore harness
 - **rustup shim without default toolchain** — `omx explore` now emits a clear actionable error instead of surfacing a raw rustup message when `cargo` exists as a shim but no default toolchain is configured. (`src/cli/explore.ts`)
 
