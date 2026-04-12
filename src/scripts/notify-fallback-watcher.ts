@@ -547,6 +547,14 @@ async function resolveActiveModeState(mode: string): Promise<ActiveModeResult> {
       .then((content) => JSON.parse(content) as Record<string, unknown>)
       .catch(() => null);
     if (!parsed || typeof parsed !== 'object') continue;
+    if (mode === 'ralph' && dir !== stateDir && isStaleRalphStartingPhase(parsed)) {
+      return {
+        active: false,
+        reason: 'starting_stale',
+        path,
+        state: parsed,
+      };
+    }
     if (hasRalphTerminalState(parsed)) {
       return {
         active: false,
@@ -1014,7 +1022,12 @@ async function runRalphContinueSteerTick(): Promise<void> {
     singleton_lock_path: ralphSteerLockPath,
   };
 
-  if (!activeRalph.active) return;
+  if (!activeRalph.active) {
+    if (activeRalph.reason === 'starting_stale') {
+      lastRalphContinueSteer.last_reason = 'starting_stale';
+    }
+    return;
+  }
 
   if (parseIsoMillis(lastRalphContinueSteer.last_sent_at) === null && parseIsoMillis(lastRalphContinueSteer.cooldown_anchor_at) === null) {
     lastRalphContinueSteer.cooldown_anchor_at = startupIso;
