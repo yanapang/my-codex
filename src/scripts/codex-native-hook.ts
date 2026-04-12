@@ -71,6 +71,14 @@ const TERMINAL_MODE_PHASES = new Set(["complete", "failed", "cancelled"]);
 const SKILL_STOP_BLOCKERS = new Set(["ralplan"]);
 const TEAM_TERMINAL_TASK_STATUSES = new Set(["completed", "failed"]);
 const NATIVE_STOP_STATE_FILE = "native-stop-state.json";
+const STABLE_FINAL_RECOMMENDATION_PATTERNS = [
+  /^\s*(?:launch|release|ship)-?ready\s*:\s*(?:yes|no)\b[^\n\r]*/im,
+  /^\s*ready to release\s*:\s*(?:yes|no)\b[^\n\r]*/im,
+  /^\s*(?:final\s+)?recommendation\s*:\s*(?:yes|no|ship|hold|release|do not release|proceed|do not proceed)\b[^\n\r]*/im,
+  /^\s*decision\s*:\s*(?:yes|no|ship|hold|release|do not release|proceed|do not proceed)\b[^\n\r]*/im,
+] as const;
+const RELEASE_READINESS_FINALIZE_SYSTEM_MESSAGE =
+  "OMX release-readiness detected a stable final recommendation with no active worker tasks; emit one concise final decision summary and finalize.";
 
 function safeString(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -720,6 +728,54 @@ function buildTeamStopOutputForPhase(teamName: string, phase: string): Record<st
   };
 }
 
+function extractStableFinalRecommendationSummary(message: string): string {
+  for (const pattern of STABLE_FINAL_RECOMMENDATION_PATTERNS) {
+    const match = pattern.exec(message);
+    if (!match) continue;
+    const summary = match[0]?.trim().replace(/\s+/g, " ");
+    if (!summary) continue;
+    return /[.!?]$/.test(summary) ? summary : `${summary}.`;
+  }
+  return "";
+}
+
+function buildStableFinalRecommendationStopSignature(
+  payload: CodexHookPayload,
+  teamName: string,
+  summary: string,
+): string {
+  const sessionId = readPayloadSessionId(payload) || "no-session";
+  const threadId = readPayloadThreadId(payload) || "no-thread";
+  const normalizedSummary = normalizeAutoNudgeSignatureText(summary) || summary.toLowerCase();
+  return ["release-readiness-finalize", sessionId, threadId, teamName, normalizedSummary].join("|");
+}
+
+function hasReleaseReadinessMode(payload: CodexHookPayload): boolean {
+  const mode = safeString(payload.mode).trim().toLowerCase();
+  return mode === "release-readiness";
+}
+
+async function hasReleaseReadinessStopMarker(
+  cwd: string,
+  sessionId: string,
+  teamName: string,
+): Promise<boolean> {
+  if (!sessionId) return false;
+
+  const markerState = await readStopSessionPinnedState("release-readiness-state.json", cwd, sessionId);
+  if (markerState?.active !== true || markerState.stable_final_recommendation_emitted !== true) {
+    return false;
+  }
+
+  const markerTeamName = safeString(markerState.team_name).trim();
+  if (markerTeamName && markerTeamName !== teamName) return false;
+
+  const markerSessionId = safeString(markerState.session_id).trim();
+  if (markerSessionId && markerSessionId !== sessionId) return false;
+
+  return true;
+}
+
 function readPayloadSessionId(payload: CodexHookPayload): string {
   return safeString(payload.session_id ?? payload.sessionId).trim();
 }
@@ -959,6 +1015,66 @@ async function findCanonicalActiveTeamForSession(
   return null;
 }
 
+async function resolveActiveTeamNameForStop(
+  cwd: string,
+  sessionId: string,
+): Promise<string> {
+  const directState = await readTeamModeStateForStop(cwd, sessionId);
+  const directTeamName = safeString(directState?.team_name).trim();
+  if (directState?.active === true && directTeamName) return directTeamName;
+
+  const canonicalTeam = await findCanonicalActiveTeamForSession(cwd, sessionId);
+  return canonicalTeam?.teamName ?? "";
+}
+
+async function maybeBuildReleaseReadinessFinalizeStopOutput(
+  payload: CodexHookPayload,
+  cwd: string,
+  stateDir: string,
+  sessionId: string,
+): Promise<{ matched: boolean; output: Record<string, unknown> | null }> {
+  if (!sessionId) return { matched: false, output: null };
+
+  const teamName = await resolveActiveTeamNameForStop(cwd, sessionId);
+  if (!teamName) return { matched: false, output: null };
+
+  const explicitReleaseReadinessContext =
+    hasReleaseReadinessMode(payload)
+    || await hasReleaseReadinessStopMarker(cwd, sessionId, teamName);
+  if (!explicitReleaseReadinessContext) {
+    return { matched: false, output: null };
+  }
+
+  const summary = extractStableFinalRecommendationSummary(
+    safeString(payload.last_assistant_message ?? payload.lastAssistantMessage),
+  );
+  if (!summary) return { matched: false, output: null };
+
+  const leaderAttention = await readTeamLeaderAttention(teamName, cwd);
+  if (
+    !leaderAttention
+    || leaderAttention.leader_decision_state !== "done_waiting_on_leader"
+    || leaderAttention.work_remaining !== false
+  ) {
+    return { matched: false, output: null };
+  }
+
+  const signature = buildStableFinalRecommendationStopSignature(payload, teamName, summary);
+  const output = await maybeReturnRepeatableStopOutput(
+    payload,
+    stateDir,
+    signature,
+    {
+      decision: "block",
+      reason:
+        `Stable final recommendation already reached with no active worker tasks. Emit exactly one concise final decision summary aligned to "${summary}" with no filler or residual acknowledgements (for example "yes"), then stop.`,
+      stopReason: "release_readiness_auto_finalize",
+      systemMessage: RELEASE_READINESS_FINALIZE_SYSTEM_MESSAGE,
+    },
+  );
+  return { matched: true, output };
+}
+
 async function buildSkillStopOutput(
   cwd: string,
   sessionId: string,
@@ -1111,6 +1227,14 @@ async function buildStopHookOutput(
 
     const ultraqaOutput = await buildModeBasedStopOutput("ultraqa", cwd, canonicalSessionId);
     if (!stopHookActive && ultraqaOutput) return ultraqaOutput;
+
+    const releaseReadinessFinalizeResult = await maybeBuildReleaseReadinessFinalizeStopOutput(
+      payload,
+      cwd,
+      stateDir,
+      canonicalSessionId,
+    );
+    if (releaseReadinessFinalizeResult.matched) return releaseReadinessFinalizeResult.output;
 
     const teamOutput = await buildTeamStopOutput(cwd, canonicalSessionId);
     if (teamOutput) {

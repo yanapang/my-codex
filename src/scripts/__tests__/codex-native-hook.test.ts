@@ -10,6 +10,7 @@ import {
   initTeamState,
   readTeamLeaderAttention,
   readTeamPhase,
+  writeTeamLeaderAttention,
 } from "../../team/state.js";
 import {
   dispatchCodexNativeHook,
@@ -21,6 +22,46 @@ import { writeSessionStart } from "../../hooks/session.js";
 async function writeJson(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true }).catch(() => {});
   await writeFile(path, JSON.stringify(value, null, 2));
+}
+
+async function writeReleaseReadinessLeaderAttention(
+  teamName: string,
+  sessionId: string,
+  cwd: string,
+  options: { workRemaining: boolean },
+): Promise<void> {
+  await writeTeamLeaderAttention(teamName, {
+    team_name: teamName,
+    updated_at: "2026-04-12T17:20:00.000Z",
+    source: "notify_hook",
+    leader_decision_state: "done_waiting_on_leader",
+    leader_attention_pending: true,
+    leader_attention_reason: "leader_session_stopped",
+    attention_reasons: ["leader_session_stopped"],
+    leader_stale: true,
+    leader_session_active: false,
+    leader_session_id: sessionId,
+    leader_session_stopped_at: "2026-04-12T17:20:00.000Z",
+    unread_leader_message_count: 0,
+    work_remaining: options.workRemaining,
+    stalled_for_ms: null,
+  }, cwd);
+}
+
+async function writeReleaseReadinessStateMarker(
+  sessionId: string,
+  teamName: string,
+  cwd: string,
+): Promise<void> {
+  await writeJson(
+    join(cwd, ".omx", "state", "sessions", sessionId, "release-readiness-state.json"),
+    {
+      active: true,
+      session_id: sessionId,
+      team_name: teamName,
+      stable_final_recommendation_emitted: true,
+    },
+  );
 }
 
 const TEAM_STOP_COMMIT_GUIDANCE =
@@ -1356,6 +1397,101 @@ esac
         decision: "block",
         reason:
           `OMX team pipeline is still active (canonical-team) at phase team-exec; continue coordinating until the team reaches a terminal phase.${TEAM_STOP_COMMIT_GUIDANCE}`,
+        stopReason: "team_team-exec",
+        systemMessage: "OMX team pipeline is still active at phase team-exec.",
+      });
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("emits one concise final decision summary and auto-finalize guidance when release-readiness already has a stable final recommendation and no active worker tasks", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-release-readiness-finalize-"));
+    try {
+      await initTeamState(
+        "release-ready-team",
+        "release readiness finalize",
+        "executor",
+        1,
+        cwd,
+        undefined,
+        { ...process.env, OMX_SESSION_ID: "sess-stop-release-ready" },
+      );
+      await writeReleaseReadinessLeaderAttention(
+        "release-ready-team",
+        "sess-stop-release-ready",
+        cwd,
+        { workRemaining: false },
+      );
+      await writeReleaseReadinessStateMarker(
+        "sess-stop-release-ready",
+        "release-ready-team",
+        cwd,
+      );
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-stop-release-ready",
+          thread_id: "thread-stop-release-ready",
+          turn_id: "turn-stop-release-ready-1",
+          mode: "release-readiness",
+          last_assistant_message: "Launch-ready: yes",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.deepEqual(result.outputJson, {
+        decision: "block",
+        reason:
+          'Stable final recommendation already reached with no active worker tasks. Emit exactly one concise final decision summary aligned to "Launch-ready: yes." with no filler or residual acknowledgements (for example "yes"), then stop.',
+        stopReason: "release_readiness_auto_finalize",
+        systemMessage:
+          "OMX release-readiness detected a stable final recommendation with no active worker tasks; emit one concise final decision summary and finalize.",
+      });
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("does not auto-finalize non-release team stops that happen to contain a stable recommendation summary", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-non-release-readiness-control-"));
+    try {
+      await initTeamState(
+        "general-review-team",
+        "general team stop control",
+        "executor",
+        1,
+        cwd,
+        undefined,
+        { ...process.env, OMX_SESSION_ID: "sess-stop-general-review" },
+      );
+      await writeReleaseReadinessLeaderAttention(
+        "general-review-team",
+        "sess-stop-general-review",
+        cwd,
+        { workRemaining: false },
+      );
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-stop-general-review",
+          thread_id: "thread-stop-general-review",
+          turn_id: "turn-stop-general-review-1",
+          last_assistant_message: "Launch-ready: yes",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.deepEqual(result.outputJson, {
+        decision: "block",
+        reason:
+          `OMX team pipeline is still active (general-review-team) at phase team-exec; continue coordinating until the team reaches a terminal phase.${TEAM_STOP_COMMIT_GUIDANCE}`,
         stopReason: "team_team-exec",
         systemMessage: "OMX team pipeline is still active at phase team-exec.",
       });
