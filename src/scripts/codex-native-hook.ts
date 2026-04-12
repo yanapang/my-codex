@@ -142,6 +142,21 @@ function readPromptText(payload: CodexHookPayload): string {
   return "";
 }
 
+function sanitizePayloadForHookContext(
+  payload: CodexHookPayload,
+  hookEventName: CodexHookEventName,
+): CodexHookPayload {
+  if (hookEventName !== "UserPromptSubmit") return payload;
+
+  const sanitized = { ...payload };
+  delete sanitized.prompt;
+  delete sanitized.input;
+  delete sanitized.user_prompt;
+  delete sanitized.userPrompt;
+  delete sanitized.text;
+  return sanitized;
+}
+
 function buildBaseContext(
   cwd: string,
   payload: CodexHookPayload,
@@ -152,10 +167,7 @@ function buildBaseContext(
     project_path: cwd,
     transcript_path: safeString(payload.transcript_path ?? payload.transcriptPath) || null,
     source: safeString(payload.source),
-    payload,
-    ...(hookEventName === "UserPromptSubmit"
-      ? { prompt: readPromptText(payload) }
-      : {}),
+    payload: sanitizePayloadForHookContext(payload, hookEventName),
   };
 }
 

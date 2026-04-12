@@ -9,6 +9,7 @@ import {
   formatTmuxInfo,
   getTeamTmuxSessions,
   captureTmuxPane,
+  captureTmuxPaneWithLiveness,
 } from '../tmux.js';
 
 describe('getCurrentTmuxSession', () => {
@@ -226,6 +227,7 @@ describe('captureTmuxPane', () => {
   });
 
   it('captures output for valid pane id and sanitizes/clamps lines', () => {
+    const livePid = process.pid;
     const fakeBinDir = mkdtempSync(join(tmpdir(), 'omx-tmux-test-'));
     tmpDirs.push(fakeBinDir);
     const tmuxPath = join(fakeBinDir, 'tmux');
@@ -233,6 +235,10 @@ describe('captureTmuxPane', () => {
       tmuxPath,
       [
         '#!/bin/sh',
+        'if [ "$1" = "list-panes" ]; then',
+        `  printf "0 ${livePid}\\n"`,
+        '  exit 0',
+        'fi',
         'if [ "$1" != "capture-pane" ]; then exit 2; fi',
         'target=""',
         'lines=""',
@@ -251,5 +257,33 @@ describe('captureTmuxPane', () => {
     assert.equal(captureTmuxPane('%42', Number.NaN), 'capture:%42:-12');
     assert.equal(captureTmuxPane('%42', 0), 'capture:%42:-1');
     assert.equal(captureTmuxPane('%42', 999999), 'capture:%42:-2000');
+  });
+
+  it('suppresses capture when the target pane is already dead', () => {
+    const fakeBinDir = mkdtempSync(join(tmpdir(), 'omx-tmux-dead-pane-test-'));
+    tmpDirs.push(fakeBinDir);
+    const tmuxPath = join(fakeBinDir, 'tmux');
+    writeFileSync(
+      tmuxPath,
+      [
+        '#!/bin/sh',
+        'if [ "$1" = "list-panes" ]; then',
+        '  printf "1 99999\\n"',
+        '  exit 0',
+        'fi',
+        'if [ "$1" = "capture-pane" ]; then',
+        '  printf "stale pane output that should never be used\\n"',
+        '  exit 0',
+        'fi',
+        'exit 2',
+      ].join('\n'),
+    );
+    chmodSync(tmuxPath, 0o755);
+    process.env.PATH = `${fakeBinDir}:${originalPath ?? ''}`;
+
+    const result = captureTmuxPaneWithLiveness('%42', 12);
+    assert.equal(result.live, false);
+    assert.equal(result.content, null);
+    assert.equal(captureTmuxPane('%42', 12), null);
   });
 });

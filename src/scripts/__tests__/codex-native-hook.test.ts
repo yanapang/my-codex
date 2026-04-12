@@ -338,6 +338,52 @@ describe("codex native hook dispatch", () => {
     }
   });
 
+  it("does not expose submitted prompt text to keyword-detector hook plugins", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-prompt-sanitized-"));
+    try {
+      await mkdir(join(cwd, ".omx", "hooks"), { recursive: true });
+      await writeFile(
+        join(cwd, ".omx", "hooks", "capture-keyword-context.mjs"),
+        `import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+
+export async function onHookEvent(event) {
+  if (event.event !== "keyword-detector") return;
+  const outPath = join(process.cwd(), ".omx", "captured-keyword-context.json");
+  await mkdir(dirname(outPath), { recursive: true });
+  await writeFile(outPath, JSON.stringify(event.context, null, 2));
+}
+`,
+        "utf-8",
+      );
+
+      await dispatchCodexNativeHook(
+        {
+          hook_event_name: "UserPromptSubmit",
+          cwd,
+          session_id: "sess-sanitized-1",
+          thread_id: "thread-sanitized-1",
+          turn_id: "turn-sanitized-1",
+          prompt: "$ralplan approve this blocker-sensitive request",
+        },
+        { cwd },
+      );
+
+      const captured = JSON.parse(
+        await readFile(join(cwd, ".omx", "captured-keyword-context.json"), "utf-8"),
+      ) as { prompt?: string; payload?: Record<string, unknown> };
+
+      assert.equal(captured.prompt, undefined);
+      assert.equal(captured.payload?.prompt, undefined);
+      assert.equal(captured.payload?.input, undefined);
+      assert.equal(captured.payload?.user_prompt, undefined);
+      assert.equal(captured.payload?.userPrompt, undefined);
+      assert.equal(captured.payload?.text, undefined);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("does not emit UserPromptSubmit routing context for unknown $tokens", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-unknown-token-"));
     try {

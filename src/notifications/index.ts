@@ -136,7 +136,7 @@ import {
 } from "./temp-contract.js";
 import { formatNotification } from "./formatter.js";
 import { dispatchNotifications } from "./dispatcher.js";
-import { getCurrentTmuxSession, captureTmuxPane } from "./tmux.js";
+import { getCurrentTmuxSession } from "./tmux.js";
 import { basename } from "path";
 import { omxStateDir } from "../utils/paths.js";
 import {
@@ -237,9 +237,13 @@ export async function notifyLifecycle(
       !data.tmuxTail &&
       (event === "session-idle" || event === "session-stop" || event === "session-end")
     ) {
-      payload.tmuxTail = captureTmuxPane(payload.tmuxPaneId) ?? undefined;
+      const { captureTmuxPaneWithLiveness } = await import("./tmux.js");
+      const tmuxCapture = captureTmuxPaneWithLiveness(payload.tmuxPaneId);
+      payload.tmuxTail = tmuxCapture.content ?? undefined;
+      payload.tmuxTailLive = tmuxCapture.live;
     } else {
       payload.tmuxTail = data.tmuxTail;
+      payload.tmuxTailLive = data.tmuxTailLive;
     }
 
     payload.message = data.message || formatNotification(payload);
