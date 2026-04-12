@@ -237,9 +237,13 @@ export async function notifyLifecycle(
       !data.tmuxTail &&
       (event === "session-idle" || event === "session-stop" || event === "session-end")
     ) {
-      payload.tmuxTail = captureTmuxPane(payload.tmuxPaneId) ?? undefined;
+      const { captureTmuxPaneWithLiveness } = await import("./tmux.js");
+      const tmuxCapture = captureTmuxPaneWithLiveness(payload.tmuxPaneId);
+      payload.tmuxTail = tmuxCapture.content ?? undefined;
+      payload.tmuxTailLive = tmuxCapture.live;
     } else {
       payload.tmuxTail = data.tmuxTail;
+      payload.tmuxTailLive = data.tmuxTailLive;
     }
 
     payload.message = data.message || formatNotification(payload);

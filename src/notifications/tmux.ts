@@ -11,6 +11,11 @@ const TMUX_PANE_TARGET_RE = /^%\d+$/;
 const DEFAULT_CAPTURE_LINES = 12;
 const MAX_CAPTURE_LINES = 2000;
 
+export interface TmuxPaneCaptureResult {
+  content: string | null;
+  live: boolean;
+}
+
 function shouldUsePidFallback(): boolean {
   return process.env.OMX_TMUX_PID_FALLBACK === "1";
 }
@@ -141,24 +146,46 @@ export function getTeamTmuxSessions(teamName: string): string[] {
  * Returns null if capture fails or tmux is not available.
  */
 export function captureTmuxPane(paneId?: string | null, lines: number = 12): string | null {
+  return captureTmuxPaneWithLiveness(paneId, lines).content;
+}
+
+export function captureTmuxPaneWithLiveness(paneId?: string | null, lines: number = 12): TmuxPaneCaptureResult {
   const target = paneId || process.env.TMUX_PANE;
-  if (!target) return null;
-  if (!process.env.TMUX && !paneId) return null;
-  if (!TMUX_PANE_TARGET_RE.test(target)) return null;
+  if (!target) return { content: null, live: false };
+  if (!process.env.TMUX && !paneId) return { content: null, live: false };
+  if (!TMUX_PANE_TARGET_RE.test(target)) return { content: null, live: false };
 
   const safeLines = Number.isFinite(lines) ? Math.trunc(lines) : DEFAULT_CAPTURE_LINES;
   const clampedLines = Math.max(1, Math.min(MAX_CAPTURE_LINES, safeLines));
 
   try {
+    const paneStatus = execFileSync("tmux", ["list-panes", "-t", target, "-F", "#{pane_dead} #{pane_pid}"], {
+      encoding: "utf-8",
+      timeout: 3000,
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    }).trim();
+    const firstStatusLine = paneStatus.split("\n")[0]?.trim() || "";
+    const [paneDead = "", panePidRaw = ""] = firstStatusLine.split(/\s+/, 2);
+    const panePid = Number.parseInt(panePidRaw, 10);
+    if (paneDead === "1" || !Number.isFinite(panePid)) {
+      return { content: null, live: false };
+    }
+    try {
+      process.kill(panePid, 0);
+    } catch {
+      return { content: null, live: false };
+    }
+
     const output = execFileSync("tmux", buildCapturePaneArgv(target, clampedLines), {
       encoding: "utf-8",
       timeout: 3000,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     }).trim();
-    return output || null;
+    return { content: output || null, live: true };
   } catch {
-    return null;
+    return { content: null, live: false };
   }
 }
 
