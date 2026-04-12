@@ -10,6 +10,7 @@ import {
   getTeamTmuxSessions,
   captureTmuxPane,
   captureTmuxPaneWithLiveness,
+  sanitizeTmuxAlertText,
 } from '../tmux.js';
 
 describe('getCurrentTmuxSession', () => {
@@ -285,5 +286,41 @@ describe('captureTmuxPane', () => {
     assert.equal(result.live, false);
     assert.equal(result.content, null);
     assert.equal(captureTmuxPane('%42', 12), null);
+  });
+});
+
+describe('sanitizeTmuxAlertText', () => {
+  it('drops metadata-only branch and HUD summary lines', () => {
+    const raw = [
+      'fix/issue-1525-post-stop-keyword-replay',
+      'fix/issue-1525-post-stop-keyword-replay | ralph:2/50 | turns:4 | session:1m | last:5s ago',
+      '[OMX#3] ultrawork active',
+    ].join('\n');
+
+    assert.equal(sanitizeTmuxAlertText(raw), undefined);
+  });
+
+  it('preserves real failure lines even when they resemble alert keywords', () => {
+    const raw = [
+      'fix/issue-1525-post-stop-keyword-replay | ralph:2/50 | turns:4 | session:1m | last:5s ago',
+      'stderr: Error: test suite failed',
+    ].join('\n');
+
+    assert.equal(sanitizeTmuxAlertText(raw), 'stderr: Error: test suite failed');
+  });
+
+  it('preserves ordinary runtime lines with separators', () => {
+    const raw = 'vitest summary | 12 passed | 1 failed';
+    assert.equal(sanitizeTmuxAlertText(raw), raw);
+  });
+
+  it('drops metadata-only branch lines even when the branch name contains failure-like words', () => {
+    const raw = 'feature/error-repro | ralph:2/50 | turns:4 | session:1m | last:5s ago';
+    assert.equal(sanitizeTmuxAlertText(raw), undefined);
+  });
+
+  it('preserves a branch line when it carries a real failure marker', () => {
+    const raw = 'feature/error-repro | stderr: TypeError: cannot read properties of undefined';
+    assert.equal(sanitizeTmuxAlertText(raw), raw);
   });
 });

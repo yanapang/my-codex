@@ -10,6 +10,42 @@ import { buildCapturePaneArgv } from "./tmux-detector.js";
 const TMUX_PANE_TARGET_RE = /^%\d+$/;
 const DEFAULT_CAPTURE_LINES = 12;
 const MAX_CAPTURE_LINES = 2000;
+const ANSI_RE = /\x1b(?:[@-Z\\-_]|\[[0-9;]*[A-Za-z])/g;
+const OMX_METADATA_SEGMENT_RE = /^\[OMX(?:[#\]].*)?$/;
+const HUD_STATUS_SEGMENT_RE = /^(?:ralph:\d+\/(?:\d+|\?)|autopilot:[\w-]+|ralplan:(?:\d+\/(?:\d+|\?)|[\w-]+)|interview:[\w:-]+|research:[\w-]+|qa:[\w-]+|team:(?:\d+\s+workers|[\w.-]+)|ultrawork|turns:\d+|tokens:[\dkm.]+|quota:[\w%,.]+|session:[\dhms]+|last:\d+[smh](?:\s+ago)?|total-turns:\d+|tmux:[\w:.-]+)$/i;
+const BRANCH_METADATA_SEGMENT_RE = /^(?:(?:fix|feat|feature|chore|refactor|hotfix|release|docs|doc|test|tests|ci|build|perf|revert|bugfix|spike|wip)\/[A-Za-z0-9._/-]+|HEAD(?: -> [A-Za-z0-9._/-]+)?|detached)$/;
+
+function isMetadataOnlyTmuxSegment(segment: string): boolean {
+  return OMX_METADATA_SEGMENT_RE.test(segment)
+    || HUD_STATUS_SEGMENT_RE.test(segment)
+    || BRANCH_METADATA_SEGMENT_RE.test(segment);
+}
+
+function isMetadataOnlyTmuxLine(line: string): boolean {
+  const normalized = line.replace(ANSI_RE, "").trim();
+  if (!normalized) return false;
+
+  const segments = normalized.split("|").map((segment) => segment.trim()).filter(Boolean);
+  if (segments.length === 0 || segments.some((segment) => !isMetadataOnlyTmuxSegment(segment))) {
+    return false;
+  }
+
+  const hasExplicitStatusSegment = segments.some((segment) => OMX_METADATA_SEGMENT_RE.test(segment) || HUD_STATUS_SEGMENT_RE.test(segment));
+  return hasExplicitStatusSegment || (segments.length === 1 && BRANCH_METADATA_SEGMENT_RE.test(segments[0]));
+}
+
+/**
+ * Remove metadata-only tmux lines from alert-facing payload text while
+ * preserving real runtime failures. Raw capture helpers remain unchanged.
+ */
+export function sanitizeTmuxAlertText(raw: string | null | undefined): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const filtered = raw
+    .split("\n")
+    .filter((line) => !isMetadataOnlyTmuxLine(line));
+  const joined = filtered.join("\n").trim();
+  return joined || undefined;
+}
 
 export interface TmuxPaneCaptureResult {
   content: string | null;

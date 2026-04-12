@@ -35,7 +35,7 @@ import type { OpenClawHookEvent, OpenClawContext, OpenClawResult } from "./types
 import { getOpenClawConfig, resolveGateway } from "./config.js";
 import { wakeGateway, wakeCommandGateway, interpolateInstruction, isCommandGateway } from "./dispatcher.js";
 import { basename } from "path";
-import { getCurrentTmuxSession } from "../notifications/tmux.js";
+import { getCurrentTmuxSession, sanitizeTmuxAlertText } from "../notifications/tmux.js";
 
 /** Whether debug logging is enabled */
 const DEBUG = process.env.OMX_OPENCLAW_DEBUG === "1";
@@ -92,9 +92,12 @@ export async function wakeOpenClaw(
     const replyTarget = context.replyTarget ?? process.env.OPENCLAW_REPLY_TARGET ?? undefined;
     const replyThread = context.replyThread ?? process.env.OPENCLAW_REPLY_THREAD ?? undefined;
 
+    const sanitizedContextTmuxTail = sanitizeTmuxAlertText(context.tmuxTail);
+
     // Merge reply context into the context object for whitelisting
     const enrichedContext: OpenClawContext = {
       ...context,
+      tmuxTail: sanitizedContextTmuxTail,
       ...(replyChannel !== undefined && { replyChannel }),
       ...(replyTarget !== undefined && { replyTarget }),
       ...(replyThread !== undefined && { replyThread }),
