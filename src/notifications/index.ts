@@ -136,7 +136,7 @@ import {
 } from "./temp-contract.js";
 import { formatNotification } from "./formatter.js";
 import { dispatchNotifications } from "./dispatcher.js";
-import { getCurrentTmuxSession, captureTmuxPane } from "./tmux.js";
+import { getCurrentTmuxSession } from "./tmux.js";
 import { basename } from "path";
 import { omxStateDir } from "../utils/paths.js";
 import {
