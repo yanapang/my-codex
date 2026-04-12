@@ -1269,17 +1269,49 @@ export async function dispatchCodexNativeHook(
   };
 }
 
-async function readStdinJson(): Promise<CodexHookPayload> {
+interface NativeHookCliReadResult {
+  payload: CodexHookPayload;
+  parseError: Error | null;
+}
+
+async function readStdinJson(): Promise<NativeHookCliReadResult> {
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
   }
   const raw = Buffer.concat(chunks).toString("utf-8").trim();
-  return raw ? safeObject(JSON.parse(raw)) : {};
+  if (!raw) {
+    return { payload: {}, parseError: null };
+  }
+
+  try {
+    return {
+      payload: safeObject(JSON.parse(raw)),
+      parseError: null,
+    };
+  } catch (error) {
+    return {
+      payload: {},
+      parseError: error instanceof Error ? error : new Error(String(error)),
+    };
+  }
 }
 
 export async function runCodexNativeHookCli(): Promise<void> {
-  const payload = await readStdinJson();
+  const { payload, parseError } = await readStdinJson();
+  if (parseError) {
+    process.stdout.write(`${JSON.stringify({
+      decision: "block",
+      reason: "OMX native hook received malformed JSON input. Preserve runtime state and inspect the emitting hook payload before retrying.",
+      hookSpecificOutput: {
+        hookEventName: "Unknown",
+        additionalContext:
+          `stdin JSON parsing failed inside codex-native-hook: ${parseError.message}. Emit valid JSON from the native hook caller before retrying.`,
+      },
+    })}\n`);
+    return;
+  }
+
   const result = await dispatchCodexNativeHook(payload);
   if (result.outputJson) {
     process.stdout.write(`${JSON.stringify(result.outputJson)}\n`);
