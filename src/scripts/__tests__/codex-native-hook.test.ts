@@ -93,6 +93,36 @@ describe("codex native hook config", () => {
 });
 
 describe("codex native hook dispatch", () => {
+  it("emits deterministic JSON stdout when CLI stdin is malformed", () => {
+    const stdout = execFileSync(
+      process.execPath,
+      [join(process.cwd(), "dist", "scripts", "codex-native-hook.js")],
+      {
+        cwd: process.cwd(),
+        input: "{",
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
+
+    const output = JSON.parse(stdout.trim()) as {
+      decision?: string;
+      reason?: string;
+      hookSpecificOutput?: { hookEventName?: string; additionalContext?: string };
+    };
+
+    assert.equal(output.decision, "block");
+    assert.equal(
+      output.reason,
+      "OMX native hook received malformed JSON input. Preserve runtime state and inspect the emitting hook payload before retrying.",
+    );
+    assert.equal(output.hookSpecificOutput?.hookEventName, "Unknown");
+    assert.match(
+      String(output.hookSpecificOutput?.additionalContext ?? ""),
+      /stdin JSON parsing failed inside codex-native-hook:/,
+    );
+  });
+
   it("maps Codex events onto OMX logical surfaces", () => {
     assert.equal(mapCodexHookEventToOmxEvent("SessionStart"), "session-start");
     assert.equal(mapCodexHookEventToOmxEvent("UserPromptSubmit"), "keyword-detector");
