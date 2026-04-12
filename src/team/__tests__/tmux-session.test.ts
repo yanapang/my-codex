@@ -929,6 +929,73 @@ describe('buildWorkerStartupCommand', () => {
     }
   });
 
+  it('inherits only allowlisted ambient proxy env vars for tmux startup commands', () => {
+    const prevShell = process.env.SHELL;
+    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+    const prevHttpsProxy = process.env.HTTPS_PROXY;
+    const prevHttpProxy = process.env.HTTP_PROXY;
+    const prevNoProxy = process.env.NO_PROXY;
+    const prevLowerHttpsProxy = process.env.https_proxy;
+    const prevCustom = process.env.AWS_SECRET_ACCESS_KEY;
+    process.env.SHELL = '/bin/bash';
+    process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
+    process.env.HTTPS_PROXY = 'https://upper-proxy.example:443';
+    process.env.HTTP_PROXY = 'http://upper-proxy.example:80';
+    process.env.NO_PROXY = 'localhost,127.0.0.1';
+    process.env.https_proxy = 'https://lower-proxy.example:443';
+    process.env.AWS_SECRET_ACCESS_KEY = 'should-not-inherit';
+    try {
+      const cmd = buildWorkerStartupCommand('alpha', 1, [], '/tmp/project');
+      assert.match(cmd, /HTTPS_PROXY=https:\/\/upper-proxy\.example:443/);
+      assert.match(cmd, /HTTP_PROXY=http:\/\/upper-proxy\.example:80/);
+      assert.match(cmd, /NO_PROXY=localhost,127\.0\.0\.1/);
+      assert.match(cmd, /https_proxy=https:\/\/lower-proxy\.example:443/);
+      assert.doesNotMatch(cmd, /AWS_SECRET_ACCESS_KEY=should-not-inherit/);
+    } finally {
+      if (typeof prevShell === 'string') process.env.SHELL = prevShell;
+      else delete process.env.SHELL;
+      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
+      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+      if (typeof prevHttpsProxy === 'string') process.env.HTTPS_PROXY = prevHttpsProxy;
+      else delete process.env.HTTPS_PROXY;
+      if (typeof prevHttpProxy === 'string') process.env.HTTP_PROXY = prevHttpProxy;
+      else delete process.env.HTTP_PROXY;
+      if (typeof prevNoProxy === 'string') process.env.NO_PROXY = prevNoProxy;
+      else delete process.env.NO_PROXY;
+      if (typeof prevLowerHttpsProxy === 'string') process.env.https_proxy = prevLowerHttpsProxy;
+      else delete process.env.https_proxy;
+      if (typeof prevCustom === 'string') process.env.AWS_SECRET_ACCESS_KEY = prevCustom;
+      else delete process.env.AWS_SECRET_ACCESS_KEY;
+    }
+  });
+
+  it('preserves explicit worker env precedence over inherited ambient proxy vars', () => {
+    const prevShell = process.env.SHELL;
+    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+    const prevHttpsProxy = process.env.HTTPS_PROXY;
+    process.env.SHELL = '/bin/bash';
+    process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
+    process.env.HTTPS_PROXY = 'https://ambient-proxy.example:443';
+    try {
+      const cmd = buildWorkerStartupCommand(
+        'alpha',
+        1,
+        [],
+        '/tmp/project',
+        { HTTPS_PROXY: 'https://explicit-proxy.example:8443' },
+      );
+      assert.match(cmd, /HTTPS_PROXY=https:\/\/explicit-proxy\.example:8443/);
+      assert.doesNotMatch(cmd, /HTTPS_PROXY=https:\/\/ambient-proxy\.example:443/);
+    } finally {
+      if (typeof prevShell === 'string') process.env.SHELL = prevShell;
+      else delete process.env.SHELL;
+      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
+      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+      if (typeof prevHttpsProxy === 'string') process.env.HTTPS_PROXY = prevHttpsProxy;
+      else delete process.env.HTTPS_PROXY;
+    }
+  });
+
   it('resolves POSIX leader paths before building fish worker startup commands', async () => {
     const fakeBin = await mkdtemp(join(tmpdir(), 'omx-worker-startup-posix-'));
     const prevPath = process.env.PATH;
@@ -1937,6 +2004,29 @@ describe('team worker launch mode helpers', () => {
       else delete process.env.WORKER_PROVIDER_API_KEY;
       await rm(leaderCodexHome, { recursive: true, force: true });
       await rm(workerCodexHome, { recursive: true, force: true });
+    }
+  });
+
+  it('buildWorkerProcessLaunchSpec keeps the worker env contract unchanged for ambient proxy vars', () => {
+    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+    const prevHttpsProxy = process.env.HTTPS_PROXY;
+    process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
+    process.env.HTTPS_PROXY = 'https://ambient-proxy.example:443';
+    try {
+      const spec = buildWorkerProcessLaunchSpec(
+        'eta-team',
+        1,
+        [],
+        '/tmp/workspace',
+        {},
+        'codex',
+      );
+      assert.equal(spec.env.HTTPS_PROXY, undefined);
+    } finally {
+      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
+      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+      if (typeof prevHttpsProxy === 'string') process.env.HTTPS_PROXY = prevHttpsProxy;
+      else delete process.env.HTTPS_PROXY;
     }
   });
 
