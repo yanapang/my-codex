@@ -1,6 +1,6 @@
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveManagedSessionContext } from '../../scripts/notify-hook/managed-tmux.js';
@@ -72,6 +72,27 @@ describe('notify-hook managed tmux windows fallback', () => {
       assert.equal(result.nativeSessionId, 'codex-native-session');
       assert.match(result.expectedTmuxSessionName, /omx-canonical-session|canonical-session/);
     } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts symlinked cwd aliases for the same managed session', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-managed-tmux-cwd-alias-'));
+    const aliasCwd = `${cwd}-alias`;
+    try {
+      await symlink(cwd, aliasCwd, process.platform === 'win32' ? 'junction' : 'dir');
+      await writeSessionStart(cwd, 'omx-alias-session');
+
+      delete process.env.TMUX;
+      delete process.env.TMUX_PANE;
+      process.env.OMX_TEAM_WORKER = '';
+
+      const result = await resolveManagedSessionContext(aliasCwd, { session_id: 'omx-alias-session' }, { allowTeamWorker: false });
+      assert.equal(result.managed, true);
+      assert.match(result.reason, /ancestry_match$/);
+      assert.equal(result.canonicalSessionId, 'omx-alias-session');
+    } finally {
+      await rm(aliasCwd, { recursive: true, force: true });
       await rm(cwd, { recursive: true, force: true });
     }
   });
