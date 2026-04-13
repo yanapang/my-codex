@@ -1,6 +1,5 @@
-import { describe, it } from "node:test";
+import { afterEach, describe, it, mock } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, readdir as fsReaddir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -35,6 +34,7 @@ import {
   buildDetachedTmuxSessionName,
   buildDetachedSessionFinalizeSteps,
   buildDetachedSessionRollbackSteps,
+  detectDetachedSessionWindowIndex,
   resolveNotifyTempContract,
   buildNotifyTempStartupMessages,
   buildNotifyFallbackWatcherEnv,
@@ -48,7 +48,9 @@ import {
   resolveNotifyFallbackWatcherScript,
   resolveHookDerivedWatcherScript,
   resolveNotifyHookScript,
+  buildDetachedWindowsBootstrapScript,
   acquireTmuxExtendedKeysLease,
+  resolveNativeSessionName,
   releaseTmuxExtendedKeysLease,
   withTmuxExtendedKeys,
 } from "../index.js";
@@ -65,6 +67,10 @@ import type { ProcessEntry } from "../cleanup.js";
 function expectedLowComplexityModel(codexHomeOverride?: string): string {
   return getTeamLowComplexityModel(codexHomeOverride);
 }
+
+afterEach(() => {
+  mock.restoreAll();
+});
 
 describe("normalizeCodexLaunchArgs", () => {
   it("maps --madmax to codex bypass flag", () => {
@@ -1464,6 +1470,18 @@ describe("detached tmux new-session sequencing", () => {
     assert.equal(steps[1]?.args.at(-1), hudCmd);
   });
 
+  it("buildDetachedWindowsBootstrapScript targets the resolved tmux-compatible command", () => {
+    const script = buildDetachedWindowsBootstrapScript(
+      "omx-demo",
+      "powershell.exe -NoLogo -NoExit -EncodedCommand abc",
+      2500,
+      "C:\\Program Files\\psmux\\psmux.exe",
+    );
+    assert.match(script, /const tmuxCommand = "C:\\\\Program Files\\\\psmux\\\\psmux\.exe";/);
+    assert.match(script, /execFileSync\(tmuxCommand, \['send-keys'/);
+    assert.doesNotMatch(script, /execFileSync\('tmux'/);
+  });
+
   it("buildDetachedSessionBootstrapSteps kills detached tmux session on normal shell exit", () => {
     const steps = buildDetachedSessionBootstrapSteps(
       "omx-demo",
@@ -1540,7 +1558,7 @@ exit 0
       const leaderCmd = steps[0]?.args.at(-1);
       assert.equal(typeof leaderCmd, "string");
 
-      execFileSync("/bin/sh", ["-c", leaderCmd!], {
+      (await import("node:child_process")).execFileSync("/bin/sh", ["-c", leaderCmd!], {
         cwd,
         env: {
           ...process.env,
@@ -1618,7 +1636,7 @@ exit 0
       const leaderCmd = steps[0]?.args.at(-1);
       assert.equal(typeof leaderCmd, "string");
 
-      const result = spawnSync("/bin/sh", ["-lc", leaderCmd!], {
+      const result = (await import("node:child_process")).spawnSync("/bin/sh", ["-lc", leaderCmd!], {
         cwd,
         env: {
           ...process.env,
@@ -2027,6 +2045,79 @@ describe("buildDetachedTmuxSessionName", () => {
       "omx-1770992424158-abc123",
     );
     assert.equal(sessionName, "omx-my-repo-detached-1770992424158-abc123");
+  });
+});
+
+describe("native Windows psmux-compatible tmux resolution", () => {
+  it("resolveNativeSessionName uses the shared tmux-aware resolver for current session lookup", async () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    const originalPath = process.env.PATH;
+    const originalPathext = process.env.PATHEXT;
+    const wd = await mkdtemp(join(tmpdir(), "omx-psmux-native-session-"));
+    const fakeBin = join(wd, "bin");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+
+    try {
+      await mkdir(fakeBin, { recursive: true });
+      await writeFile(
+        join(fakeBin, "psmux.exe"),
+        `#!/bin/sh
+if [ "$1" = "display-message" ] && [ "$2" = "-p" ] && [ "$3" = "-t" ] && [ "$4" = "%7" ] && [ "$5" = "#S" ]; then
+  printf 'psmux-session\\n'
+  exit 0
+fi
+printf 'unexpected:%s\\n' "$*" >&2
+exit 1
+`,
+      );
+      await chmod(join(fakeBin, "psmux.exe"), 0o755);
+      process.env.PATH = fakeBin;
+      process.env.PATHEXT = ".EXE";
+      const sessionName = resolveNativeSessionName("/tmp/repo", "omx-abc123", {
+        ...process.env,
+        TMUX: "1",
+        TMUX_PANE: "%7",
+      });
+      assert.equal(sessionName, "psmux-session");
+    } finally {
+      process.env.PATH = originalPath;
+      process.env.PATHEXT = originalPathext;
+      if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it("detectDetachedSessionWindowIndex uses the shared tmux-aware resolver on native Windows", async () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    const originalPath = process.env.PATH;
+    const originalPathext = process.env.PATHEXT;
+    const wd = await mkdtemp(join(tmpdir(), "omx-psmux-window-index-"));
+    const fakeBin = join(wd, "bin");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+
+    try {
+      await mkdir(fakeBin, { recursive: true });
+      await writeFile(
+        join(fakeBin, "psmux.exe"),
+        `#!/bin/sh
+if [ "$1" = "display-message" ] && [ "$2" = "-p" ] && [ "$3" = "-t" ] && [ "$4" = "omx-demo" ] && [ "$5" = "#{window_index}" ]; then
+  printf '3\\n'
+  exit 0
+fi
+printf 'unexpected:%s\\n' "$*" >&2
+exit 1
+`,
+      );
+      await chmod(join(fakeBin, "psmux.exe"), 0o755);
+      process.env.PATH = fakeBin;
+      process.env.PATHEXT = ".EXE";
+      assert.equal(detectDetachedSessionWindowIndex("omx-demo"), "3");
+    } finally {
+      process.env.PATH = originalPath;
+      process.env.PATHEXT = originalPathext;
+      if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
+      await rm(wd, { recursive: true, force: true });
+    }
   });
 });
 
