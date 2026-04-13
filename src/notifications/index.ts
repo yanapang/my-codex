@@ -51,6 +51,7 @@ export {
   getTeamTmuxSessions,
   formatTmuxInfo,
   captureTmuxPane,
+  sanitizeTmuxAlertText,
 } from "./tmux.js";
 export {
   getNotificationConfig,
@@ -136,7 +137,7 @@ import {
 } from "./temp-contract.js";
 import { formatNotification } from "./formatter.js";
 import { dispatchNotifications } from "./dispatcher.js";
-import { getCurrentTmuxSession } from "./tmux.js";
+import { getCurrentTmuxSession, sanitizeTmuxAlertText } from "./tmux.js";
 import { basename } from "path";
 import { omxStateDir } from "../utils/paths.js";
 import {
@@ -247,10 +248,10 @@ export async function notifyLifecycle(
     ) {
       const { captureTmuxPaneWithLiveness } = await import("./tmux.js");
       const tmuxCapture = captureTmuxPaneWithLiveness(payload.tmuxPaneId);
-      payload.tmuxTail = tmuxCapture.content ?? undefined;
+      payload.tmuxTail = sanitizeTmuxAlertText(tmuxCapture.content);
       payload.tmuxTailLive = tmuxCapture.live;
     } else {
-      payload.tmuxTail = data.tmuxTail;
+      payload.tmuxTail = sanitizeTmuxAlertText(data.tmuxTail);
       payload.tmuxTailLive = data.tmuxTailLive;
     }
 
