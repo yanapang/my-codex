@@ -5,7 +5,7 @@
  * and provides structured logging for session events.
  */
 
-import { readFile, writeFile, mkdir, unlink, appendFile } from 'fs/promises';
+import { readFile, writeFile, mkdir, unlink, appendFile, rm } from 'fs/promises';
 import { dirname, join } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { omxStateDir, omxLogsDir, sameFilePath } from '../utils/paths.js';
@@ -34,6 +34,30 @@ function sessionPath(cwd: string): string {
 
 function historyPath(cwd: string): string {
   return join(omxLogsDir(cwd), HISTORY_FILE);
+}
+
+async function removeDeadSessionHudState(
+  cwd: string,
+  sessionIds: Array<string | undefined>,
+): Promise<void> {
+  const uniqueSessionIds = [...new Set(
+    sessionIds
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .map((value) => value.trim()),
+  )];
+
+  const candidatePaths = [
+    getStateFilePath('hud-state.json', cwd),
+    ...uniqueSessionIds.map((sessionId) => getStateFilePath('hud-state.json', cwd, sessionId)),
+  ];
+
+  await Promise.all(candidatePaths.map(async (path) => {
+    try {
+      await rm(path, { force: true });
+    } catch {
+      // best effort only
+    }
+  }));
 }
 
 /**
@@ -349,6 +373,12 @@ export async function writeSessionEnd(cwd: string, sessionId: string): Promise<v
   };
 
   await appendFile(historyPath(cwd), JSON.stringify(historyEntry) + '\n');
+
+  await removeDeadSessionHudState(cwd, [
+    state?.session_id,
+    state?.native_session_id,
+    sessionId,
+  ]);
 
   // Delete session.json
   try {
