@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'fs';
 import { isAbsolute, join, resolve } from 'path';
 import {
   CODEX_BYPASS_FLAG,
+  CLAUDE_SKIP_PERMISSIONS_FLAG,
   MADMAX_FLAG,
   CONFIG_FLAG,
   LONG_CONFIG_FLAG,
@@ -55,7 +56,6 @@ const OMX_TEAM_WORKER_CLI_ENV = 'OMX_TEAM_WORKER_CLI';
 const OMX_TEAM_WORKER_CLI_MAP_ENV = 'OMX_TEAM_WORKER_CLI_MAP';
 const OMX_TEAM_WORKER_LAUNCH_MODE_ENV = 'OMX_TEAM_WORKER_LAUNCH_MODE';
 const OMX_TEAM_AUTO_INTERRUPT_RETRY_ENV = 'OMX_TEAM_AUTO_INTERRUPT_RETRY';
-const CLAUDE_SKIP_PERMISSIONS_FLAG = '--dangerously-skip-permissions';
 const GEMINI_PROMPT_INTERACTIVE_FLAG = '-i';
 const GEMINI_APPROVAL_MODE_FLAG = '--approval-mode';
 const GEMINI_APPROVAL_MODE_YOLO = 'yolo';
