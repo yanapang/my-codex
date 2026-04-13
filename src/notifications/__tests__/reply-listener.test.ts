@@ -440,6 +440,57 @@ describe('pollDiscordOnce', () => {
     assert.deepEqual(replyBody.allowed_mentions, { parse: [] });
   });
 
+  it('uses the latest correlated session when a Discord notification message id is reused', async () => {
+    resetReplyListenerTransientState();
+    const config = createBaseConfig();
+    const state = createBaseState();
+    const statusSessionIds: string[] = [];
+
+    await pollDiscordOnce(
+      config,
+      state,
+      new RateLimiter(10),
+      {
+        fetchImpl: async (input) => {
+          const url = String(input);
+          if (url.endsWith('/messages?limit=10')) {
+            return jsonResponse([
+              {
+                id: 'discord-status-reused-id',
+                author: { id: 'discord-user-1' },
+                content: 'status',
+                message_reference: { message_id: 'orig-discord-msg' },
+              },
+            ]);
+          }
+          if (url.endsWith('/messages')) {
+            return jsonResponse({ id: 'status-reply-reused-id' });
+          }
+          throw new Error(`Unexpected fetch url: ${url}`);
+        },
+        lookupByMessageIdImpl: () => ({
+          ...createMapping('discord-bot'),
+          messageId: 'orig-discord-msg',
+          sessionId: 'session-newer',
+          tmuxPaneId: '%10',
+          tmuxSessionName: 'latest-session',
+        }),
+        buildSessionStatusReplyImpl: async (mapping) => {
+          statusSessionIds.push(mapping.sessionId);
+          return `Tracked OMX session status\nSession: ${mapping.sessionId}`;
+        },
+        injectReplyImpl: () => {
+          throw new Error('injectReply should not run for exact-match status probes');
+        },
+      },
+    );
+
+    assert.deepEqual(statusSessionIds, ['session-newer']);
+    assert.equal(state.messagesInjected, 0);
+    assert.equal(state.errors, 0);
+    assert.equal(state.discordLastMessageId, 'discord-status-reused-id');
+  });
+
   it('injects authorized replies and posts a threaded acknowledgement with recent output', async () => {
     resetReplyListenerTransientState();
     const config = createBaseConfig({ discordMention: '<@123>' });
