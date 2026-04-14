@@ -163,16 +163,16 @@ describe("adapt foundation", () => {
 		assert.equal(existsSync(paths.envelopePath), true);
 		assert.equal(existsSync(join(tempDir, ".omx", "state")), false);
 
-	const envelope = JSON.parse(readFileSync(paths.envelopePath, "utf-8")) as {
-		target: string;
-		openclaw?: {
-			observedState: string;
-			hooks: Array<{ event: string; status: string }>;
+		const envelope = JSON.parse(readFileSync(paths.envelopePath, "utf-8")) as {
+			target: string;
+			openclaw?: {
+				observedState: string;
+				hooks: Array<{ event: string; status: string }>;
 			};
 		};
-	assert.equal(envelope.target, "openclaw");
-	assert.equal(envelope.openclaw?.observedState, "configured");
-	assert.equal(envelope.openclaw?.hooks[0]?.event, "session-start");
+		assert.equal(envelope.target, "openclaw");
+		assert.equal(envelope.openclaw?.observedState, "configured");
+		assert.equal(envelope.openclaw?.hooks[0]?.event, "session-start");
 	});
 
 	it("OpenClaw probe degrades gracefully when env/config evidence is absent", () => {
@@ -265,7 +265,10 @@ describe("adapt foundation", () => {
 		);
 		assert.equal(doctor.issues[0]?.code, "adapter_not_initialized");
 		assert.match(doctor.nextSteps.join("\n"), /init --write/i);
-		assert.match(doctor.nextSteps.join("\n"), /follow-on PR/i);
+		assert.match(
+			doctor.nextSteps.join("\n"),
+			/Hermes adapter reads external ACP, gateway, and session-store evidence/i,
+		);
 	});
 
 	it("rejects inherited prototype-like targets during validation", () => {

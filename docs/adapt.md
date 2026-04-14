@@ -21,6 +21,13 @@ Current targets:
 - `openclaw`
 - `hermes`
 
+Hermes follow-on behavior in this worktree:
+
+- `probe` inspects external Hermes ACP, gateway, and session-store evidence
+- `status` synthesizes `unavailable` / `installed` / `degraded` / `running` from observable Hermes files only
+- `envelope` includes Hermes bootstrap metadata for ACP commands, lifecycle bridge guidance, and status commands
+- `init --write` still writes only under `.omx/adapters/hermes/...`; Hermes runtime files remain read-only inputs
+
 Examples:
 
 ```bash
@@ -39,4 +46,4 @@ Foundation constraints:
 - OpenClaw status is local evidence only; it does not claim downstream runtime acknowledgement or execution
 - command-gateway readiness still requires `OMX_OPENCLAW_COMMAND=1`
 
-Hermes-specific probe/integration logic remains deferred.
+Hermes-specific evidence discovery uses `HERMES_HOME` plus an overrideable Hermes source root (`OMX_ADAPT_HERMES_ROOT`) so OMX can inspect an external runtime without vendoring or mutating it.

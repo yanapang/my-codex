@@ -77,7 +77,7 @@ const TARGET_DESCRIPTORS: Record<AdaptTarget, AdaptTargetDescriptor> = {
 		summary:
 			"Foundation seam for an OMX-owned adapter around Hermes ACP, gateway, and persistent-session surfaces.",
 		followupHint:
-			"Hermes-specific ACP probing, status synthesis, and path overrides land in a follow-on PR.",
+			"Hermes adapter reads external ACP, gateway, and session-store evidence while keeping all writes under .omx/adapters/hermes/.",
 		capabilities: [
 			...FOUNDATION_CAPABILITIES,
 			capability(
@@ -85,14 +85,14 @@ const TARGET_DESCRIPTORS: Record<AdaptTarget, AdaptTargetDescriptor> = {
 				"Persistent session observation",
 				"target-observed",
 				"stub",
-				"Foundation reports the seam only; it does not inspect Hermes runtime files or session stores yet.",
+				"Hermes session-store evidence is read from HERMES_HOME-scoped state.db when available.",
 			),
 			capability(
 				"acp-envelope-bridge",
 				"ACP envelope bridge",
 				"shared-contract",
 				"stub",
-				"Foundation reserves shared metadata exchange without claiming control over Hermes runtime internals.",
+				"Hermes envelope/bootstrap metadata maps OMX lifecycle intent into ACP and gateway guidance without claiming deep control.",
 			),
 		],
 	},

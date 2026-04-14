@@ -113,7 +113,22 @@ export interface AdaptEnvelope {
 	planning: AdaptPlanningLink;
 	capabilities: AdaptCapabilityReport[];
 	constraints: string[];
+	targetRuntime?: AdaptRuntimeObservation;
+	bootstrap?: AdaptBootstrapMetadata;
 	openclaw?: AdaptOpenClawMetadata;
+}
+
+export interface AdaptRuntimeObservation {
+	state: string;
+	detail: string;
+	evidence?: Record<string, unknown>;
+}
+
+export interface AdaptBootstrapMetadata {
+	summary: string;
+	eventBridge: string[];
+	commands: string[];
+	nextSteps: string[];
 }
 
 export interface AdaptProbeReport {
@@ -125,10 +140,7 @@ export interface AdaptProbeReport {
 	adapterPaths: AdaptPathSet;
 	planning: AdaptPlanningLink;
 	capabilities: AdaptCapabilityReport[];
-	targetRuntime: {
-		state: "not-implemented";
-		detail: string;
-	};
+	targetRuntime: AdaptRuntimeObservation;
 	openclaw?: AdaptOpenClawMetadata;
 	nextSteps: string[];
 }
@@ -145,10 +157,7 @@ export interface AdaptStatusReport {
 		configPath: string;
 		envelopePath: string;
 	};
-	targetRuntime: {
-		state: "unknown";
-		detail: string;
-	};
+	targetRuntime: AdaptRuntimeObservation;
 	planning: AdaptPlanningLink;
 	capabilities: AdaptCapabilityReport[];
 	openclaw?: AdaptOpenClawMetadata;
