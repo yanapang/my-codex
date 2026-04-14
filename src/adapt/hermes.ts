@@ -11,14 +11,6 @@ import {
   type AdaptStatusReport,
 } from "./contracts.js";
 
-const DEFAULT_HERMES_SIBLING_ROOT = resolve(
-  process.cwd(),
-  "..",
-  "hermes-codex-skill-omx-aware-prd",
-  "external",
-  "hermes-agent",
-);
-
 const HERMES_HOME_ENV = "HERMES_HOME";
 const HERMES_ROOT_ENV = "OMX_ADAPT_HERMES_ROOT";
 const HERMES_BOOTSTRAP_ENV = "OMX_ADAPT_HERMES_BOOTSTRAP";
@@ -126,26 +118,40 @@ function safeJsonParse<T>(raw: string): T | null {
   }
 }
 
-function resolveHermesRoot(): { path: string; source: "override" | "sibling-default" } {
+function resolveRelativeToCwd(cwd: string, pathValue: string): string {
+  return isAbsolute(pathValue) ? pathValue : resolve(cwd, pathValue);
+}
+
+function resolveDefaultHermesSiblingRoot(cwd: string): string {
+  return resolve(
+    cwd,
+    "..",
+    "hermes-codex-skill-omx-aware-prd",
+    "external",
+    "hermes-agent",
+  );
+}
+
+function resolveHermesRoot(cwd: string): { path: string; source: "override" | "sibling-default" } {
   const override = process.env[HERMES_ROOT_ENV]?.trim();
   if (override) {
     return {
-      path: isAbsolute(override) ? override : resolve(process.cwd(), override),
+      path: resolveRelativeToCwd(cwd, override),
       source: "override",
     };
   }
 
   return {
-    path: DEFAULT_HERMES_SIBLING_ROOT,
+    path: resolveDefaultHermesSiblingRoot(cwd),
     source: "sibling-default",
   };
 }
 
-function resolveHermesHome(): { path: string; source: "env" | "default" } {
+function resolveHermesHome(cwd: string): { path: string; source: "env" | "default" } {
   const envValue = process.env[HERMES_HOME_ENV]?.trim();
   if (envValue) {
     return {
-      path: isAbsolute(envValue) ? envValue : resolve(process.cwd(), envValue),
+      path: resolveRelativeToCwd(cwd, envValue),
       source: "env",
     };
   }
@@ -235,9 +241,9 @@ function inferGatewayLive(
   return { live, stale };
 }
 
-export async function collectHermesEvidence(): Promise<HermesEvidence> {
-  const hermesRoot = resolveHermesRoot();
-  const hermesHome = resolveHermesHome();
+export async function collectHermesEvidence(cwd = process.cwd()): Promise<HermesEvidence> {
+  const hermesRoot = resolveHermesRoot(cwd);
+  const hermesHome = resolveHermesHome(cwd);
   const sourceAcp = collectPathEvidence(hermesRoot.path, ACP_ENTRYPOINTS);
   const sourceGateway = collectPathEvidence(hermesRoot.path, GATEWAY_ENTRYPOINTS);
   const sourceDocs = collectPathEvidence(hermesRoot.path, DOC_ENTRYPOINTS);
