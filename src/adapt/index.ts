@@ -13,6 +13,14 @@ import {
 	type AdaptTarget,
 } from "./contracts.js";
 import {
+	applyHermesEnvelope,
+	applyHermesProbe,
+	applyHermesStatus,
+	buildHermesBootstrapMetadata,
+	buildHermesRuntimeObservation,
+	collectHermesEvidence,
+} from "./hermes.js";
+import {
 	buildOpenClawDoctorReport,
 	buildOpenClawEnvelope,
 	buildOpenClawProbeReport,
@@ -91,6 +99,19 @@ export function buildAdaptEnvelope(
 	};
 }
 
+export async function buildAdaptEnvelopeForTarget(
+	cwd: string,
+	target: AdaptTarget,
+	now = new Date(),
+): Promise<AdaptEnvelope> {
+	const envelope = buildAdaptEnvelope(cwd, target, now);
+	if (target !== "hermes") {
+		return envelope;
+	}
+
+	return applyHermesEnvelope(envelope, await collectHermesEvidence(cwd));
+}
+
 export function buildAdaptProbeReport(
 	cwd: string,
 	target: AdaptTarget,
@@ -131,6 +152,19 @@ export function buildAdaptProbeReport(
 			descriptor.followupHint,
 		],
 	};
+}
+
+export async function buildAdaptProbeReportForTarget(
+	cwd: string,
+	target: AdaptTarget,
+	now = new Date(),
+): Promise<AdaptProbeReport> {
+	const report = buildAdaptProbeReport(cwd, target, now);
+	if (target !== "hermes") {
+		return report;
+	}
+
+	return applyHermesProbe(report, await collectHermesEvidence(cwd));
 }
 
 export function buildAdaptStatusReport(
@@ -180,6 +214,19 @@ export function buildAdaptStatusReport(
 		planning,
 		capabilities: descriptor.capabilities,
 	};
+}
+
+export async function buildAdaptStatusReportForTarget(
+	cwd: string,
+	target: AdaptTarget,
+	now = new Date(),
+): Promise<AdaptStatusReport> {
+	const report = buildAdaptStatusReport(cwd, target, now);
+	if (target !== "hermes") {
+		return report;
+	}
+
+	return applyHermesStatus(report, await collectHermesEvidence(cwd));
 }
 
 export function buildAdaptDoctorReport(
@@ -235,6 +282,56 @@ export function buildAdaptDoctorReport(
 			`Run omx adapt ${target} init --write.`,
 			"Keep follow-on integration work out of .omx/state/... and target runtime internals unless a reviewed contract exists.",
 			descriptor.followupHint,
+		],
+	};
+}
+
+export async function buildAdaptDoctorReportForTarget(
+	cwd: string,
+	target: AdaptTarget,
+	now = new Date(),
+): Promise<AdaptDoctorReport> {
+	const report = buildAdaptDoctorReport(cwd, target, now);
+	if (target !== "hermes") {
+		return report;
+	}
+
+	const evidence = await collectHermesEvidence(cwd);
+	const runtime = buildHermesRuntimeObservation(evidence);
+	const bootstrap = buildHermesBootstrapMetadata(evidence);
+	const issues = report.issues.filter(
+		(issue) => issue.code !== "target_specific_logic_deferred",
+	);
+
+	if (!evidence.installed) {
+		issues.push({
+			code: "hermes_runtime_missing",
+			message: `Hermes external runtime was not detected under ${evidence.hermesRoot}.`,
+		});
+	} else if (!evidence.runtimeFiles.stateDbReadable) {
+		issues.push({
+			code: "hermes_session_store_unavailable",
+			message: `Hermes session store is not readable at ${evidence.runtimeFiles.stateDbPath}.`,
+		});
+	}
+
+	if (runtime.state === "degraded") {
+		issues.push({
+			code: "hermes_runtime_degraded",
+			message: runtime.detail,
+		});
+	}
+
+	return {
+		...report,
+		summary:
+			"Hermes doctor inspects external ACP, gateway, and session-store evidence plus OMX-owned adapter readiness.",
+		issues,
+		nextSteps: [
+			...bootstrap.nextSteps,
+			...report.nextSteps.filter(
+				(step) => !/follow-on integration gaps/i.test(step),
+			),
 		],
 	};
 }
@@ -310,5 +407,32 @@ export function initAdaptFoundation(
 		previewPaths,
 		wrotePaths,
 		envelope,
+	};
+}
+
+export async function initAdaptFoundationForTarget(
+	cwd: string,
+	target: AdaptTarget,
+	write = false,
+	now = new Date(),
+): Promise<AdaptInitResult> {
+	const result = initAdaptFoundation(cwd, target, write, now);
+	if (target !== "hermes") {
+		return result;
+	}
+
+	const evidence = await collectHermesEvidence(cwd);
+	const envelope = applyHermesEnvelope(result.envelope, evidence);
+	if (write) {
+		const paths = envelope.adapterPaths;
+		writeFileSync(paths.envelopePath, `${JSON.stringify(envelope, null, 2)}\n`, "utf-8");
+	}
+
+	return {
+		...result,
+		envelope,
+		summary: write
+			? "Hermes adapter metadata was written under OMX-owned paths with external runtime evidence."
+			: "Hermes adapter metadata preview includes external ACP/gateway/session-store evidence; rerun with --write to materialize it.",
 	};
 }

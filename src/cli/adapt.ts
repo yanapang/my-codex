@@ -4,11 +4,11 @@ import {
 	type AdaptTarget,
 } from "../adapt/contracts.js";
 import {
-	buildAdaptDoctorReport,
-	buildAdaptEnvelope,
-	buildAdaptProbeReport,
-	buildAdaptStatusReport,
-	initAdaptFoundation,
+	buildAdaptDoctorReportForTarget,
+	buildAdaptEnvelopeForTarget,
+	buildAdaptProbeReportForTarget,
+	buildAdaptStatusReportForTarget,
+	initAdaptFoundationForTarget,
 	supportedAdaptTargets,
 } from "../adapt/index.js";
 import { getAdaptTargetDescriptor } from "../adapt/registry.js";
@@ -49,10 +49,14 @@ function targetHelp(target: AdaptTarget): string {
 		"Notes:",
 		target === "openclaw"
 			? "  OpenClaw exposes local config/env/gateway observation and lifecycle bridge metadata."
-			: "  This PR exposes the shared foundation only.",
+			: target === "hermes"
+				? "  Hermes exposes a narrow probe/status/bootstrap integration over external ACP, gateway, and session-store evidence."
+				: "  This PR exposes the shared foundation only.",
 		target === "openclaw"
 			? "  Status remains local-only and does not claim downstream OpenClaw runtime acknowledgement."
-			: "  Target-specific runtime probing and integration logic are intentionally deferred.",
+			: target === "hermes"
+				? "  OMX remains authoritative for OMX state; Hermes internals are observed, not controlled."
+				: "  Target-specific runtime probing and integration logic are intentionally deferred.",
 		`  ${descriptor.followupHint}`,
 		"",
 		HELP,
@@ -160,19 +164,39 @@ export async function adaptCommand(
 
 	switch (subcommand as AdaptSubcommand) {
 		case "probe":
-			render(buildAdaptProbeReport(cwd, descriptor.target), json, stdout);
+			render(
+				await buildAdaptProbeReportForTarget(cwd, descriptor.target),
+				json,
+				stdout,
+			);
 			return;
 		case "status":
-			render(buildAdaptStatusReport(cwd, descriptor.target), json, stdout);
+			render(
+				await buildAdaptStatusReportForTarget(cwd, descriptor.target),
+				json,
+				stdout,
+			);
 			return;
 		case "init":
-			render(initAdaptFoundation(cwd, descriptor.target, write), json, stdout);
+			render(
+				await initAdaptFoundationForTarget(cwd, descriptor.target, write),
+				json,
+				stdout,
+			);
 			return;
 		case "envelope":
-			render(buildAdaptEnvelope(cwd, descriptor.target), json, stdout);
+			render(
+				await buildAdaptEnvelopeForTarget(cwd, descriptor.target),
+				json,
+				stdout,
+			);
 			return;
 		case "doctor":
-			render(buildAdaptDoctorReport(cwd, descriptor.target), json, stdout);
+			render(
+				await buildAdaptDoctorReportForTarget(cwd, descriptor.target),
+				json,
+				stdout,
+			);
 			return;
 	}
 }
