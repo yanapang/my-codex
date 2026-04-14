@@ -61,11 +61,13 @@ export function shellEscapeSingle(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-export function buildHudWatchCommand(omxBin: string, preset?: string): string {
+export function buildHudWatchCommand(omxBin: string, preset?: string, sessionId?: string): string {
   const safePreset = preset === 'minimal' || preset === 'focused' || preset === 'full'
     ? ` --preset=${preset}`
     : '';
-  return `node ${shellEscapeSingle(omxBin)} hud --watch${safePreset}`;
+  const safeSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
+  const sessionPrefix = safeSessionId ? `OMX_SESSION_ID=${shellEscapeSingle(safeSessionId)} ` : '';
+  return `${sessionPrefix}node ${shellEscapeSingle(omxBin)} hud --watch${safePreset}`;
 }
 
 export function listCurrentWindowPanes(
