@@ -84,7 +84,6 @@ import { codexConfigPath, rememberOmxLaunchContext, resolveOmxEntryPath } from "
 import { repairConfigIfNeeded } from "../config/generator.js";
 import { HUD_TMUX_HEIGHT_LINES } from "../hud/constants.js";
 import {
-  buildHudWatchCommand,
   createHudWatchPane as createSharedHudWatchPane,
   killTmuxPane as killSharedTmuxPane,
   listCurrentWindowHudPaneIds,
