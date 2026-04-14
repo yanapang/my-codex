@@ -27,7 +27,7 @@ import {
   type SkillActiveState,
 } from "../hooks/keyword-detector.js";
 import {
-  detectStallPattern,
+  detectNativeStopStallPattern,
   loadAutoNudgeConfig,
   normalizeAutoNudgeSignatureText,
   resolveEffectiveAutoNudgeResponse,
@@ -879,17 +879,36 @@ async function readStopAutoNudgePhase(
   sessionId: string,
   threadId: string,
 ): Promise<string> {
-  if (!sessionId.trim()) return "";
+  const normalizedSessionId = sessionId.trim();
+  if (normalizedSessionId) {
+    const scopedModeState = await readStopSessionPinnedState("deep-interview-state.json", cwd, normalizedSessionId);
+    if (
+      scopedModeState?.active === true
+      && safeString(scopedModeState.current_phase).trim().toLowerCase() === "intent-first"
+    ) {
+      return "planning";
+    }
+  } else {
+    const rootModeState = await readJsonIfExists(join(cwd, ".omx", "state", "deep-interview-state.json"));
+    if (
+      rootModeState?.active === true
+      && safeString(rootModeState.current_phase).trim().toLowerCase() === "intent-first"
+    ) {
+      return "planning";
+    }
+  }
 
-  const canonicalState = await readVisibleSkillActiveState(cwd, sessionId);
+  if (!normalizedSessionId) return "";
+
+  const canonicalState = await readVisibleSkillActiveState(cwd, normalizedSessionId);
   const visibleEntries = canonicalState ? listActiveSkills(canonicalState) : [];
   const deepInterview = visibleEntries.find((entry) => (
     entry.skill === "deep-interview"
-    && matchesSkillStopContext(entry, canonicalState ?? {}, sessionId, threadId)
+    && matchesSkillStopContext(entry, canonicalState ?? {}, normalizedSessionId, threadId)
   ));
   if (!deepInterview) return "";
 
-  const modeState = await readStopSessionPinnedState("deep-interview-state.json", cwd, sessionId);
+  const modeState = await readStopSessionPinnedState("deep-interview-state.json", cwd, normalizedSessionId);
   if (!modeState || modeState.active !== true) return "";
 
   const modePhase = safeString(modeState.current_phase).trim().toLowerCase();
@@ -1300,7 +1319,7 @@ async function buildStopHookOutput(
 
     if (
       autoNudgeConfig.enabled
-      && detectStallPattern(lastAssistantMessage, autoNudgeConfig.patterns, autoNudgePhase)
+      && detectNativeStopStallPattern(lastAssistantMessage, autoNudgeConfig.patterns, autoNudgePhase)
     ) {
       const effectiveResponse = resolveEffectiveAutoNudgeResponse(autoNudgeConfig.response);
       return await maybeReturnRepeatableStopOutput(

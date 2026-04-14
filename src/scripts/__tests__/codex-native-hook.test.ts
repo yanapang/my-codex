@@ -2929,7 +2929,7 @@ esac
     }
   });
 
-  it("does not auto-continue native Stop on permission-seeking prompts", async () => {
+  it("auto-continues native Stop on permission-seeking prompts", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-auto-nudge-permission-"));
     try {
       await mkdir(join(cwd, ".omx", "state"), { recursive: true });
@@ -2946,7 +2946,42 @@ esac
       );
 
       assert.equal(result.omxEventName, "stop");
-      assert.equal(result.outputJson, null);
+      assert.deepEqual(result.outputJson, {
+        decision: "block",
+        reason: DEFAULT_AUTO_NUDGE_RESPONSE,
+        stopReason: "auto_nudge",
+        systemMessage:
+          "OMX native Stop detected a stall/permission-style handoff and continued the turn automatically.",
+      });
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("auto-continues native Stop on \"if you want\" permission-seeking prompts", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-auto-nudge-if-you-want-"));
+    try {
+      await mkdir(join(cwd, ".omx", "state"), { recursive: true });
+      process.env.OMX_SESSION_ID = "sess-stop-auto-if-you-want";
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-stop-auto-if-you-want",
+          last_assistant_message: "If you want, I can continue with the cleanup from here.",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.deepEqual(result.outputJson, {
+        decision: "block",
+        reason: DEFAULT_AUTO_NUDGE_RESPONSE,
+        stopReason: "auto_nudge",
+        systemMessage:
+          "OMX native Stop detected a stall/permission-style handoff and continued the turn automatically.",
+      });
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
