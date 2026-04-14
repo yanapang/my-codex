@@ -2,8 +2,9 @@ import { afterEach, describe, it, mock } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, readdir as fsReaddir, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import {
   normalizeCodexLaunchArgs,
   buildTmuxShellCommand,
@@ -63,6 +64,9 @@ import {
   getTeamLowComplexityModel,
 } from "../../config/models.js";
 import type { ProcessEntry } from "../cleanup.js";
+
+const testDir = dirname(fileURLToPath(import.meta.url));
+const repoRoot = join(testDir, "..", "..", "..");
 
 function expectedLowComplexityModel(codexHomeOverride?: string): string {
   return getTeamLowComplexityModel(codexHomeOverride);
@@ -1431,7 +1435,7 @@ describe("detached tmux new-session sequencing", () => {
     const steps = buildDetachedSessionBootstrapSteps(
       "omx-demo",
       "/tmp/project",
-      "'codex' '--model' 'gpt-5'",
+      "'env' 'OMX_SESSION_ID=sess-detached-managed' 'codex' '--model' 'gpt-5'",
       "'node' '/tmp/omx.js' 'hud' '--watch'",
       null,
       undefined,
@@ -1445,6 +1449,14 @@ describe("detached tmux new-session sequencing", () => {
       newSession!.args.includes("-e") &&
         newSession!.args.some((arg) => arg === "OMX_SESSION_ID=sess-detached-managed"),
       true,
+    );
+  });
+
+  it("runCodex builds inside-tmux HUD command with OMX_SESSION_ID", async () => {
+    const source = await readFile(join(repoRoot, 'src', 'cli', 'index.ts'), 'utf-8');
+    assert.match(
+      source,
+      /buildTmuxPaneCommand\("env", \[`OMX_SESSION_ID=\$\{sessionId\}`, "node", omxBin, "hud", "--watch"\]\)/,
     );
   });
 
