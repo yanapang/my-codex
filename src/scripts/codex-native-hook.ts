@@ -476,6 +476,9 @@ function buildAdditionalContextMessage(prompt: string, skillState?: SkillActiveS
     ? skillState.deferred_skills
     : [];
   const teamDetected = activeSkills.includes("team");
+  const ralphPromptActivationNote = skillState?.initialized_mode === "ralph"
+    ? "Prompt-side `$ralph` activation seeds Ralph workflow state only; it does not invoke `omx ralph`. Use `omx ralph --prd ...` only when you explicitly want the PRD-gated CLI startup path."
+    : null;
   const combinedTransitionMessage = (() => {
     if (!skillState?.transition_message) return null;
     if (matches.length <= 1 || activeSkills.length <= 1) return skillState.transition_message;
@@ -536,6 +539,7 @@ function buildAdditionalContextMessage(prompt: string, skillState?: SkillActiveS
         ? `planning preserved over simultaneous execution follow-up; deferred skills: ${deferredSkills.join(", ")}.`
         : null,
       `skill: ${skillState.initialized_mode} activated and initial state initialized at ${skillState.initialized_state_path}; write subsequent updates via omx_state MCP.`,
+      ralphPromptActivationNote,
       "Follow AGENTS.md routing and preserve workflow transition and planning-safety rules.",
     ].join(" ");
   }

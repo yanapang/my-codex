@@ -192,6 +192,11 @@ When the user provides the `--prd` flag, initialize a Product Requirements Docum
 ### Detecting PRD Mode
 Check if `{{PROMPT}}` contains `--prd` or `--PRD`.
 
+Prompt-side `$ralph` workflow activation is lighter-weight than `omx ralph --prd ...`.
+It seeds Ralph workflow state and guidance, but it does not implicitly launch the
+CLI entrypoint or apply the PRD startup gate. Treat `omx ralph --prd ...` as the
+explicit PRD-gated path.
+
 ### Detecting `--no-deslop`
 Check if `{{PROMPT}}` contains `--no-deslop`.
 If `--no-deslop` is present, skip the deslop pass entirely after Step 7 and continue using the latest successful pre-deslop verification evidence.
