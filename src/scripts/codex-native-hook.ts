@@ -139,10 +139,8 @@ export function mapCodexHookEventToOmxEvent(
 function readPromptText(payload: CodexHookPayload): string {
   const candidates = [
     payload.prompt,
-    payload.input,
     payload.user_prompt,
     payload.userPrompt,
-    payload.text,
   ];
   for (const candidate of candidates) {
     const value = safeString(candidate).trim();
@@ -379,10 +377,8 @@ async function ensureOmxGitignoreEntry(cwd: string): Promise<{ changed: boolean;
 async function buildSessionStartContext(
   cwd: string,
   sessionId: string,
-): Promise<string> {
-  const sections = [
-    "OMX native SessionStart detected. Load workspace conventions from AGENTS.md, restore relevant .omx runtime/project memory context, and continue from existing mode state before making changes.",
-  ];
+): Promise<string | null> {
+  const sections: string[] = [];
 
   const gitignoreResult = await ensureOmxGitignoreEntry(cwd);
   if (gitignoreResult.changed) {
@@ -458,7 +454,7 @@ async function buildSessionStartContext(
     sections.push(`[Subagents]\n- active subagent threads: ${subagentSummary.activeSubagentThreadIds.length}`);
   }
 
-  return sections.join("\n\n");
+  return sections.length > 0 ? sections.join("\n\n") : null;
 }
 
 function buildAdditionalContextMessage(prompt: string, skillState?: SkillActiveState | null): string | null {

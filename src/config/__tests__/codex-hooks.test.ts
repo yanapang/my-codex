@@ -39,7 +39,7 @@ describe("codex hooks helpers", () => {
     );
     assert.match(JSON.stringify(sessionStart), /echo keep-me/);
     assert.match(JSON.stringify(sessionStart), /echo standalone-user/);
-    assert.match(JSON.stringify(sessionStart), /Loading OMX session context/);
+    assert.doesNotMatch(JSON.stringify(sessionStart), /Loading OMX session context/);
   });
 
   it("removes only OMX-managed wrappers during uninstall cleanup", () => {

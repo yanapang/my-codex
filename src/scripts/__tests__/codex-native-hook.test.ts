@@ -106,6 +106,13 @@ describe("codex native hook config", () => {
       "Stop",
     ]);
 
+    const sessionStart = config.hooks.SessionStart[0] as {
+      matcher?: string;
+      hooks?: Array<Record<string, unknown>>;
+    };
+    assert.equal(sessionStart.matcher, "startup|resume");
+    assert.equal(sessionStart.hooks?.[0]?.statusMessage, undefined);
+
     const preToolUse = config.hooks.PreToolUse[0] as {
       matcher?: string;
       hooks?: Array<Record<string, unknown>>;
@@ -173,7 +180,7 @@ describe("codex native hook dispatch", () => {
     assert.equal(mapCodexHookEventToOmxEvent("Stop"), "stop");
   });
 
-  it("writes SessionStart state against the long-lived session owner pid", async () => {
+  it("writes SessionStart state against the long-lived session owner pid and stays quiet for clean sessions", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-session-start-"));
     try {
       const result = await dispatchCodexNativeHook(
@@ -189,13 +196,7 @@ describe("codex native hook dispatch", () => {
       );
 
       assert.equal(result.omxEventName, "session-start");
-      assert.deepEqual(result.outputJson, {
-        hookSpecificOutput: {
-          hookEventName: "SessionStart",
-          additionalContext:
-            "OMX native SessionStart detected. Load workspace conventions from AGENTS.md, restore relevant .omx runtime/project memory context, and continue from existing mode state before making changes.",
-        },
-      });
+      assert.equal(result.outputJson, null);
       const sessionState = JSON.parse(
         await readFile(join(cwd, ".omx", "state", "session.json"), "utf-8"),
       ) as { session_id?: string; native_session_id?: string; pid?: number };
@@ -405,6 +406,49 @@ describe("codex native hook dispatch", () => {
       assert.match(message, /skill: ralph activated and initial state initialized at \.omx\/state\/sessions\/sess-ralph-msg\/ralph-state\.json; write subsequent updates via omx_state MCP\./);
       assert.match(message, /Prompt-side `\$ralph` activation seeds Ralph workflow state only; it does not invoke `omx ralph`\./);
       assert.match(message, /Use `omx ralph --prd \.\.\.` only when you explicitly want the PRD-gated CLI startup path\./);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores generic wrapper fields so metadata cannot trigger workflow routing or Stop blocking", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-wrapper-metadata-"));
+    try {
+      await mkdir(join(cwd, ".omx", "state"), { recursive: true });
+      const promptResult = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "UserPromptSubmit",
+          cwd,
+          session_id: "sess-wrapper-meta-1",
+          thread_id: "thread-wrapper-meta-1",
+          turn_id: "turn-wrapper-meta-1",
+          input: "$ralplan hidden wrapper text should stay non-routing",
+          text: JSON.stringify({
+            hook_run_id: "native-stop-wrapper-1",
+            note: "cancel stop wrapper metadata must not be treated like user intent",
+          }),
+        },
+        { cwd },
+      );
+
+      assert.equal(promptResult.omxEventName, "keyword-detector");
+      assert.equal(promptResult.skillState, null);
+      assert.equal(promptResult.outputJson, null);
+      assert.equal(existsSync(join(cwd, ".omx", "state", "skill-active-state.json")), false);
+
+      const stopResult = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-wrapper-meta-1",
+          thread_id: "thread-wrapper-meta-1",
+          turn_id: "turn-wrapper-meta-2",
+        },
+        { cwd },
+      );
+
+      assert.equal(stopResult.omxEventName, "stop");
+      assert.equal(stopResult.outputJson, null);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

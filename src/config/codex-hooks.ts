@@ -66,7 +66,6 @@ export function buildManagedCodexHooksConfig(
       SessionStart: [
         buildCommandHook(command, {
           matcher: "startup|resume",
-          statusMessage: "Loading OMX session context",
         }),
       ],
       PreToolUse: [
