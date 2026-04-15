@@ -5,6 +5,7 @@ import { chmod, mkdir, mkdtemp, readFile, readdir as fsReaddir, rm, writeFile } 
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { once } from "node:events";
 import {
   normalizeCodexLaunchArgs,
   buildTmuxShellCommand,
@@ -1509,7 +1510,10 @@ describe("detached tmux new-session sequencing", () => {
     assert.doesNotMatch(leaderCmd!, /^\/bin\/sh -lc '/);
     assert.match(leaderCmd!, /acquireTmuxExtendedKeysLease/);
     assert.match(leaderCmd!, /omx_detached_session_cleanup\(\)/);
-    assert.match(leaderCmd!, /trap omx_detached_session_cleanup 0;/);
+    assert.match(leaderCmd!, /trap omx_detached_session_cleanup 0 INT TERM HUP;/);
+    assert.match(leaderCmd!, /omx_codex_pid=\$!;/);
+    assert.match(leaderCmd!, /wait "\$omx_codex_pid";/);
+    assert.match(leaderCmd!, /kill -TERM "\$omx_codex_pid"/);
     assert.match(leaderCmd!, /releaseTmuxExtendedKeysLease/);
     assert.match(leaderCmd!, /if \[ "\$status" -lt 128 \]; then/);
     assert.match(leaderCmd!, /tmux kill-session -t/);
@@ -1667,6 +1671,101 @@ exit 0
       assert.match(log, /tmux:set-option -sq extended-keys always/);
       assert.match(log, /tmux:set-option -sq extended-keys off/);
       assert.doesNotMatch(log, /tmux:kill-session -t omx-demo/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("detached leader command terminates codex child on external SIGHUP", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-detached-leader-hup-"));
+    const fakeBin = join(cwd, "bin");
+    const pidFile = join(cwd, "codex.pid");
+    try {
+      await mkdir(fakeBin, { recursive: true });
+      await writeFile(
+        join(fakeBin, "codex"),
+        `#!/bin/sh
+echo $$ > "${pidFile}"
+trap '' HUP
+while true; do sleep 1; done
+`,
+      );
+      await chmod(join(fakeBin, "codex"), 0o755);
+      await writeFile(
+        join(fakeBin, "tmux"),
+        `#!/bin/sh
+case "$1" in
+  display-message)
+    if [ "$3" = '#{socket_path}' ] || [ "$4" = '#{socket_path}' ]; then
+      printf '/tmp/tmux-test.sock\\n'
+    else
+      printf '0\\n'
+    fi
+    ;;
+  show-options) printf 'off\\n' ;;
+  set-option|kill-session) ;;
+esac
+exit 0
+`,
+      );
+      await chmod(join(fakeBin, "tmux"), 0o755);
+
+      const steps = buildDetachedSessionBootstrapSteps(
+        "omx-demo",
+        cwd,
+        buildTmuxPaneCommand("codex", [], "/bin/sh"),
+        "'node' '/tmp/omx.js' 'hud' '--watch'",
+        null,
+      );
+      const leaderCmd = steps[0]?.args.at(-1);
+      assert.equal(typeof leaderCmd, "string");
+
+      const { spawn } = await import("node:child_process");
+      const child = spawn("/bin/sh", ["-c", `exec ${leaderCmd!}`], {
+        cwd,
+        env: {
+          ...process.env,
+          PATH: `${fakeBin}:/usr/bin:/bin`,
+          HOME: cwd,
+        },
+        stdio: "ignore",
+        detached: true,
+      });
+
+      try {
+        for (let i = 0; i < 20; i += 1) {
+          if (existsSync(pidFile)) break;
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        assert.ok(existsSync(pidFile), "codex pid file not written");
+        const codexPid = Number.parseInt((await readFile(pidFile, "utf-8")).trim(), 10);
+        assert.ok(codexPid > 0, "codex pid must be positive");
+        assert.doesNotThrow(() => process.kill(codexPid, 0), "codex must be alive before signal");
+
+        const leaderExit = once(child, "exit");
+        process.kill(child.pid!, "SIGHUP");
+        await Promise.race([
+          leaderExit,
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("leader did not exit after SIGHUP")), 3000),
+          ),
+        ]);
+        assert.throws(
+          () => process.kill(codexPid, 0),
+          (err: unknown) =>
+            typeof err === "object" &&
+            err !== null &&
+            "code" in err &&
+            (err as NodeJS.ErrnoException).code === "ESRCH",
+          "codex child must be terminated after leader SIGHUP",
+        );
+      } finally {
+        try {
+          process.kill(child.pid!, "SIGKILL");
+        } catch {
+          /* already dead */
+        }
+      }
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

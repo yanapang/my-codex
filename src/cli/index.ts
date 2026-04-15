@@ -1618,17 +1618,24 @@ function buildDetachedSessionLeaderCommand(
 ): string {
   const wrapped = [
     buildTmuxExtendedKeysAcquireShellSnippet(cwd),
+    'omx_codex_pid="";',
     "omx_detached_session_cleanup() {",
     "status=$?;",
     "trap - 0 INT TERM HUP;",
+    'if [ -n "$omx_codex_pid" ] && kill -0 "$omx_codex_pid" 2>/dev/null; then',
+    'kill -TERM "$omx_codex_pid" 2>/dev/null || true;',
+    'wait "$omx_codex_pid" 2>/dev/null || true;',
+    "fi;",
     buildTmuxExtendedKeysReleaseShellSnippet(cwd),
     'if [ "$status" -lt 128 ]; then',
     `tmux kill-session -t "${escapeShellDoubleQuotedValue(sessionName)}" >/dev/null 2>&1 || true;`,
     "fi;",
     "exit $status;",
     "};",
-    "trap omx_detached_session_cleanup 0;",
-    codexCmd,
+    "trap omx_detached_session_cleanup 0 INT TERM HUP;",
+    `${codexCmd} &`,
+    "omx_codex_pid=$!;",
+    'wait "$omx_codex_pid";',
   ].join(" ");
   return `/bin/sh -c ${quoteShellArg(wrapped)}`;
 }
