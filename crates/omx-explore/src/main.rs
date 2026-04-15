@@ -12,6 +12,8 @@ const CODEX_BIN_ENV: &str = "OMX_EXPLORE_CODEX_BIN";
 const HARNESS_ROOT_ENV: &str = "OMX_EXPLORE_ROOT";
 const INTERNAL_DIRECT_WRAPPER_FLAG: &str = "--internal-allowlist-direct";
 const INTERNAL_SHELL_WRAPPER_FLAG: &str = "--internal-allowlist-shell";
+const WINDOWS_UNSUPPORTED_ALLOWLIST_MESSAGE: &str =
+    "omx explore built-in harness is not ready on Windows because its allowlist runtime relies on POSIX sh/bash wrappers. Set OMX_EXPLORE_BIN to a compatible custom harness, prefer `omx sparkshell` for shell-native read-only lookups, or run `omx doctor` for readiness details.";
 
 const ALLOWED_DIRECT_COMMANDS: &[&str] = &[
     "rg", "grep", "ls", "find", "wc", "cat", "head", "tail", "pwd", "printf",
@@ -465,6 +467,9 @@ fn compose_exec_prompt(user_prompt: &str, prompt_contract: &str) -> String {
 }
 
 fn prepare_allowlist_environment() -> Result<AllowlistEnvironment, String> {
+    if let Some(message) = allowlist_platform_diagnostic(env::consts::OS) {
+        return Err(message.to_string());
+    }
     let root = temp_allowlist_dir()?;
     let bin_dir = root.path.join("bin");
     create_dir_all(&bin_dir).map_err(|err| {
@@ -509,6 +514,13 @@ fn prepare_allowlist_environment() -> Result<AllowlistEnvironment, String> {
         shell_path,
         _root: root,
     })
+}
+
+fn allowlist_platform_diagnostic(os: &str) -> Option<&'static str> {
+    if os.eq_ignore_ascii_case("windows") {
+        return Some(WINDOWS_UNSUPPORTED_ALLOWLIST_MESSAGE);
+    }
+    None
 }
 
 fn temp_allowlist_dir() -> Result<TempDirGuard, String> {
@@ -1321,6 +1333,15 @@ exec node "$basedir/../@openai/codex/bin/codex.js" "$@"
             validate_direct_command("sed", &["-n".into(), "1,20p".into(), "README.md".into()])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn allowlist_platform_diagnostic_blocks_windows_with_actionable_guidance() {
+        let diagnostic = allowlist_platform_diagnostic("windows").expect("windows diagnostic");
+
+        assert!(diagnostic.contains("not ready on Windows"));
+        assert!(diagnostic.contains("OMX_EXPLORE_BIN"));
+        assert!(allowlist_platform_diagnostic("linux").is_none());
     }
 
     #[test]

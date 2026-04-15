@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { withPackagedExploreHarnessHidden, withPackagedExploreHarnessLock } from './packaged-explore-harness-lock.js';
+import { checkExploreHarness } from '../doctor.js';
 
 function runOmx(
   cwd: string,
@@ -33,6 +34,15 @@ function shouldSkipForSpawnPermissions(err?: string): boolean {
 }
 
 describe('omx doctor onboarding warning copy', () => {
+  it('warns that the built-in explore harness is not ready on Windows', () => {
+    const check = checkExploreHarness('win32', {} as NodeJS.ProcessEnv);
+
+    assert.equal(check.name, 'Explore Harness');
+    assert.equal(check.status, 'warn');
+    assert.match(check.message, /not ready on Windows/i);
+    assert.match(check.message, /OMX_EXPLORE_BIN/);
+  });
+
   it('explains first-setup expectation for config and MCP onboarding warnings', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-doctor-copy-'));
     try {

@@ -12,7 +12,11 @@ import {
 import { classifySpawnError, spawnPlatformCommandSync } from '../utils/platform-command.js';
 import { getCatalogExpectations } from './catalog-contract.js';
 import { parse as parseToml } from '@iarna/toml';
-import { resolvePackagedExploreHarnessCommand, EXPLORE_BIN_ENV } from './explore.js';
+import {
+  getBuiltinExploreHarnessUnsupportedReason,
+  resolvePackagedExploreHarnessCommand,
+  EXPLORE_BIN_ENV,
+} from './explore.js';
 import { getPackageRoot } from '../utils/package.js';
 import { hasLegacyOmxTeamRunTable } from '../config/generator.js';
 import { getMissingManagedCodexHookEvents } from '../config/codex-hooks.js';
@@ -475,7 +479,10 @@ function checkNodeVersion(): Check {
   return { name: 'Node.js', status: 'fail', message: `v${process.versions.node} (need >= 20)` };
 }
 
-function checkExploreHarness(): Check {
+export function checkExploreHarness(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): Check {
   const packageRoot = getPackageRoot();
   const manifestPath = join(packageRoot, 'crates', 'omx-explore', 'Cargo.toml');
   if (!existsSync(manifestPath)) {
@@ -486,7 +493,7 @@ function checkExploreHarness(): Check {
     };
   }
 
-  const override = process.env[EXPLORE_BIN_ENV]?.trim();
+  const override = env[EXPLORE_BIN_ENV]?.trim();
   if (override) {
     const resolved = join(packageRoot, override);
     if (existsSync(override) || existsSync(resolved)) {
@@ -500,6 +507,15 @@ function checkExploreHarness(): Check {
       name: 'Explore Harness',
       status: 'warn',
       message: `OMX_EXPLORE_BIN is set but path was not found (${override})`,
+    };
+  }
+
+  const unsupportedReason = getBuiltinExploreHarnessUnsupportedReason(platform, env);
+  if (unsupportedReason) {
+    return {
+      name: 'Explore Harness',
+      status: 'warn',
+      message: unsupportedReason,
     };
   }
 
