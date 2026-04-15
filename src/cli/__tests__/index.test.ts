@@ -5,6 +5,7 @@ import { chmod, mkdir, mkdtemp, readFile, readdir as fsReaddir, rm, writeFile } 
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { once } from "node:events";
 import {
   normalizeCodexLaunchArgs,
   buildTmuxShellCommand,
@@ -1720,7 +1721,7 @@ exit 0
       assert.equal(typeof leaderCmd, "string");
 
       const { spawn } = await import("node:child_process");
-      const child = spawn("/bin/sh", ["-c", leaderCmd!], {
+      const child = spawn("/bin/sh", ["-c", `exec ${leaderCmd!}`], {
         cwd,
         env: {
           ...process.env,
@@ -1741,21 +1742,23 @@ exit 0
         assert.ok(codexPid > 0, "codex pid must be positive");
         assert.doesNotThrow(() => process.kill(codexPid, 0), "codex must be alive before signal");
 
+        const leaderExit = once(child, "exit");
         process.kill(child.pid!, "SIGHUP");
-
-        let killed = false;
-        for (let i = 0; i < 30; i += 1) {
-          try {
-            process.kill(codexPid, 0);
-          } catch (err) {
-            if ((err as NodeJS.ErrnoException).code === "ESRCH") {
-              killed = true;
-              break;
-            }
-          }
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        }
-        assert.ok(killed, "codex child must be terminated after leader SIGHUP");
+        await Promise.race([
+          leaderExit,
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("leader did not exit after SIGHUP")), 3000),
+          ),
+        ]);
+        assert.throws(
+          () => process.kill(codexPid, 0),
+          (err: unknown) =>
+            typeof err === "object" &&
+            err !== null &&
+            "code" in err &&
+            (err as NodeJS.ErrnoException).code === "ESRCH",
+          "codex child must be terminated after leader SIGHUP",
+        );
       } finally {
         try {
           process.kill(child.pid!, "SIGKILL");
