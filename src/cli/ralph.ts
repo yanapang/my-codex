@@ -26,6 +26,8 @@ PRD mode:
   Ralph initializes persistence artifacts in .omx/ so PRD and progress
   state can survive across Codex sessions. Provide task text either as
   positional words or with --prd.
+  Prompt-side \`$ralph\` activation is separate from this CLI entrypoint and
+  does not imply \`--prd\` or the PRD.json startup gate.
 
 Common patterns:
   omx ralph "Fix flaky notify-hook tests"

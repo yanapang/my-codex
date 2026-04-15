@@ -380,6 +380,36 @@ describe("codex native hook dispatch", () => {
     }
   });
 
+  it("clarifies that prompt-side $ralph activation does not invoke the PRD-gated CLI path", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-ralph-routing-"));
+    try {
+      await mkdir(join(cwd, ".omx", "state"), { recursive: true });
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "UserPromptSubmit",
+          cwd,
+          session_id: "sess-ralph-msg",
+          thread_id: "thread-ralph-msg",
+          turn_id: "turn-ralph-msg",
+          prompt: "$ralph continue verification",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "keyword-detector");
+      assert.equal(result.skillState?.skill, "ralph");
+      const message = String(
+        (result.outputJson as { hookSpecificOutput?: { additionalContext?: string } })?.hookSpecificOutput?.additionalContext || "",
+      );
+      assert.match(message, /\$ralph" -> ralph/);
+      assert.match(message, /skill: ralph activated and initial state initialized at \.omx\/state\/sessions\/sess-ralph-msg\/ralph-state\.json; write subsequent updates via omx_state MCP\./);
+      assert.match(message, /Prompt-side `\$ralph` activation seeds Ralph workflow state only; it does not invoke `omx ralph`\./);
+      assert.match(message, /Use `omx ralph --prd \.\.\.` only when you explicitly want the PRD-gated CLI startup path\./);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("does not expose submitted prompt text to keyword-detector hook plugins", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-prompt-sanitized-"));
     try {

@@ -92,3 +92,4 @@ starting
   - `.omx/progress.txt` migrates one-way to canonical `ralph-progress.json` when no canonical ledger exists.
   - Legacy files remain read-only compatibility artifacts for one release cycle.
 - Canonical PRD markdown is storage/documentation-canonical today; Ralph `--prd` startup still validates machine-readable story approval state from `.omx/prd.json` until a structured replacement exists.
+- Prompt-side `$ralph` workflow activation is not equivalent to `omx ralph --prd ...`; it may seed Ralph mode state and routing context, but the PRD startup gate remains an explicit CLI-path contract.

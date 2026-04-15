@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  RALPH_HELP,
   assertRequiredRalphPrdJson,
   buildRalphAppendInstructions,
   buildRalphChangedFilesSeedContents,
@@ -43,6 +44,13 @@ describe('isRalphPrdMode', () => {
 
   it('ignores non-prd Ralph runs', () => {
     assert.equal(isRalphPrdMode(['fix', 'the', 'bug']), false);
+  });
+});
+
+describe('RALPH_HELP', () => {
+  it('clarifies that prompt-side $ralph activation is separate from CLI --prd mode', () => {
+    assert.match(RALPH_HELP, /Prompt-side `\$ralph` activation is separate from this CLI entrypoint/i);
+    assert.match(RALPH_HELP, /does not imply `--prd` or the PRD\.json startup gate/i);
   });
 });
 
