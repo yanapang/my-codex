@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 import { existsSync, statSync } from 'node:fs';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, posix, resolve, win32 } from 'node:path';
+import { basename, dirname, join, posix, resolve, win32 } from 'node:path';
 import { omxStateDir } from '../utils/paths.js';
 import { findGitLayout, readGitLayoutFile } from '../utils/git-layout.js';
 
@@ -123,6 +123,11 @@ async function statMsIfExists(path: string | null): Promise<number> {
 }
 
 function stateDirToProjectRoot(stateDir: string): string {
+  let current = resolve(stateDir);
+  while (current !== dirname(current)) {
+    if (basename(current) === '.omx') return dirname(current);
+    current = dirname(current);
+  }
   return dirname(dirname(stateDir));
 }
 
