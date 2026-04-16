@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 import { existsSync, statSync } from 'node:fs';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, join, posix, resolve, win32 } from 'node:path';
+import { basename, dirname, join, posix, resolve, sep, win32 } from 'node:path';
 import { omxStateDir } from '../utils/paths.js';
 import { findGitLayout, readGitLayoutFile } from '../utils/git-layout.js';
 
@@ -82,7 +82,10 @@ async function tryReadGitValue(cwd: string, args: string[]): Promise<string | nu
 
         if (cmd.startsWith('rev-parse --git-path logs/refs/heads/')) {
           const branch = args[args.length - 1].replace('logs/', '');
-          return join(gitLayout.commonDir, 'logs', branch);
+          const candidate = resolve(join(gitLayout.commonDir, 'logs', branch));
+          const resolvedBase = resolve(gitLayout.commonDir);
+          if (candidate !== resolvedBase && !candidate.startsWith(resolvedBase + sep)) return null;
+          return candidate;
         }
 
         if (cmd === 'show -s --format=%ct HEAD') {

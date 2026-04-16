@@ -735,7 +735,7 @@ fn validate_direct_command(command_name: &str, args: &[String]) -> Result<(), St
                 );
             }
         }
-        "find" => {
+        "find"
             if args.iter().any(|arg| {
                 matches!(
                     arg.as_str(),
@@ -749,13 +749,14 @@ fn validate_direct_command(command_name: &str, args: &[String]) -> Result<(), St
                         | "-fprintf"
                         | "-fls"
                 )
-            }) {
-                return Err(
-                    "find actions that execute, delete, or write files are not allowed in omx explore"
-                        .to_string(),
-                );
-            }
+            }) =>
+        {
+            return Err(
+                "find actions that execute, delete, or write files are not allowed in omx explore"
+                    .to_string(),
+            );
         }
+        "find" => {}
         "cat" => {
             let operands = non_option_operands(args);
             if operands.is_empty() {
