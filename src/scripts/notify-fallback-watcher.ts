@@ -875,7 +875,7 @@ async function readRalphProgressGate(
   return { allow: true, reason: 'progress_stale', progress_at: progressAt, subagent_session_id: subagentSessionId };
 }
 
-function shouldSkipRalphContinue(now: number, candidateIso: string, startupIso: string): { skip: boolean; reason: string; anchorMs: number; anchorIso: string } {
+function shouldSkipRalphContinue(now: number, candidateIso: string): { skip: boolean; reason: string; anchorMs: number; anchorIso: string } {
   const sharedMs = parseIsoMillis(candidateIso);
   const localMs = parseIsoMillis(lastRalphContinueSteer.last_sent_at);
   const startupAnchorIso = lastRalphContinueSteer.cooldown_anchor_at;
@@ -1032,7 +1032,6 @@ async function writePidFileRecord(): Promise<void> {
 async function runRalphContinueSteerTick(): Promise<void> {
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
-  const startupIso = new Date(startedAt).toISOString();
   const activeRalph = await resolveActiveRalphState();
   const activePaneId = safeString(activeRalph.state?.tmux_pane_id).trim();
   lastRalphContinueSteer = {
@@ -1060,7 +1059,7 @@ async function runRalphContinueSteerTick(): Promise<void> {
 
   const sharedBeforeLock = await readRalphSteerTimestamp();
   lastRalphContinueSteer.shared_last_sent_at = sharedBeforeLock;
-  const initialCooldown = shouldSkipRalphContinue(now, sharedBeforeLock, startupIso);
+  const initialCooldown = shouldSkipRalphContinue(now, sharedBeforeLock);
   if (initialCooldown.skip) {
     lastRalphContinueSteer.last_reason = initialCooldown.reason;
     if (!sharedBeforeLock && initialCooldown.reason === 'startup_cooldown') {
@@ -1072,7 +1071,7 @@ async function runRalphContinueSteerTick(): Promise<void> {
   const outcome = await withRalphSteerLock(async () => {
     const sharedLastSentAt = await readRalphSteerTimestamp();
     lastRalphContinueSteer.shared_last_sent_at = sharedLastSentAt;
-    const cooldown = shouldSkipRalphContinue(Date.now(), sharedLastSentAt, startupIso);
+    const cooldown = shouldSkipRalphContinue(Date.now(), sharedLastSentAt);
     if (cooldown.skip) {
       lastRalphContinueSteer.last_reason = cooldown.reason;
       if (!sharedLastSentAt && cooldown.reason === 'startup_cooldown') {
