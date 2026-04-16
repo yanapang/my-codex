@@ -5,7 +5,7 @@
 
 import { execFileSync, spawn } from "child_process";
 import { basename, dirname, join } from "path";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { constants as osConstants } from "os";
 import { setup, SETUP_SCOPES, type SetupScope } from "./setup.js";
 import { uninstall } from "./uninstall.js";
@@ -251,6 +251,7 @@ const TMUX_EXTENDED_KEYS_FALLBACK_MODE = "off";
 const TMUX_EXTENDED_KEYS_LEASE_DIR = "tmux-extended-keys";
 const TMUX_EXTENDED_KEYS_LOCK_RETRY_MS = 20;
 const TMUX_EXTENDED_KEYS_LOCK_MAX_ATTEMPTS = 100;
+const TMUX_EXTENDED_KEYS_LOCK_STALE_MS = 30_000;
 
 type CliCommand =
   | "launch"
@@ -1605,6 +1606,11 @@ function withTmuxExtendedKeysLeaseLock<T>(
           ? String((err as NodeJS.ErrnoException).code)
           : "";
       if (code !== "EEXIST") throw err;
+      const lockStat = statSync(lockPath, { throwIfNoEntry: false });
+      if (lockStat && Date.now() - lockStat.mtimeMs > TMUX_EXTENDED_KEYS_LOCK_STALE_MS) {
+        rmSync(lockPath, { recursive: true, force: true });
+        continue;
+      }
       blockMs(TMUX_EXTENDED_KEYS_LOCK_RETRY_MS);
     }
   }
