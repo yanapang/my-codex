@@ -1968,6 +1968,65 @@ exit 0
     await rm(cwd, { recursive: true, force: true });
   });
 
+  it("reuses legacy plain-text PID parsing without widening stale reap semantics across PID reuse", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-reap-legacy-pid-"));
+    try {
+      const pidPath = join(cwd, "watcher.pid");
+      await writeFile(pidPath, "12345\n", "utf-8");
+
+      const observed: number[] = [];
+      await reapStaleNotifyFallbackWatcher(pidPath, {
+        isWatcherProcess(pid) {
+          observed.push(pid);
+          return false;
+        },
+        tryKillPid: (pid) => {
+          observed.push(pid);
+          return true;
+        },
+      });
+
+      assert.deepEqual(
+        observed,
+        [12345],
+        "legacy plain-text PID files should still identity-check reused PIDs before any kill",
+      );
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("reaps watcher-record PIDs only after the record path confirms watcher identity across PID reuse", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-reap-record-pid-"));
+    try {
+      const pidPath = join(cwd, "watcher.pid");
+      await writeFile(
+        pidPath,
+        JSON.stringify({ pid: 54321, started_at: "2026-04-05T00:00:00.000Z" }),
+        "utf-8",
+      );
+
+      const observed: Array<{ step: "identity" | "kill"; pid: number }> = [];
+      await reapStaleNotifyFallbackWatcher(pidPath, {
+        isWatcherProcess(pid) {
+          observed.push({ step: "identity", pid });
+          return true;
+        },
+        tryKillPid(pid) {
+          observed.push({ step: "kill", pid });
+          return true;
+        },
+      });
+
+      assert.deepEqual(observed, [
+        { step: "identity", pid: 54321 },
+        { step: "kill", pid: 54321 },
+      ]);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
     it("buildDetachedSessionFinalizeSteps keeps schedule after split-capture and before attach", () => {
     const steps = buildDetachedSessionFinalizeSteps(
       "omx-demo",

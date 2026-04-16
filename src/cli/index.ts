@@ -3032,12 +3032,15 @@ function parseWatcherPidFile(content: string): number | null {
   const trimmed = content.trim();
   if (!trimmed) return null;
   try {
-    const parsed = JSON.parse(trimmed) as { pid?: unknown };
-    return typeof parsed.pid === "number" &&
-      Number.isFinite(parsed.pid) &&
-      parsed.pid > 0
-      ? parsed.pid
-      : null;
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (typeof parsed === "number") {
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    }
+    const pid =
+      typeof parsed === "object" && parsed !== null
+        ? (parsed as { pid?: unknown }).pid
+        : undefined;
+    return typeof pid === "number" && Number.isFinite(pid) && pid > 0 ? pid : null;
   } catch {
     const pid = Number.parseInt(trimmed, 10);
     return Number.isFinite(pid) && pid > 0 ? pid : null;
@@ -3053,26 +3056,24 @@ function parseWatcherPidRecord(content: string): WatcherPidRecord | null {
   const trimmed = content.trim();
   if (!trimmed) return null;
   try {
-    const parsed = JSON.parse(trimmed) as { pid?: unknown; started_at?: unknown };
-    if (
-      typeof parsed.pid !== "number" ||
-      !Number.isFinite(parsed.pid) ||
-      parsed.pid <= 0
-    ) {
-      return null;
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (typeof parsed === "object" && parsed !== null) {
+      const { pid, started_at: startedAtRaw } = parsed as {
+        pid?: unknown;
+        started_at?: unknown;
+      };
+      if (typeof pid === "number" && Number.isFinite(pid) && pid > 0) {
+        return {
+          pid,
+          startedAt: typeof startedAtRaw === "string" ? startedAtRaw : null,
+        };
+      }
     }
-    return {
-      pid: parsed.pid,
-      startedAt: typeof parsed.started_at === "string" ? parsed.started_at : null,
-    };
   } catch {
-    // Fallback: plain-text numeric PID (legacy format)
-    const pid = Number.parseInt(trimmed, 10);
-    if (Number.isFinite(pid) && pid > 0) {
-      return { pid, startedAt: null };
-    }
-    return null;
   }
+
+  const pid = parseWatcherPidFile(trimmed);
+  return pid ? { pid, startedAt: null } : null;
 }
 
 function isLikelyOmxWatcherProcess(
