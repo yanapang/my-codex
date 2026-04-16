@@ -878,15 +878,15 @@ async function readRalphProgressGate(
 function shouldSkipRalphContinue(now: number, candidateIso: string, startupIso: string): { skip: boolean; reason: string; anchorMs: number; anchorIso: string } {
   const sharedMs = parseIsoMillis(candidateIso);
   const localMs = parseIsoMillis(lastRalphContinueSteer.last_sent_at);
-  const startupAnchorIso = lastRalphContinueSteer.cooldown_anchor_at || startupIso;
+  const startupAnchorIso = lastRalphContinueSteer.cooldown_anchor_at;
   const startupAnchorMs = parseIsoMillis(startupAnchorIso);
-  const startupCooldown = sharedMs === null && localMs === null;
-  const anchorMs = sharedMs ?? localMs ?? startupAnchorMs ?? startedAt;
+  const startupCooldown = sharedMs === null && localMs === null && startupAnchorMs !== null;
+  const anchorMs = sharedMs ?? localMs ?? startupAnchorMs ?? 0;
   const anchorIso = sharedMs !== null
     ? candidateIso
     : (localMs !== null ? lastRalphContinueSteer.last_sent_at : startupAnchorIso);
   return {
-    skip: now - anchorMs < RALPH_CONTINUE_CADENCE_MS,
+    skip: anchorMs > 0 && now - anchorMs < RALPH_CONTINUE_CADENCE_MS,
     reason: startupCooldown ? 'startup_cooldown' : (sharedMs !== null ? 'global_cooldown' : 'cooldown'),
     anchorMs,
     anchorIso,
@@ -1056,10 +1056,6 @@ async function runRalphContinueSteerTick(): Promise<void> {
       lastRalphContinueSteer.last_reason = 'starting_stale';
     }
     return;
-  }
-
-  if (parseIsoMillis(lastRalphContinueSteer.last_sent_at) === null && parseIsoMillis(lastRalphContinueSteer.cooldown_anchor_at) === null) {
-    lastRalphContinueSteer.cooldown_anchor_at = startupIso;
   }
 
   const sharedBeforeLock = await readRalphSteerTimestamp();
