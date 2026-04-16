@@ -388,20 +388,34 @@ describe('redactSensitiveTokens', () => {
   it('redacts OpenAI-style API keys', () => {
     assert.equal(
       redactSensitiveTokens('export OPENAI_API_KEY=sk-proj-abc123def456'),
-      'export OPENAI_[REDACTED]',
+      'export OPENAI_API_KEY=[REDACTED]',
     );
   });
 
   it('redacts GitHub PAT tokens', () => {
     assert.equal(
       redactSensitiveTokens('token: ghp_1234567890abcdefABCDEF'),
-      '[REDACTED]',
+      'token: [REDACTED]',
     );
   });
 
   it('redacts generic key=value secrets', () => {
     const result = redactSensitiveTokens('api_key=mysecretvalue123 other text');
     assert.equal(result.includes('mysecretvalue123'), false);
+  });
+
+  it('redacts multi-part authorization header values', () => {
+    assert.equal(
+      redactSensitiveTokens('authorization: Bearer mysecrettoken'),
+      'authorization: [REDACTED]',
+    );
+  });
+
+  it('redacts quoted JSON secret fields', () => {
+    assert.equal(
+      redactSensitiveTokens('{"api_key":"mysecret","safe":true}'),
+      '{"api_key":"[REDACTED]","safe":true}',
+    );
   });
 
   it('preserves text without secrets', () => {
