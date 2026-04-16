@@ -163,7 +163,7 @@ describe("codex native hook dispatch", () => {
     assert.equal(output.decision, "block");
     assert.equal(
       output.reason,
-      "OMX native hook received malformed JSON input. Preserve runtime state and inspect the emitting hook payload before retrying.",
+      "OMX native hook received malformed JSON input. Preserve runtime state, inspect the emitting hook payload yourself, and retry with valid JSON.",
     );
     assert.equal(output.hookSpecificOutput?.hookEventName, "Unknown");
     assert.match(
@@ -548,7 +548,7 @@ export async function onHookEvent(event) {
         /skill: team activated and initial state initialized at \.omx\/state\/team-state\.json; write subsequent updates via omx_state MCP\./,
       );
       assert.match(JSON.stringify(result.outputJson), /Use the durable OMX team runtime via `omx team \.\.\.`/);
-      assert.match(JSON.stringify(result.outputJson), /If you need help, run `omx team --help`\./);
+      assert.match(JSON.stringify(result.outputJson), /If you need runtime syntax, run `omx team --help` yourself\./);
 
       const state = JSON.parse(
         await readFile(join(cwd, ".omx", "state", "team-state.json"), "utf-8"),

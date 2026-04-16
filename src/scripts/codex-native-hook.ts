@@ -505,7 +505,7 @@ function buildAdditionalContextMessage(prompt: string, skillState?: SkillActiveS
       teamDetected
         ? "Use the durable OMX team runtime via `omx team ...` for coordinated execution; do not replace it with in-process fanout."
         : null,
-      teamDetected ? "If you need help, run `omx team --help`." : null,
+      teamDetected ? "If you need runtime syntax, run `omx team --help` yourself." : null,
       'Follow AGENTS.md routing and preserve workflow transition and planning-safety rules.',
     ].filter(Boolean).join(' ');
   }
@@ -522,7 +522,7 @@ function buildAdditionalContextMessage(prompt: string, skillState?: SkillActiveS
         : null,
       initializedStateMessage,
       "Use the durable OMX team runtime via `omx team ...` for coordinated execution; do not replace it with in-process fanout.",
-      "If you need help, run `omx team --help`.",
+      "If you need runtime syntax, run `omx team --help` yourself.",
       "Follow AGENTS.md routing and preserve workflow transition and planning-safety rules.",
     ].filter(Boolean).join(" ");
   }
@@ -1521,7 +1521,7 @@ export async function runCodexNativeHookCli(): Promise<void> {
   if (parseError) {
     process.stdout.write(`${JSON.stringify({
       decision: "block",
-      reason: "OMX native hook received malformed JSON input. Preserve runtime state and inspect the emitting hook payload before retrying.",
+      reason: "OMX native hook received malformed JSON input. Preserve runtime state, inspect the emitting hook payload yourself, and retry with valid JSON.",
       hookSpecificOutput: {
         hookEventName: "Unknown",
         additionalContext:
