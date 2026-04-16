@@ -3066,6 +3066,11 @@ function parseWatcherPidRecord(content: string): WatcherPidRecord | null {
       startedAt: typeof parsed.started_at === "string" ? parsed.started_at : null,
     };
   } catch {
+    // Fallback: plain-text numeric PID (legacy format)
+    const pid = Number.parseInt(trimmed, 10);
+    if (Number.isFinite(pid) && pid > 0) {
+      return { pid, startedAt: null };
+    }
     return null;
   }
 }
@@ -3073,7 +3078,13 @@ function parseWatcherPidRecord(content: string): WatcherPidRecord | null {
 function isLikelyOmxWatcherProcess(
   pid: number,
   execFileSyncFn: typeof execFileSync = execFileSync,
+  platform: NodeJS.Platform = process.platform,
 ): boolean {
+  if (platform === "win32") {
+    // ps is unavailable on native Windows; fall back to unconditional reap
+    // to preserve the pre-identity-check behavior on opted-in Windows hosts.
+    return true;
+  }
   try {
     const cmd = execFileSyncFn("ps", ["-p", String(pid), "-o", "command="], {
       encoding: "utf-8",
