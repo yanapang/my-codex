@@ -34,6 +34,8 @@ import {
 } from '../subagents/tracker.js';
 import { listNotifyCanonicalActiveTeams } from './notify-hook/active-team.js';
 import { sameFilePath } from '../utils/paths.js';
+import { validateSessionId } from '../mcp/state-paths.js';
+import { TEAM_NAME_SAFE_PATTERN } from '../team/contracts.js';
 
 function argValue(name: string, fallback = ''): string {
   const idx = process.argv.indexOf(name);
@@ -48,6 +50,21 @@ function asNumber(value: string | number | undefined, fallback: number): number 
 
 function safeString(v: unknown): string {
   return typeof v === 'string' ? v : '';
+}
+
+function normalizeValidSessionId(value: unknown): string {
+  const trimmed = safeString(value).trim();
+  if (!trimmed) return '';
+  try {
+    return validateSessionId(trimmed) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function normalizeValidTeamName(value: unknown): string {
+  const trimmed = safeString(value).trim();
+  return TEAM_NAME_SAFE_PATTERN.test(trimmed) ? trimmed : '';
 }
 
 function parsePositivePid(value: unknown): number | null {
@@ -523,8 +540,8 @@ async function resolveActiveModeState(mode: string): Promise<ActiveModeResult> {
   const session = await readSessionState(cwd);
   if (session?.session_id) {
     if (isSessionStateAuthoritativeForCwd(session, cwd)) {
-      currentSessionId = safeString(session.session_id).trim();
-      currentSessionIsLive = !isSessionStale(session);
+      currentSessionId = normalizeValidSessionId(session.session_id);
+      currentSessionIsLive = currentSessionId !== '' && !isSessionStale(session);
     }
     if (currentSessionId && currentSessionIsLive) {
       candidateDirs.push(join(stateDir, 'sessions', currentSessionId));
@@ -590,8 +607,8 @@ async function resolveActiveTeamState(): Promise<ActiveTeamResult> {
   let currentSessionIsLive = false;
   const session = await readSessionState(cwd);
   if (session?.session_id) {
-    currentSessionId = safeString(session.session_id).trim();
-    currentSessionIsLive = !isSessionStale(session);
+    currentSessionId = normalizeValidSessionId(session.session_id);
+    currentSessionIsLive = currentSessionId !== '' && !isSessionStale(session);
     if (currentSessionId && currentSessionIsLive) {
       candidateDirs.push(join(stateDir, 'sessions', currentSessionId));
     }
@@ -610,7 +627,7 @@ async function resolveActiveTeamState(): Promise<ActiveTeamResult> {
       .catch(() => null);
     if (!parsed || typeof parsed !== 'object' || parsed.active !== true) continue;
 
-    const teamName = safeString(parsed.team_name).trim();
+    const teamName = normalizeValidTeamName(parsed.team_name);
     if (!teamName) continue;
 
     const teamConfigDir = join(stateDir, 'team', teamName);
@@ -653,7 +670,9 @@ async function resolveActiveTeamState(): Promise<ActiveTeamResult> {
 
   const canonicalFallbackTeams = await listNotifyCanonicalActiveTeams(cwd, currentSessionId).catch(() => []);
   for (const team of canonicalFallbackTeams) {
-    const teamConfigDir = join(stateDir, 'team', team.teamName);
+    const teamName = normalizeValidTeamName(team.teamName);
+    if (!teamName) continue;
+    const teamConfigDir = join(stateDir, 'team', teamName);
     const manifestPath = join(teamConfigDir, 'manifest.v2.json');
     const configPath = join(teamConfigDir, 'config.json');
     const teamConfigPath = existsSync(manifestPath) ? manifestPath : configPath;
@@ -678,10 +697,10 @@ async function resolveActiveTeamState(): Promise<ActiveTeamResult> {
       path: team.path,
       state: {
         active: true,
-        team_name: team.teamName,
+        team_name: teamName,
         current_phase: team.phase,
       },
-      team_name: team.teamName,
+      team_name: teamName,
       pane_count: paneStatus.paneCount,
     };
   }
@@ -755,10 +774,13 @@ async function readRalphSteerLock(path: string): Promise<RalphSteerLockRecord | 
   }
 }
 
+const RALPH_STEER_LOCK_MAX_RETRIES = 5;
+
 async function withRalphSteerLock<T>(task: () => Promise<T>): Promise<T | null> {
   await mkdir(dirname(ralphSteerLockPath), { recursive: true }).catch(() => {});
 
-  while (true) {
+  let acquired = false;
+  for (let attempt = 0; attempt < RALPH_STEER_LOCK_MAX_RETRIES; attempt++) {
     let handle;
     try {
       handle = await open(ralphSteerLockPath, 'wx');
@@ -767,6 +789,7 @@ async function withRalphSteerLock<T>(task: () => Promise<T>): Promise<T | null> 
         acquired_at: new Date().toISOString(),
       };
       await handle.writeFile(JSON.stringify(payload, null, 2));
+      acquired = true;
       break;
     } catch (error) {
       const code = error !== null && typeof error === 'object' ? (error as NodeJS.ErrnoException).code : '';
@@ -784,6 +807,11 @@ async function withRalphSteerLock<T>(task: () => Promise<T>): Promise<T | null> 
     } finally {
       await handle?.close().catch(() => {});
     }
+  }
+
+  if (!acquired) {
+    lastRalphContinueSteer.last_reason = 'global_lock_exhausted';
+    return null;
   }
 
   try {
