@@ -26,16 +26,17 @@ const AUTO_COMPLETE_TRANSITIONS = new Set([
   'ralplan->team',
   'ralplan->ralph',
   'ralplan->autopilot',
+  'ralplan->autoresearch',
 ]);
 
 const PLANNING_LIKE_MODES = new Set<TrackedWorkflowMode>([
   'deep-interview',
   'ralplan',
-  'autoresearch',
 ]);
 
 const EXECUTION_LIKE_MODES = new Set<TrackedWorkflowMode>([
   'autopilot',
+  'autoresearch',
   'team',
   'ralph',
   'ultrawork',

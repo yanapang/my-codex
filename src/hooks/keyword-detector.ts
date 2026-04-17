@@ -90,7 +90,7 @@ export const DEEP_INTERVIEW_STATE_FILE = 'deep-interview-state.json';
 export const DEEP_INTERVIEW_BLOCKED_APPROVAL_INPUTS = ['yes', 'y', 'proceed', 'continue', 'ok', 'sure', 'go ahead', 'next i should'] as const;
 export const DEEP_INTERVIEW_INPUT_LOCK_MESSAGE = 'Deep interview is active; auto-approval shortcuts are blocked until the interview finishes.';
 
-type StatefulSkillMode = 'deep-interview' | 'autopilot' | 'ralph' | 'ralplan' | 'ultrawork' | 'ultraqa' | 'team';
+type StatefulSkillMode = 'deep-interview' | 'autopilot' | 'ralph' | 'ralplan' | 'ultrawork' | 'ultraqa' | 'team' | 'autoresearch';
 
 interface StatefulSkillSeedConfig {
   mode: StatefulSkillMode;
@@ -106,6 +106,7 @@ const PLANNING_LIKE_WORKFLOW_SKILLS = new Set<TrackedWorkflowMode>([
 
 const EXECUTION_LIKE_WORKFLOW_SKILLS = new Set<TrackedWorkflowMode>([
   'autopilot',
+  'autoresearch',
   'ralph',
   'team',
   'ultrawork',
@@ -115,6 +116,7 @@ const EXECUTION_LIKE_WORKFLOW_SKILLS = new Set<TrackedWorkflowMode>([
 const STATEFUL_SKILL_SEED_CONFIG: Record<StatefulSkillMode, StatefulSkillSeedConfig> = {
   'deep-interview': { mode: 'deep-interview', initialPhase: 'intent-first' },
   autopilot: { mode: 'autopilot', initialPhase: 'planning' },
+  autoresearch: { mode: 'autoresearch', initialPhase: 'executing' },
   ralph: { mode: 'ralph', initialPhase: 'starting', includeIteration: true },
   ralplan: { mode: 'ralplan', initialPhase: 'planning' },
   team: { mode: 'team', initialPhase: 'starting', scope: 'root' },
@@ -353,9 +355,9 @@ const KEYWORD_MAP: Array<{ pattern: RegExp; skill: string; priority: number }> =
   priority: entry.priority,
 }));
 
-const KEYWORDS_REQUIRING_INTENT = new Set(['ralph', 'team', 'swarm', 'stop', 'abort', 'parallel']);
+const KEYWORDS_REQUIRING_INTENT = new Set(['team', 'swarm', 'stop', 'abort', 'parallel', 'autoresearch']);
 
-type IntentKeyword = 'ralph' | 'team' | 'swarm' | 'stop' | 'abort' | 'parallel';
+type IntentKeyword = 'team' | 'swarm' | 'stop' | 'abort' | 'parallel' | 'autoresearch';
 
 /**
  * Per-keyword intent patterns used when a keyword is in KEYWORDS_REQUIRING_INTENT.
@@ -412,6 +414,12 @@ const KEYWORD_INTENT_PATTERNS: Record<IntentKeyword, RegExp[]> = {
     /\b(?:use|run|enable|start|activate|launch)\s+(?:in\s+)?parallel\b/i,
     /\bparallel\s+(?:mode|execution|workers?|agents?|tasks?)\b/i,
     /\brun\s+(?:tasks?|agents?|workers?)\s+in\s+parallel\b/i,
+  ],
+  autoresearch: [
+    /(?:^|[^\w])\$(?:autoresearch)\b/i,
+    /\/autoresearch\b/i,
+    /\b(?:use|run|start|enable|launch|invoke|activate)\s+(?:the\s+)?autoresearch\b/i,
+    /\bautoresearch\s+(?:mode|workflow|skill|loop)\b/i,
   ],
 };
 
@@ -513,6 +521,10 @@ export function detectKeywords(text: string): KeywordMatch[] {
 export function detectPrimaryKeyword(text: string): KeywordMatch | null {
   const matches = detectKeywords(text);
   return matches.length > 0 ? matches[0] : null;
+}
+
+function initialWorkflowPhaseForMode(mode: TrackedWorkflowMode): SkillActivePhase {
+  return mode === 'autoresearch' ? 'executing' : 'planning';
 }
 
 function resolveRequestedWorkflowSkills(requestedWorkflowSkills: TrackedWorkflowMode[]): {
@@ -632,7 +644,7 @@ export async function recordSkillActivation(input: RecordSkillActivationInput): 
           active: previous?.active ?? nextWorkflowEntries.length > 0,
           skill: previous?.skill || match.skill,
           keyword: previous?.keyword || match.keyword,
-          phase: previous?.phase || 'planning',
+          phase: previous?.phase || initialWorkflowPhaseForMode(match.skill),
           activated_at: previous?.activated_at || nowIso,
           updated_at: nowIso,
           source: 'keyword-detector',
@@ -672,7 +684,7 @@ export async function recordSkillActivation(input: RecordSkillActivationInput): 
 
       const existingEntry = nextWorkflowEntries.find((entry) => entry.skill === requestedMode);
       if (existingEntry) {
-        existingEntry.phase = requestedMode === match.skill ? 'planning' : existingEntry.phase;
+        existingEntry.phase = requestedMode === match.skill ? initialWorkflowPhaseForMode(requestedMode) : existingEntry.phase;
         existingEntry.active = true;
         existingEntry.activated_at = requestedMode === match.skill
           ? (sameSkill && sameKeyword ? existingEntry.activated_at || previous?.activated_at || nowIso : nowIso)
@@ -688,7 +700,7 @@ export async function recordSkillActivation(input: RecordSkillActivationInput): 
         ...nextWorkflowEntries,
         {
           skill: requestedMode,
-          phase: requestedMode === match.skill ? 'planning' : undefined,
+          phase: requestedMode === match.skill ? initialWorkflowPhaseForMode(requestedMode) : undefined,
           active: true,
           activated_at: requestedMode === match.skill && sameSkill && sameKeyword
             ? previous?.activated_at
@@ -702,13 +714,13 @@ export async function recordSkillActivation(input: RecordSkillActivationInput): 
     }
 
     const primaryEntry = nextWorkflowEntries.find((entry) => entry.skill === match.skill) ?? nextWorkflowEntries[0];
-    const primarySkill = primaryEntry?.skill || match.skill;
+    const primarySkill = (primaryEntry?.skill || match.skill) as TrackedWorkflowMode;
     const workflowState: SkillActiveState = {
       version: 1,
       active: true,
       skill: primarySkill,
       keyword: primarySkill === match.skill ? match.keyword : `$${primarySkill}`,
-      phase: primaryEntry?.phase || 'planning',
+      phase: primaryEntry?.phase || initialWorkflowPhaseForMode(primarySkill),
       activated_at: primaryEntry?.activated_at || nowIso,
       updated_at: nowIso,
       source: 'keyword-detector',
@@ -768,7 +780,7 @@ export async function recordSkillActivation(input: RecordSkillActivationInput): 
     active: true,
     skill: match.skill,
     keyword: match.keyword,
-    phase: 'planning',
+    phase: initialWorkflowPhaseForMode(match.skill as TrackedWorkflowMode),
     activated_at: sameSkill && sameKeyword ? previous.activated_at : nowIso,
     updated_at: nowIso,
     source: 'keyword-detector',
@@ -777,7 +789,7 @@ export async function recordSkillActivation(input: RecordSkillActivationInput): 
     turn_id: input.turnId,
     active_skills: [{
       skill: match.skill,
-      phase: 'planning',
+      phase: initialWorkflowPhaseForMode(match.skill as TrackedWorkflowMode),
       active: true,
       activated_at: sameSkill && sameKeyword ? previous?.activated_at : nowIso,
       updated_at: nowIso,

@@ -21,6 +21,7 @@ import { logTmuxHookEvent } from './log.js';
 import { evaluatePaneInjectionReadiness, mapPaneInjectionReadinessReason, sendPaneInput } from './team-tmux-guard.js';
 import { stripOrchestrationIntentTags } from './orchestration-intent.js';
 import { buildCapturePaneArgv, DEFAULT_MARKER, tmuxHookExplicitlyDisablesInjection } from '../tmux-hook-engine.js';
+import { readAutoresearchCompletionStatus } from '../../autoresearch/skill-validation.js';
 import {
   isManagedOmxSession,
   resolveManagedCurrentPane,
@@ -523,9 +524,25 @@ export async function maybeAutoNudge({ cwd, stateDir, logsDir, payload }) {
 
   try {
     if (skillState) {
-      const inferredPhase = inferSkillPhaseFromText(lastMessage, skillState.phase);
+      const previousPhase = normalizeSkillPhase(skillState.phase);
+      const inferredPhase = inferSkillPhaseFromText(lastMessage, previousPhase);
       skillState.phase = inferredPhase;
       skillState.active = inferredPhase !== 'completing';
+
+      if (skillState.skill === 'autoresearch') {
+        const completion = await readAutoresearchCompletionStatus(cwd, invocationSessionId);
+        skillState.validation_mode = completion.validationMode;
+        skillState.autoresearch_completion_reason = completion.reason;
+        skillState.completion_artifact_path = completion.artifactPath;
+        if (completion.complete) {
+          skillState.phase = 'completing';
+          skillState.active = false;
+        } else if (inferredPhase === 'completing') {
+          skillState.phase = previousPhase === 'completing' ? 'reviewing' : previousPhase;
+          skillState.active = true;
+        }
+      }
+
       skillState.updated_at = new Date().toISOString();
       releaseReason = inferDeepInterviewReleaseReason({ skillState, latestUserInput, lastMessage });
       await persistSkillActiveState(stateDir, invocationSessionId, skillState);

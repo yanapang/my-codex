@@ -236,6 +236,26 @@ describe('keyword detector swarm/team compatibility', () => {
   });
 });
 
+describe('autoresearch keyword detection', () => {
+  it('detects explicit $autoresearch invocation', () => {
+    const match = detectPrimaryKeyword('please run $autoresearch now');
+    assert.ok(match);
+    assert.equal(match.skill, 'autoresearch');
+    assert.equal(match.keyword.toLowerCase(), '$autoresearch');
+  });
+
+  it('detects explicit implicit-intent autoresearch phrasing', () => {
+    const match = detectPrimaryKeyword('please use autoresearch workflow for this mission');
+    assert.ok(match);
+    assert.equal(match.skill, 'autoresearch');
+  });
+
+  it('does not trigger autoresearch from incidental prose', () => {
+    const match = detectPrimaryKeyword('Karpathy did autoresearch before native hooks existed');
+    assert.equal(match, null);
+  });
+});
+
 describe('keyword registry coverage', () => {
   it('includes key team/swarm aliases in runtime keyword registry', () => {
     const registryKeywords = new Set(KEYWORD_TRIGGER_DEFINITIONS.map((v) => v.keyword.toLowerCase()));
@@ -253,6 +273,7 @@ describe('keyword registry coverage', () => {
     assert.ok(registryKeywords.has('wiki query'));
     assert.ok(registryKeywords.has('wiki add'));
     assert.ok(registryKeywords.has('wiki lint'));
+    assert.ok(registryKeywords.has('autoresearch'));
   });
 });
 
@@ -498,6 +519,59 @@ describe('keyword detector skill-active-state lifecycle', () => {
         await readFile(join(stateDir, 'sessions', 'sess-visible', SKILL_ACTIVE_STATE_FILE), 'utf-8'),
       ) as { active_skills?: Array<{ skill: string }> };
       assert.deepEqual(persisted.active_skills?.map((entry) => entry.skill), ['team', 'ralph', 'ultrawork']);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('seeds executing state for autoresearch prompt-submit activation', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-autoresearch-'));
+    const stateDir = join(cwd, '.omx', 'state');
+    try {
+      await mkdir(stateDir, { recursive: true });
+      const result = await recordSkillActivation({
+        stateDir,
+        text: '$autoresearch continue the mission',
+        sessionId: 'sess-autoresearch',
+        nowIso: '2026-04-17T00:00:00.000Z',
+      });
+
+      assert.ok(result);
+      assert.equal(result.skill, 'autoresearch');
+      assert.equal(result.phase, 'executing');
+      assert.equal(result.initialized_mode, 'autoresearch');
+      assert.equal(result.initialized_state_path, '.omx/state/sessions/sess-autoresearch/autoresearch-state.json');
+
+      const modeState = JSON.parse(
+        await readFile(join(stateDir, 'sessions', 'sess-autoresearch', 'autoresearch-state.json'), 'utf-8'),
+      ) as { mode: string; active: boolean; current_phase: string };
+      assert.equal(modeState.mode, 'autoresearch');
+      assert.equal(modeState.active, true);
+      assert.equal(modeState.current_phase, 'executing');
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves the planning skill when ralplan and autoresearch are invoked together', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-autoresearch-planning-precedence-'));
+    const stateDir = join(cwd, '.omx', 'state');
+    try {
+      await mkdir(stateDir, { recursive: true });
+
+      const result = await recordSkillActivation({
+        stateDir,
+        text: '$ralplan $autoresearch wire the mission loop',
+        sessionId: 'sess-autoresearch-precedence',
+        nowIso: '2026-04-17T00:05:00.000Z',
+      });
+
+      assert.equal(result?.transition_error, undefined);
+      assert.equal(result?.skill, 'ralplan');
+      assert.deepEqual(result?.active_skills?.map((entry) => entry.skill), ['ralplan']);
+      assert.deepEqual(result?.deferred_skills, ['autoresearch']);
+      assert.equal(existsSync(join(stateDir, 'sessions', 'sess-autoresearch-precedence', 'ralplan-state.json')), true);
+      assert.equal(existsSync(join(stateDir, 'sessions', 'sess-autoresearch-precedence', 'autoresearch-state.json')), false);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
