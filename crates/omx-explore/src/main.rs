@@ -1716,7 +1716,11 @@ printf '# Answer\nok\n' > "$output_path"
             env::set_var("BASH_ENV", &bash_env);
         }
         let mut child = Command::new(&bash_path);
-        child.arg("--noprofile").arg("--norc").arg("-lc").arg("true");
+        child
+            .arg("--noprofile")
+            .arg("--norc")
+            .arg("-lc")
+            .arg("true");
         sanitize_explore_subprocess_env(&mut child);
         let status = child.status().expect("run bash");
         unsafe {
