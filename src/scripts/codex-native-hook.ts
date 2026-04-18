@@ -44,6 +44,7 @@ import type { HookEventEnvelope } from "../hooks/extensibility/types.js";
 import { dispatchHookEvent } from "../hooks/extensibility/dispatcher.js";
 import { reconcileHudForPromptSubmit } from "../hud/reconcile.js";
 import { onSessionStart as buildWikiSessionStartContext } from "../wiki/lifecycle.js";
+import { readAutoresearchCompletionStatus, readAutoresearchModeState } from "../autoresearch/skill-validation.js";
 
 type CodexHookEventName =
   | "SessionStart"
@@ -195,6 +196,18 @@ function isNonTerminalPhase(value: unknown): boolean {
 function formatPhase(value: unknown, fallback = "active"): string {
   const phase = safeString(value).trim();
   return phase || fallback;
+}
+
+async function readActiveAutoresearchState(
+  cwd: string,
+  sessionId?: string,
+): Promise<Record<string, unknown> | null> {
+  const normalizedSessionId = sessionId?.trim() || undefined;
+  if (!normalizedSessionId) return null;
+  const state = await readAutoresearchModeState(cwd, normalizedSessionId);
+  if (state?.active !== true) return null;
+  if (!isNonTerminalPhase(state.current_phase ?? state.currentPhase ?? 'executing')) return null;
+  return state;
 }
 
 async function readActiveRalphState(
@@ -1284,6 +1297,28 @@ async function buildStopHookOutput(
   const threadId = readPayloadThreadId(payload);
   const ralphState = await readActiveRalphState(stateDir, canonicalSessionId);
   if (!ralphState) {
+    const autoresearchState = await readActiveAutoresearchState(cwd, canonicalSessionId);
+    if (autoresearchState) {
+      const completion = await readAutoresearchCompletionStatus(cwd, canonicalSessionId!.trim());
+      if (!completion.complete) {
+        const currentPhase = safeString(autoresearchState.current_phase ?? autoresearchState.currentPhase).trim() || 'executing';
+        const systemMessage = `OMX autoresearch is still active (phase: ${currentPhase}); continue until validator evidence is complete before stopping.`;
+        return await maybeReturnRepeatableStopOutput(
+          payload,
+          stateDir,
+          buildRepeatableStopSignature(payload, 'autoresearch-stop', `${currentPhase}|${completion.reason}`, canonicalSessionId),
+          {
+            decision: 'block',
+            reason: systemMessage,
+            stopReason: `autoresearch_${currentPhase}`,
+            systemMessage,
+          },
+          canonicalSessionId,
+          { allowRepeatDuringStopHook: true },
+        );
+      }
+    }
+
     const teamWorkerOutput = await buildTeamWorkerStopOutput(cwd);
     if (hasTeamWorkerContext() && teamWorkerOutput) return teamWorkerOutput;
 

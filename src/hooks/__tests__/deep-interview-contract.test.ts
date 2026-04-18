@@ -195,7 +195,7 @@ describe("deep-interview Ouroboros contract", () => {
 		assert.match(deepInterviewSkill, /launch/i);
 		assert.match(
 			deepInterviewSkill,
-			/do not launch detached tmux until the user explicitly confirms/i,
+			/do not run direct CLI launch or detached\/split tmux launch, and only hand off to `\$autoresearch` after explicit confirmation/i,
 		);
 		assert.match(deepInterviewSkill, /<\.\.\.>/i);
 		assert.match(deepInterviewSkill, /TODO/i);
