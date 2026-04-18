@@ -2771,6 +2771,39 @@ esac
     }
   });
 
+  it("does not block Stop from stale root autoresearch state when the explicit session has no scoped autoresearch state", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-stale-root-autoresearch-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const specDir = join(cwd, '.omx', 'specs', 'autoresearch-demo');
+      await mkdir(join(stateDir, 'sessions', 'sess-current'), { recursive: true });
+      await mkdir(specDir, { recursive: true });
+      await writeJson(join(stateDir, 'session.json'), { session_id: 'sess-current', cwd });
+      await writeJson(join(stateDir, 'autoresearch-state.json'), {
+        active: true,
+        mode: 'autoresearch',
+        current_phase: 'executing',
+        validation_mode: 'mission-validator-script',
+        mission_validator_command: 'node scripts/validate.js',
+        completion_artifact_path: '.omx/specs/autoresearch-demo/completion.json',
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: 'Stop',
+          cwd,
+          session_id: 'sess-current',
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, 'stop');
+      assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("does not block Stop solely because deep-interview is active", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-deep-interview-"));
     try {

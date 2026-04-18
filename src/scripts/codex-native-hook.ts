@@ -203,6 +203,7 @@ async function readActiveAutoresearchState(
   sessionId?: string,
 ): Promise<Record<string, unknown> | null> {
   const normalizedSessionId = sessionId?.trim() || undefined;
+  if (!normalizedSessionId) return null;
   const state = await readAutoresearchModeState(cwd, normalizedSessionId);
   if (state?.active !== true) return null;
   if (!isNonTerminalPhase(state.current_phase ?? state.currentPhase ?? 'executing')) return null;
@@ -1298,7 +1299,7 @@ async function buildStopHookOutput(
   if (!ralphState) {
     const autoresearchState = await readActiveAutoresearchState(cwd, canonicalSessionId);
     if (autoresearchState) {
-      const completion = await readAutoresearchCompletionStatus(cwd, canonicalSessionId?.trim() || undefined);
+      const completion = await readAutoresearchCompletionStatus(cwd, canonicalSessionId!.trim());
       if (!completion.complete) {
         const currentPhase = safeString(autoresearchState.current_phase ?? autoresearchState.currentPhase).trim() || 'executing';
         const systemMessage = `OMX autoresearch is still active (phase: ${currentPhase}); continue until validator evidence is complete before stopping.`;
