@@ -7,6 +7,7 @@ import {
   isTerminalRunOutcome,
   normalizeRunOutcome,
 } from '../run-outcome.js';
+import { shouldContinueRun } from '../run-loop.js';
 
 describe('run outcome contract', () => {
   it('normalizes legacy outcome aliases', () => {
@@ -59,5 +60,21 @@ describe('run outcome contract', () => {
     });
     assert.equal(result.ok, false);
     assert.match(result.error || '', /requires active=false/);
+  });
+
+  it('suppresses continuation when an explicit terminal run_outcome is present', () => {
+    assert.equal(shouldContinueRun({
+      active: true,
+      current_phase: 'executing',
+      run_outcome: 'blocked_on_user',
+    }), false);
+  });
+
+  it('continues non-terminal runs when the outcome is continue', () => {
+    assert.equal(shouldContinueRun({
+      active: true,
+      current_phase: 'executing',
+      run_outcome: 'continue',
+    }), true);
   });
 });
