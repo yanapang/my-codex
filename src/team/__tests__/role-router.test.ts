@@ -156,6 +156,17 @@ describe('role-router', () => {
       assert.equal(result.confidence, 'high');
     });
 
+    it('keeps changelog and docs deliverables on the writer lane even when research keywords appear', () => {
+      const changelog = routeTaskToRole(
+        'Update changelog',
+        'Write changelog notes and refresh the release docs with version compatibility details from the official docs',
+        'team-exec',
+        'executor',
+      );
+      assert.equal(changelog.role, 'writer');
+      assert.equal(changelog.confidence, 'high');
+    });
+
     it('routes security tasks to security-reviewer', () => {
       const result = routeTaskToRole('Security audit', 'Check for XSS and injection vulnerabilities', 'team-verify', 'executor');
       assert.equal(result.role, 'security-reviewer');
@@ -167,6 +178,18 @@ describe('role-router', () => {
       assert.equal(result.role, 'executor');
       assert.equal(result.confidence, 'medium');
       assert.match(result.reason, /implementation/i);
+    });
+
+    it('does not route SDK replacement implementation work to dependency-expert', () => {
+      const result = routeTaskToRole(
+        'Replace auth SDK integration',
+        'Implement the SDK replacement by updating client modules, wiring new API calls, and refactoring imports across the flow',
+        'team-exec',
+        'executor',
+      );
+      assert.equal(result.role, 'executor');
+      assert.equal(result.confidence, 'medium');
+      assert.match(result.reason, /implementation lane|implementation-heavy/i);
     });
 
     it('routes refactoring tasks to code-simplifier', () => {
