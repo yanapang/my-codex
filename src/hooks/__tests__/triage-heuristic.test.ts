@@ -65,10 +65,13 @@ const CANONICAL_CORPUS: string[] = [
   'make the button blue',
   'style this page',
   'adjust spacing on the settings panel',
+  'redesign the settings page layout',
   // HEAVY
   'add dark mode toggle to the settings page',
   'implement soft delete across the ORM layer',
   'refactor the auth flow to use session cookies',
+  'redesign the auth flow',
+  'redesign the deployment pipeline',
 ];
 
 // ---------------------------------------------------------------------------
@@ -174,6 +177,10 @@ describe('triagePrompt — LIGHT/designer', () => {
   it('routes "adjust spacing on the settings panel" to designer', () => {
     assertLightDestination('adjust spacing on the settings panel', 'designer');
   });
+
+  it('routes visual redesign prompts to designer', () => {
+    assertLightDestination('redesign the settings page layout', 'designer');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -191,6 +198,18 @@ describe('triagePrompt — HEAVY', () => {
 
   it('routes "refactor the auth flow to use session cookies" to HEAVY', () => {
     assertLane('refactor the auth flow to use session cookies', 'HEAVY');
+  });
+
+  it('does not route non-visual auth redesign prompts to LIGHT/designer', () => {
+    const result = triagePrompt('redesign the auth flow');
+    assert.equal(result.lane, 'HEAVY', `expected HEAVY got ${result.lane} (reason=${result.reason})`);
+    assert.equal(result.destination, 'autopilot');
+  });
+
+  it('does not route non-visual deployment redesign prompts to LIGHT/designer', () => {
+    const result = triagePrompt('redesign the deployment pipeline');
+    assert.equal(result.lane, 'HEAVY', `expected HEAVY got ${result.lane} (reason=${result.reason})`);
+    assert.equal(result.destination, 'autopilot');
   });
 
   it('sets destination=autopilot for HEAVY decisions', () => {

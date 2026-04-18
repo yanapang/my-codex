@@ -64,7 +64,6 @@ const DESIGNER_STARTERS: readonly string[] = [
   "color ",
   "adjust spacing",
   "ui ",
-  "redesign ",
   "change the color",
   "change the font",
   "change the style",
@@ -73,6 +72,24 @@ const DESIGNER_STARTERS: readonly string[] = [
   "change the design",
   "change the layout",
   "update the layout",
+];
+
+/**
+ * Terms that make broad design verbs visual/UI-specific enough for designer.
+ * Keep these intentionally concrete so product, architecture, auth, and
+ * deployment redesign prompts can continue to reach the safer HEAVY path.
+ */
+const VISUAL_DESIGN_TERMS: RegExp[] = [
+  /\b(?:ui|ux|visual|style|styling|css|layout|spacing|color|font|typography)\b/,
+  /\b(?:button|page|screen|panel|modal|form|navbar|sidebar|header|footer|card|component)\b/,
+];
+
+const BROAD_DESIGN_STARTERS: readonly string[] = [
+  "redesign ",
+];
+
+const STRUCTURAL_REDESIGN_TERMS: RegExp[] = [
+  /\b(?:auth|authentication|authorization|flow|pipeline|deployment|deploy|architecture|system|api|backend|database|data|schema|orm|infra|infrastructure)\b/,
 ];
 
 /**
@@ -190,6 +207,11 @@ export function triagePrompt(prompt: string): TriageDecision {
       return { lane: "LIGHT", destination: "designer", reason: "visual_styling_prompt" };
     }
   }
+  for (const starter of BROAD_DESIGN_STARTERS) {
+    if (normalized.startsWith(starter) && VISUAL_DESIGN_TERMS.some((pattern) => pattern.test(normalized))) {
+      return { lane: "LIGHT", destination: "designer", reason: "visual_styling_prompt" };
+    }
+  }
 
   // ── Rule 5: Short anchored edit → LIGHT/executor ─────────────────────────
   if (wordCount <= ANCHORED_EDIT_WORD_LIMIT) {
@@ -201,6 +223,13 @@ export function triagePrompt(prompt: string): TriageDecision {
   }
 
   // ── Rule 6: Longer goal-shaped imperative → HEAVY ────────────────────────
+  if (
+    BROAD_DESIGN_STARTERS.some((starter) => normalized.startsWith(starter)) &&
+    STRUCTURAL_REDESIGN_TERMS.some((pattern) => pattern.test(normalized))
+  ) {
+    return { lane: "HEAVY", destination: "autopilot", reason: "structural_redesign_goal" };
+  }
+
   if (wordCount > HEAVY_WORD_THRESHOLD) {
     for (const verb of HEAVY_IMPERATIVE_VERBS) {
       if (normalized.startsWith(verb)) {
