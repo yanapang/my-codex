@@ -27,6 +27,38 @@ async function readJson<T>(path: string): Promise<T> {
   return JSON.parse(await readFile(path, 'utf-8')) as T;
 }
 
+function withPatchedEnv<T>(patch: Record<string, string>, run: () => Promise<T>): Promise<T> {
+  const managedKeys = new Set([
+    ...Object.keys(patch),
+    'CODEX_HOME',
+    'OMX_SESSION_ID',
+    'OMX_RUNTIME_BRIDGE',
+    'OMX_NOTIFY_FALLBACK',
+    'OMX_NOTIFY_FALLBACK_AUTO_NUDGE_STALL_MS',
+    'OMX_HOOK_CONFIG',
+    'OMX_NOTIFY_PROFILE',
+    'OMX_NOTIFY_VERBOSITY',
+    'OMX_TEAM_WORKER',
+    'OMX_TEAM_STATE_ROOT',
+    'OMX_TEAM_LEADER_CWD',
+    'OMX_MODEL_INSTRUCTIONS_FILE',
+    'TMUX',
+    'TMUX_PANE',
+  ]);
+  const previous = new Map<string, string | undefined>();
+  for (const key of managedKeys) {
+    previous.set(key, process.env[key]);
+    if (Object.prototype.hasOwnProperty.call(patch, key)) process.env[key] = patch[key]!;
+    else delete process.env[key];
+  }
+  return run().finally(() => {
+    for (const [key, value] of previous) {
+      if (typeof value === 'string') process.env[key] = value;
+      else delete process.env[key];
+    }
+  });
+}
+
 
 function readLinuxStartTicks(pid: number): number | null {
   try {

@@ -369,4 +369,466 @@ exit 1
       await rm(cwd, { recursive: true, force: true });
     }
   });
+
+  it('rebinds a shell-degraded codex anchor to the live codex pane in the managed session', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-managed-degraded-codex-anchor-'));
+    const originalPath = process.env.PATH;
+    try {
+      const stateDir = join(cwd, '.omx', 'state');
+      const fakeBinDir = join(cwd, 'fake-bin');
+      const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const sessionId = 'omx-degraded-codex-anchor';
+      const managedSessionName = buildTmuxSessionName(cwd, sessionId);
+
+      await mkdir(stateDir, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+      await writeFile(join(stateDir, 'session.json'), JSON.stringify({
+        session_id: sessionId,
+        started_at: new Date().toISOString(),
+        cwd,
+        pid: process.pid,
+        platform: process.platform,
+        pid_start_ticks: readLinuxStartTicks(process.pid),
+        pid_cmdline: readLinuxCmdline(process.pid),
+      }, null, 2));
+
+      const fakeTmux = `#!/usr/bin/env bash
+set -eu
+cmd="$1"
+shift || true
+if [[ "$cmd" == "display-message" ]]; then
+  target=""
+  format=""
+  while (($#)); do
+    case "$1" in
+      -p) shift ;;
+      -t) target="$2"; shift 2 ;;
+      *) format="$1"; shift ;;
+    esac
+  done
+  if [[ -z "$target" && "$format" == "#S" ]]; then
+    echo "${managedSessionName}"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_current_command}" && "$target" == "%42" ]]; then
+    echo "bash"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_start_command}" && "$target" == "%42" ]]; then
+    echo "codex --model gpt-5"
+    exit 0
+  fi
+  if [[ "$format" == "#S" && "$target" == "%42" ]]; then
+    echo "${managedSessionName}"
+    exit 0
+  fi
+  echo "unsupported display target: $target / $format" >&2
+  exit 1
+fi
+if [[ "$cmd" == "list-panes" ]]; then
+  target=""
+  while (($#)); do
+    case "$1" in
+      -s) shift ;;
+      -t) target="$2"; shift 2 ;;
+      -F) shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [[ "$target" == "${managedSessionName}" ]]; then
+    printf "%%42\\t0\\tbash\\tcodex --model gpt-5\\n%%55\\t1\\tcodex\\tcodex\\n"
+    exit 0
+  fi
+  echo "unexpected list-panes target: $target" >&2
+  exit 1
+fi
+echo "unsupported cmd: $cmd" >&2
+exit 1
+`;
+      await writeFile(fakeTmuxPath, fakeTmux);
+      await chmod(fakeTmuxPath, 0o755);
+
+      process.env.PATH = `${fakeBinDir}:${originalPath || ''}`;
+      process.env.TMUX = '1';
+      delete process.env.TMUX_PANE;
+      process.env.OMX_TEAM_WORKER = '';
+
+      const paneId = await resolveManagedPaneFromAnchor('%42', cwd, { session_id: sessionId }, { allowTeamWorker: false });
+      assert.equal(paneId, '%55');
+    } finally {
+      process.env.PATH = originalPath;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores an active shell-degraded codex pane when selecting the live managed replacement', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-managed-active-degraded-codex-anchor-'));
+    const originalPath = process.env.PATH;
+    try {
+      const stateDir = join(cwd, '.omx', 'state');
+      const fakeBinDir = join(cwd, 'fake-bin');
+      const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const sessionId = 'omx-active-degraded-codex-anchor';
+      const managedSessionName = buildTmuxSessionName(cwd, sessionId);
+
+      await mkdir(stateDir, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+      await writeFile(join(stateDir, 'session.json'), JSON.stringify({
+        session_id: sessionId,
+        started_at: new Date().toISOString(),
+        cwd,
+        pid: process.pid,
+        platform: process.platform,
+        pid_start_ticks: readLinuxStartTicks(process.pid),
+        pid_cmdline: readLinuxCmdline(process.pid),
+      }, null, 2));
+
+      const fakeTmux = `#!/usr/bin/env bash
+set -eu
+cmd="$1"
+shift || true
+if [[ "$cmd" == "display-message" ]]; then
+  target=""
+  format=""
+  while (($#)); do
+    case "$1" in
+      -p) shift ;;
+      -t) target="$2"; shift 2 ;;
+      *) format="$1"; shift ;;
+    esac
+  done
+  if [[ -z "$target" && "$format" == "#S" ]]; then
+    echo "${managedSessionName}"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_current_command}" && "$target" == "%42" ]]; then
+    echo "zsh"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_start_command}" && "$target" == "%42" ]]; then
+    echo "codex --model gpt-5"
+    exit 0
+  fi
+  if [[ "$format" == "#S" && "$target" == "%42" ]]; then
+    echo "${managedSessionName}"
+    exit 0
+  fi
+  echo "unsupported display target: $target / $format" >&2
+  exit 1
+fi
+if [[ "$cmd" == "list-panes" ]]; then
+  target=""
+  while (($#)); do
+    case "$1" in
+      -s) shift ;;
+      -t) target="$2"; shift 2 ;;
+      -F) shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [[ "$target" == "${managedSessionName}" ]]; then
+    printf "%%42\\t1\\tzsh\\tcodex --model gpt-5\\n%%55\\t0\\tcodex\\tcodex\\n"
+    exit 0
+  fi
+  echo "unexpected list-panes target: $target" >&2
+  exit 1
+fi
+echo "unsupported cmd: $cmd" >&2
+exit 1
+`;
+      await writeFile(fakeTmuxPath, fakeTmux);
+      await chmod(fakeTmuxPath, 0o755);
+
+      process.env.PATH = `${fakeBinDir}:${originalPath || ''}`;
+      process.env.TMUX = '1';
+      delete process.env.TMUX_PANE;
+      process.env.OMX_TEAM_WORKER = '';
+
+      const paneId = await resolveManagedPaneFromAnchor('%42', cwd, { session_id: sessionId }, { allowTeamWorker: false });
+      assert.equal(paneId, '%55');
+    } finally {
+      process.env.PATH = originalPath;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('rebinds a degraded anchor using the verified session name when a follow-up #S lookup would fail', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-managed-degraded-anchor-session-reuse-'));
+    const originalPath = process.env.PATH;
+    try {
+      const stateDir = join(cwd, '.omx', 'state');
+      const fakeBinDir = join(cwd, 'fake-bin');
+      const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const sessionId = 'omx-degraded-anchor-session-reuse';
+      const managedSessionName = buildTmuxSessionName(cwd, sessionId);
+      const sessionLookupCountPath = join(cwd, 'session-lookup-count');
+
+      await mkdir(stateDir, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+      await writeFile(join(stateDir, 'session.json'), JSON.stringify({
+        session_id: sessionId,
+        started_at: new Date().toISOString(),
+        cwd,
+        pid: process.pid,
+        platform: process.platform,
+        pid_start_ticks: readLinuxStartTicks(process.pid),
+        pid_cmdline: readLinuxCmdline(process.pid),
+      }, null, 2));
+
+      const fakeTmux = `#!/usr/bin/env bash
+set -eu
+cmd="$1"
+shift || true
+if [[ "$cmd" == "display-message" ]]; then
+  target=""
+  format=""
+  while (($#)); do
+    case "$1" in
+      -p) shift ;;
+      -t) target="$2"; shift 2 ;;
+      *) format="$1"; shift ;;
+    esac
+  done
+  if [[ -z "$target" && "$format" == "#S" ]]; then
+    echo "${managedSessionName}"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_current_command}" && "$target" == "%42" ]]; then
+    echo "bash"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_start_command}" && "$target" == "%42" ]]; then
+    echo "codex --model gpt-5"
+    exit 0
+  fi
+  if [[ "$format" == "#S" && "$target" == "%42" ]]; then
+    count=0
+    if [[ -f "${sessionLookupCountPath}" ]]; then
+      count="$(cat "${sessionLookupCountPath}")"
+    fi
+    count=$((count + 1))
+    printf '%s' "$count" > "${sessionLookupCountPath}"
+    if [[ "$count" -gt 1 ]]; then
+      echo "session lookup should not repeat" >&2
+      exit 1
+    fi
+    echo "${managedSessionName}"
+    exit 0
+  fi
+  echo "unsupported display target: $target / $format" >&2
+  exit 1
+fi
+if [[ "$cmd" == "list-panes" ]]; then
+  target=""
+  while (($#)); do
+    case "$1" in
+      -s) shift ;;
+      -t) target="$2"; shift 2 ;;
+      -F) shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [[ "$target" == "${managedSessionName}" ]]; then
+    printf "%%42\\t1\\tbash\\tcodex --model gpt-5\\n%%55\\t0\\tcodex\\tcodex\\n"
+    exit 0
+  fi
+  echo "unexpected list-panes target: $target" >&2
+  exit 1
+fi
+echo "unsupported cmd: $cmd" >&2
+exit 1
+`;
+      await writeFile(fakeTmuxPath, fakeTmux);
+      await chmod(fakeTmuxPath, 0o755);
+
+      process.env.PATH = `${fakeBinDir}:${originalPath || ''}`;
+      process.env.TMUX = '1';
+      delete process.env.TMUX_PANE;
+      process.env.OMX_TEAM_WORKER = '';
+
+      const paneId = await resolveManagedPaneFromAnchor('%42', cwd, { session_id: sessionId }, { allowTeamWorker: false });
+      assert.equal(paneId, '%55');
+    } finally {
+      process.env.PATH = originalPath;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when a degraded anchor has no live codex sibling in the managed session', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-managed-degraded-anchor-no-live-sibling-'));
+    const originalPath = process.env.PATH;
+    try {
+      const stateDir = join(cwd, '.omx', 'state');
+      const fakeBinDir = join(cwd, 'fake-bin');
+      const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const sessionId = 'omx-degraded-anchor-no-live-sibling';
+      const managedSessionName = buildTmuxSessionName(cwd, sessionId);
+
+      await mkdir(stateDir, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+      await writeFile(join(stateDir, 'session.json'), JSON.stringify({
+        session_id: sessionId,
+        started_at: new Date().toISOString(),
+        cwd,
+        pid: process.pid,
+        platform: process.platform,
+        pid_start_ticks: readLinuxStartTicks(process.pid),
+        pid_cmdline: readLinuxCmdline(process.pid),
+      }, null, 2));
+
+      const fakeTmux = `#!/usr/bin/env bash
+set -eu
+cmd="$1"
+shift || true
+if [[ "$cmd" == "display-message" ]]; then
+  target=""
+  format=""
+  while (($#)); do
+    case "$1" in
+      -p) shift ;;
+      -t) target="$2"; shift 2 ;;
+      *) format="$1"; shift ;;
+    esac
+  done
+  if [[ -z "$target" && "$format" == "#S" ]]; then
+    echo "${managedSessionName}"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_current_command}" && "$target" == "%42" ]]; then
+    echo "bash"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_start_command}" && "$target" == "%42" ]]; then
+    echo "codex --model gpt-5"
+    exit 0
+  fi
+  if [[ "$format" == "#S" && "$target" == "%42" ]]; then
+    echo "${managedSessionName}"
+    exit 0
+  fi
+  echo "unsupported display target: $target / $format" >&2
+  exit 1
+fi
+if [[ "$cmd" == "list-panes" ]]; then
+  target=""
+  while (($#)); do
+    case "$1" in
+      -s) shift ;;
+      -t) target="$2"; shift 2 ;;
+      -F) shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [[ "$target" == "${managedSessionName}" ]]; then
+    printf "%%42\\t1\\tbash\\tcodex --model gpt-5\\n%%55\\t0\\tbash\\tbash\\n"
+    exit 0
+  fi
+  echo "unexpected list-panes target: $target" >&2
+  exit 1
+fi
+echo "unsupported cmd: $cmd" >&2
+exit 1
+`;
+      await writeFile(fakeTmuxPath, fakeTmux);
+      await chmod(fakeTmuxPath, 0o755);
+
+      process.env.PATH = `${fakeBinDir}:${originalPath || ''}`;
+      process.env.TMUX = '1';
+      delete process.env.TMUX_PANE;
+      process.env.OMX_TEAM_WORKER = '';
+
+      const paneId = await resolveManagedPaneFromAnchor('%42', cwd, { session_id: sessionId }, { allowTeamWorker: false });
+      assert.equal(paneId, '');
+    } finally {
+      process.env.PATH = originalPath;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a verified live anchor when command-state lookup fails and another codex pane is active', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-managed-anchor-lookup-failure-'));
+    const originalPath = process.env.PATH;
+    try {
+      const stateDir = join(cwd, '.omx', 'state');
+      const fakeBinDir = join(cwd, 'fake-bin');
+      const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const sessionId = 'omx-anchor-lookup-failure';
+      const managedSessionName = buildTmuxSessionName(cwd, sessionId);
+
+      await mkdir(stateDir, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+      await writeFile(join(stateDir, 'session.json'), JSON.stringify({
+        session_id: sessionId,
+        started_at: new Date().toISOString(),
+        cwd,
+        pid: process.pid,
+        platform: process.platform,
+        pid_start_ticks: readLinuxStartTicks(process.pid),
+        pid_cmdline: readLinuxCmdline(process.pid),
+      }, null, 2));
+
+      const fakeTmux = `#!/usr/bin/env bash
+set -eu
+cmd="$1"
+shift || true
+if [[ "$cmd" == "display-message" ]]; then
+  target=""
+  format=""
+  while (($#)); do
+    case "$1" in
+      -p) shift ;;
+      -t) target="$2"; shift 2 ;;
+      *) format="$1"; shift ;;
+    esac
+  done
+  if [[ -z "$target" && "$format" == "#S" ]]; then
+    echo "${managedSessionName}"
+    exit 0
+  fi
+  if [[ "$format" == "#S" && "$target" == "%42" ]]; then
+    echo "${managedSessionName}"
+    exit 0
+  fi
+  if [[ "$target" == "%42" && ( "$format" == "#{pane_current_command}" || "$format" == "#{pane_start_command}" ) ]]; then
+    echo "transient lookup failure" >&2
+    exit 1
+  fi
+  echo "unsupported display target: $target / $format" >&2
+  exit 1
+fi
+if [[ "$cmd" == "list-panes" ]]; then
+  target=""
+  while (($#)); do
+    case "$1" in
+      -s) shift ;;
+      -t) target="$2"; shift 2 ;;
+      -F) shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [[ "$target" == "${managedSessionName}" ]]; then
+    printf "%%42\\t0\\tcodex\\tcodex\\n%%55\\t1\\tcodex\\tcodex\\n"
+    exit 0
+  fi
+  echo "unexpected list-panes target: $target" >&2
+  exit 1
+fi
+echo "unsupported cmd: $cmd" >&2
+exit 1
+`;
+      await writeFile(fakeTmuxPath, fakeTmux);
+      await chmod(fakeTmuxPath, 0o755);
+
+      process.env.PATH = `${fakeBinDir}:${originalPath || ''}`;
+      process.env.TMUX = '1';
+      delete process.env.TMUX_PANE;
+      process.env.OMX_TEAM_WORKER = '';
+
+      const paneId = await resolveManagedPaneFromAnchor('%42', cwd, { session_id: sessionId }, { allowTeamWorker: false });
+      assert.equal(paneId, '%42');
+    } finally {
+      process.env.PATH = originalPath;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
 });

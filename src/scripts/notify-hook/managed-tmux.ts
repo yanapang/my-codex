@@ -248,7 +248,7 @@ export async function verifyManagedPaneTarget(paneId: string, cwd: string, paylo
 }
 
 
-async function readManagedPaneCommandState(paneTarget: string): Promise<{ currentCommand: string; startCommand: string }> {
+async function readManagedPaneCommandState(paneTarget: string): Promise<{ currentCommand: string; startCommand: string; lookupFailed: boolean }> {
   try {
     const [currentResult, startResult] = await Promise.all([
       runProcess('tmux', ['display-message', '-p', '-t', paneTarget, '#{pane_current_command}'], 2000),
@@ -257,9 +257,10 @@ async function readManagedPaneCommandState(paneTarget: string): Promise<{ curren
     return {
       currentCommand: safeString(currentResult.stdout).trim().toLowerCase(),
       startCommand: safeString(startResult.stdout).trim().toLowerCase(),
+      lookupFailed: false,
     };
   } catch {
-    return { currentCommand: '', startCommand: '' };
+    return { currentCommand: '', startCommand: '', lookupFailed: true };
   }
 }
 
@@ -271,8 +272,9 @@ function paneLooksLikeManagedAgent({ currentCommand, startCommand }: { currentCo
 
 function paneLooksLikeRetainableManagedAnchor({ currentCommand, startCommand }: { currentCommand: string; startCommand: string }): boolean {
   if (/\bomx\b.*\bhud\b.*--watch/i.test(startCommand)) return false;
-  if (startCommand.includes('codex')) return true;
-  return currentCommand === 'codex';
+  if (currentCommand === 'codex') return true;
+  if ((currentCommand === 'node' || currentCommand === 'npx') && startCommand.includes('codex')) return true;
+  return false;
 }
 
 interface ManagedSessionPaneRow {
@@ -301,7 +303,7 @@ function parseManagedSessionPaneRows(stdout: string): ManagedSessionPaneRow[] {
 
 function selectManagedSessionPane(rows: ManagedSessionPaneRow[]): string {
   const nonHudRows = rows.filter((row) => !/\bomx\b.*\bhud\b.*--watch/i.test(row.startCommand));
-  const canonicalRows = nonHudRows.filter((row) => row.startCommand.includes('codex') || row.currentCommand === 'codex');
+  const canonicalRows = nonHudRows.filter((row) => paneLooksLikeRetainableManagedAnchor(row));
   const activeCanonical = canonicalRows.find((row) => row.active);
   if (activeCanonical) return activeCanonical.paneId;
   return canonicalRows[0]?.paneId || '';
@@ -342,12 +344,12 @@ export async function resolveManagedPaneFromAnchor(anchorPane: string, cwd: stri
   if (!verdict.ok) return '';
 
   const commandState = await readManagedPaneCommandState(paneTarget);
+  if (commandState.lookupFailed) return paneTarget;
   if (paneLooksLikeRetainableManagedAnchor(commandState)) return paneTarget;
 
   try {
-    const sessionResult = await runProcess('tmux', ['display-message', '-p', '-t', paneTarget, '#S'], 2000);
-    const sessionName = safeString(sessionResult.stdout).trim();
-    if (!sessionName) return paneTarget;
+    const sessionName = safeString(verdict.paneSessionName || verdict.managedContext?.expectedTmuxSessionName).trim();
+    if (!sessionName) return '';
 
     const panesResult = await runProcess(
       'tmux',
@@ -360,5 +362,5 @@ export async function resolveManagedPaneFromAnchor(anchorPane: string, cwd: stri
     // best effort only
   }
 
-  return paneTarget;
+  return '';
 }
