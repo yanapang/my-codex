@@ -78,7 +78,6 @@ export interface NativeHookDispatchResult {
   outputJson: Record<string, unknown> | null;
 }
 
-const TERMINAL_RALPH_PHASES = new Set(["blocked_on_user", "complete", "failed", "cancelled"]);
 const TERMINAL_MODE_PHASES = new Set(["complete", "failed", "cancelled"]);
 const SKILL_STOP_BLOCKERS = new Set(["ralplan"]);
 const TEAM_TERMINAL_TASK_STATUSES = new Set(["completed", "failed"]);
