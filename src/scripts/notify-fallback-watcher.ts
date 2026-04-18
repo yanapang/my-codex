@@ -1045,12 +1045,22 @@ async function persistReboundRalphPaneState(
   paneId: string,
   nowIso: string,
 ): Promise<Record<string, unknown>> {
+  const latestState = await readFile(statePath, 'utf-8')
+    .then((content) => JSON.parse(content) as Record<string, unknown>)
+    .catch(() => null);
   const nextState = {
-    ...(state || {}),
+    ...((latestState && typeof latestState === 'object') ? latestState : (state || {})),
     tmux_pane_id: paneId,
     tmux_pane_set_at: nowIso,
   };
-  await writeFile(statePath, JSON.stringify(nextState, null, 2));
+  const tmpPath = `${statePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`;
+  await writeFile(tmpPath, JSON.stringify(nextState, null, 2));
+  try {
+    await rename(tmpPath, statePath);
+  } catch (error) {
+    await unlink(tmpPath).catch(() => {});
+    throw error;
+  }
   return nextState;
 }
 
