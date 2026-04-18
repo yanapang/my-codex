@@ -44,7 +44,6 @@ import type { HookEventEnvelope } from "../hooks/extensibility/types.js";
 import { dispatchHookEvent } from "../hooks/extensibility/dispatcher.js";
 import { reconcileHudForPromptSubmit } from "../hud/reconcile.js";
 import { onSessionStart as buildWikiSessionStartContext } from "../wiki/lifecycle.js";
-import { sessionModelInstructionsPath } from "../hooks/agents-overlay.js";
 import { readAutoresearchCompletionStatus, readAutoresearchModeState } from "../autoresearch/skill-validation.js";
 
 type CodexHookEventName =
