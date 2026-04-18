@@ -641,7 +641,7 @@ describe('keyword detector skill-active-state lifecycle', () => {
         await readFile(join(stateDir, 'sessions', 'sess-handoff', 'deep-interview-state.json'), 'utf-8'),
       ) as { active?: boolean; current_phase?: string };
       assert.equal(completed.active, false);
-      assert.equal(completed.current_phase, 'completing');
+      assert.equal(completed.current_phase, 'completed');
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

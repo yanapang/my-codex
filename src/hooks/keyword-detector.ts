@@ -152,6 +152,11 @@ function createDeepInterviewInputLock(nowIso: string, previous?: DeepInterviewIn
   };
 }
 
+function preserveCompletedDeepInterviewPhase(previousModeState: DeepInterviewModeState | null): string {
+  if (!previousModeState || previousModeState.active !== false) return '';
+  return safeString(previousModeState.current_phase).trim();
+}
+
 function releaseDeepInterviewInputLock(
   previous: DeepInterviewInputLock | undefined,
   nowIso: string,
@@ -248,7 +253,7 @@ export async function persistDeepInterviewModeState(
   const nextState: DeepInterviewModeState = {
     active: false,
     mode: 'deep-interview',
-    current_phase: 'completing',
+    current_phase: preserveCompletedDeepInterviewPhase(previousModeState) || 'completing',
     started_at: previousModeState?.started_at || previousSkill?.activated_at || nowIso,
     updated_at: nowIso,
     completed_at: nowIso,
