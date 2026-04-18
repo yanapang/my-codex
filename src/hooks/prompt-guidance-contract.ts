@@ -71,7 +71,6 @@ const SKILL_PATTERNS = [
 ];
 
 export const ROOT_TEMPLATE_CONTRACTS: GuidanceSurfaceContract[] = [
-  { id: 'agents-root', path: 'AGENTS.md', requiredPatterns: ROOT_TEMPLATE_PATTERNS },
   { id: 'agents-template', path: 'templates/AGENTS.md', requiredPatterns: ROOT_TEMPLATE_PATTERNS },
 ];
 

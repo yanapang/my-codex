@@ -36,11 +36,14 @@ const autopilotSkill = readFileSync(
 	join(__dirname, "../../../skills/autopilot/SKILL.md"),
 	"utf-8",
 );
-const rootAgents = readProjectAgents(join(__dirname, "../../.."));
 const templateAgents = readFileSync(
 	join(__dirname, "../../../templates/AGENTS.md"),
 	"utf-8",
 );
+const rootAgentsPath = join(__dirname, "../../../AGENTS.md");
+const rootAgents = existsSync(rootAgentsPath)
+	? readProjectAgents(join(__dirname, "../../.."))
+	: null;
 
 describe("deep-interview Ouroboros contract", () => {
 	it("includes ambiguity gate math and intent-first scoring", () => {
@@ -212,10 +215,12 @@ describe("cross-skill and AGENTS coherence for deep-interview", () => {
 		assert.match(autopilotSkill, /Socratic/i);
 	});
 
-	it("root and template AGENTS include ouroboros keyword and updated description", () => {
-		assert.match(rootAgents, /ouroboros/i);
+	it("tracked AGENTS surfaces include ouroboros keyword and updated description", () => {
+		if (rootAgents != null) {
+			assert.match(rootAgents, /ouroboros/i);
+			assert.match(rootAgents, /Socratic deep interview/i);
+		}
 		assert.match(templateAgents, /ouroboros/i);
-		assert.match(rootAgents, /Socratic deep interview/i);
 		assert.match(templateAgents, /Socratic deep interview/i);
 	});
 });

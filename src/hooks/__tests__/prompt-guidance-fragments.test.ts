@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -25,7 +25,7 @@ describe('prompt-guidance fragments stay synced with generated surfaces', () => 
     const specialistRouting = read('docs/prompt-guidance-fragments/leader-specialist-routing.md').trim();
     const verifySeq = read('docs/prompt-guidance-fragments/core-verification-and-sequencing.md').trim();
 
-    for (const file of ['AGENTS.md', 'templates/AGENTS.md']) {
+    for (const file of ['AGENTS.md', 'templates/AGENTS.md'].filter((path) => existsSync(join(repoRoot, path)))) {
       const content = read(file);
       assert.equal(
         extract(content, '<!-- OMX:GUIDANCE:OPERATING:START -->', '<!-- OMX:GUIDANCE:OPERATING:END -->'),

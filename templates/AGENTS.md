@@ -10,6 +10,7 @@ USE CODEX NATIVE SUBAGENTS FOR INDEPENDENT PARALLEL SUBTASKS WHEN THAT IMPROVES 
 You are running with oh-my-codex (OMX), a coordination layer for Codex CLI.
 This AGENTS.md is the top-level operating contract for the workspace.
 Role prompts under `prompts/*.md` are narrower execution surfaces. They must follow this file, not override it.
+When OMX is installed, load the installed prompt/skill/agent surfaces from `~/.codex/prompts`, `~/.codex/skills`, and `~/.codex/agents` (or the project-local `./.codex/...` equivalents when project scope is active).
 
 <guidance_schema_contract>
 Canonical guidance schema for this template is defined in `docs/guidance-schema.md`.
@@ -216,44 +217,17 @@ Specialists remain available through the role catalog and native child-agent sur
 ---
 
 <keyword_detection>
-When the user message contains a mapped keyword, activate the corresponding skill immediately.
-Do not ask for confirmation.
+Keyword routing is implemented primarily by native `UserPromptSubmit` hooks and the generated keyword registry. Treat hook-injected routing context as authoritative for the current turn, then load the named `SKILL.md` or prompt file as instructed.
 
-Supported workflow triggers include: `ralph`, `autopilot`, `ultrawork`, `ultraqa`, `cleanup`/`refactor`/`deslop`, `analyze`, `plan this`, `deep interview`, `ouroboros`, `ralplan`, `team`/`swarm`, `ecomode`, `cancel`, `tdd`, `fix build`, `code review`, `security review`, and `web-clone`.
-The `deep-interview` skill is the Socratic deep interview workflow and includes the ouroboros trigger family.
+Fallback behavior when hook context is unavailable:
+- Explicit `$name` invocations run left-to-right and override implicit keywords.
+- Deterministic workflow keywords route to the matching installed skill. Examples: `analyze` / `investigate` → `$analyze` for read-only deep analysis with ranked synthesis, explicit confidence, and concrete file references; `deep interview`, `interview`, `don't assume`, or `ouroboros` → `$deep-interview`; `ralplan` / `consensus plan` → `$ralplan`; `cancel`, `stop`, or `abort` → `$cancel`.
+- Keep the detailed keyword list in `src/hooks/keyword-registry.ts`; do not duplicate that table here.
 
-| Keyword(s) | Skill | Action |
-|-------------|-------|--------|
 Runtime availability gate:
 - Treat `autopilot`, `ralph`, `ultrawork`, `ultraqa`, `team`/`swarm`, and `ecomode` as **OMX runtime workflows**, not generic prompt aliases.
-- Auto-activate those runtime workflows only when the current session is actually running under OMX CLI/runtime (for example, launched via `omx`, with OMX session overlay/runtime state available, or when the user explicitly asks to run `omx ...` in the shell).
+- Auto-activate runtime workflows only when the current session is actually running under OMX CLI/runtime (for example, launched via `omx`, with OMX session overlay/runtime state available, or when the user explicitly asks to run `omx ...` in the shell).
 - In Codex App or plain Codex sessions without OMX runtime, do **not** treat those keywords alone as activation. Explain that they require OMX CLI runtime support, and continue with the nearest App-safe surface (`deep-interview`, `ralplan`, `plan`, or native subagents) unless the user explicitly wants you to launch OMX from the shell.
-
-| Keyword(s) | Skill | Action |
-|-------------|-------|--------|
-| "ralph", "don't stop", "must complete", "keep going" | `$ralph` | Runtime-only: read `~/.codex/skills/ralph/SKILL.md`, execute persistence loop only inside OMX CLI/runtime |
-| "autopilot", "build me", "I want a" | `$autopilot` | Runtime-only: read `~/.codex/skills/autopilot/SKILL.md`, execute autonomous pipeline only inside OMX CLI/runtime |
-| "ultrawork", "ulw", "parallel" | `$ultrawork` | Runtime-only: read `~/.codex/skills/ultrawork/SKILL.md`, execute parallel agents only inside OMX CLI/runtime |
-| "ultraqa" | `$ultraqa` | Runtime-only: read `~/.codex/skills/ralph/SKILL.md`, run persistent completion and verification loop only inside OMX CLI/runtime (UltraQA compatibility alias) |
-| "analyze", "investigate" | `$analyze` | Read `~/.codex/skills/analyze/SKILL.md`, run read-only deep analysis with ranked synthesis, explicit confidence, and concrete file references |
-| "plan this", "plan the", "let's plan" | `$plan` | Read `~/.codex/skills/plan/SKILL.md`, start planning workflow |
-| "interview", "deep interview", "gather requirements", "interview me", "don't assume", "ouroboros" | `$deep-interview` | Read `~/.codex/skills/deep-interview/SKILL.md`, run Ouroboros-inspired Socratic ambiguity-gated interview workflow |
-| "ralplan", "consensus plan" | `$ralplan` | Read `~/.codex/skills/ralplan/SKILL.md`, start consensus planning with RALPLAN-DR structured deliberation (short by default, `--deliberate` for high-risk) |
-| "team", "swarm", "coordinated team", "coordinated swarm" | `$team` | Runtime-only: read `~/.codex/skills/team/SKILL.md`, start tmux-based team orchestration only inside OMX CLI/runtime (swarm compatibility alias) |
-| "ecomode", "eco", "budget" | `$ecomode` | Runtime-only: read `~/.codex/skills/ultrawork/SKILL.md`, execute cost-aware parallel workflow only inside OMX CLI/runtime (ecomode compatibility alias) |
-| "cancel", "stop", "abort" | `$cancel` | Read `~/.codex/skills/cancel/SKILL.md`, cancel active modes |
-| "tdd", "test first" | `$tdd` | Read `~/.codex/prompts/test-engineer.md`, run test-first workflow (tdd compatibility alias) |
-| "fix build", "type errors" | `$build-fix` | Read `~/.codex/prompts/build-fixer.md`, fix build errors with minimal diff (build-fix compatibility alias) |
-| "review code", "code review", "code-review" | `$code-review` | Read `~/.codex/skills/code-review/SKILL.md`, run code review |
-| "security review" | `$security-review` | Read `~/.codex/skills/security-review/SKILL.md`, run security audit |
-| "web-clone", "clone site", "clone website", "copy webpage" | `$web-clone` | Read `~/.codex/skills/web-clone/SKILL.md`, start website cloning pipeline |
-
-Detection rules:
-- Keywords are case-insensitive and match anywhere in the user message.
-- Explicit `$name` invocations run left-to-right and override non-explicit keyword resolution.
-- If multiple non-explicit keywords match, use the most specific match.
-- Runtime-only keywords must pass the runtime availability gate before activation.
-- The rest of the user message becomes the task description.
 
 <triage_routing>
 ## Triage: advisory prompt-routing context
@@ -261,13 +235,6 @@ Detection rules:
 The keyword detector is the first and deterministic routing surface. Triage runs only when no keyword matches.
 
 When active, triage emits **advisory prompt-routing context** — a developer-context string that the model may follow. It does not activate a skill or workflow by itself. It is a best-effort hint, not a guarantee.
-
-Triage lanes:
-- **HEAVY** — complex, multi-step, or open-ended prompts: adds autopilot-shaped guidance toward full autonomous execution.
-- **LIGHT/explore** — read-only lookups, search, or investigation prompts: suggests the `explore` role-prompt surface (`prompts/explore.md`).
-- **LIGHT/executor** — scoped implementation or code-change prompts: suggests the `executor` role-prompt surface (`prompts/executor.md`).
-- **LIGHT/designer** — UI, visual, or frontend prompts: suggests the `designer` role-prompt surface (`prompts/designer.md`).
-- **PASS** — simple conversational or factual prompts: no context injection.
 
 Note: `explore`, `executor`, and `designer` are agent role-prompt files under `prompts/`, not workflow skills.
 
@@ -412,6 +379,8 @@ Do not cancel while recoverable work remains.
 ---
 
 <state_management>
+Hooks own normal skill-active and workflow-state persistence under `.omx/state/`.
+
 OMX persists runtime state under `.omx/`:
 - `.omx/state/` — mode state
 - `.omx/notepad.md` — session notes
@@ -421,11 +390,8 @@ OMX persists runtime state under `.omx/`:
 
 Available MCP groups include state/memory tools, code-intel tools, and trace tools.
 
-Mode lifecycle requirements:
-- Write state on start.
-- Update state on phase or iteration change.
-- Mark inactive with `completed_at` on completion.
-- Clear state on cancel/abort cleanup.
+Agents may use OMX state/MCP tools for explicit lifecycle transitions, recovery, checkpointing, cancellation cleanup, or compaction resilience.
+Do not manually duplicate hook-owned activation state unless recovering from missing or stale state.
 </state_management>
 
 ---
