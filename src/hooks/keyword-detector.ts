@@ -1,14 +1,13 @@
 /**
  * Keyword Detection Engine
  *
- * In OMC, this runs as a UserPromptSubmit hook that detects magic keywords
- * and injects skill prompts via system-reminder.
+ * In OMC/legacy OMX flows, this logic detects workflow keywords and can inject
+ * prompt-side routing guidance.
  *
- * In OMX, this logic is embedded in the AGENTS.md orchestration brain,
- * and can also be used by the notify hook for state tracking.
- *
- * When Codex CLI adds pre-hook support, this module can be promoted
- * to an external hook handler.
+ * In current OMX, native `UserPromptSubmit` is the canonical execution surface:
+ * this module owns the keyword registry, runtime gating, and hook-seeded
+ * skill/workflow state. AGENTS.md now carries the behavioral fallback contract
+ * rather than the full keyword/state table.
  */
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';

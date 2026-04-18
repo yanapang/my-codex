@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 
 async function read(path: string): Promise<string> { return await readFile(path, 'utf-8'); }
@@ -22,6 +23,7 @@ async function main(): Promise<void> {
   const vfI = (await read('docs/prompt-guidance-fragments/verifier-investigation.md')).trim();
 
   for (const file of ['AGENTS.md', 'templates/AGENTS.md']) {
+    if (!existsSync(file)) continue;
     let text = await read(file);
     text = replaceBetween(text, '<!-- OMX:GUIDANCE:OPERATING:START -->', '<!-- OMX:GUIDANCE:OPERATING:END -->', op);
     text = replaceBetween(text, '<!-- OMX:GUIDANCE:VERIFYSEQ:START -->', '<!-- OMX:GUIDANCE:VERIFYSEQ:END -->', vs);
