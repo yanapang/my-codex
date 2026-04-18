@@ -101,6 +101,27 @@ const DESIGN_INTENT = /\b(?:design|layout|style)\b|\b(?:build|create)\b.*\b(?:ui
 const BUILD_FIX_INTENT = /\b(?:build|compile|tsc|type error|compilation)\b|(?:빌드|컴파일|타입 오류)/i;
 const CLEANUP_INTENT = /\b(?:clean up|consolidate|reduce complexity|refactor|simplify)\b|(?:정리|단순화|리팩터)/i;
 const SECURITY_DOMAIN = /\b(?:auth|authentication|authorization|cve|injection|owasp|security|vulnerability|xss)\b|(?:보안|인증|인가|취약점)/i;
+const LOCAL_EXPLORATION_VERB = /\b(?:find|locate|look up|lookup|map|search|trace|where(?:\s+is|\s+are)?|which files?|what files?)\b/i;
+const LOCAL_EXPLORATION_SUBJECT = /\b(?:file|files|symbol|symbols|repo|repository|codebase|path|paths|usage|usages|reference|references|relationship|relationships|wiring|flow|implementation|local)\b/i;
+const DEPENDENCY_EVALUATION_SIGNAL = /\b(?:dependency|dependencies|package|packages|sdk|sdks|library|libraries|framework|frameworks|crate|crates|npm|pypi|crates\.io|license|licenses|maintenance|download stats?|migration path|vendor)\b/i;
+const DEPENDENCY_EVALUATION_VERB = /\b(?:adopt|assess|choose|compare|evaluate|recommend|replace|select|swap)\b/i;
+const RESEARCH_SIGNAL = /\b(?:official docs?|upstream docs?|vendor docs?|reference|references|api docs?|release notes?|changelog|version(?:ing)?|compatib(?:ility|le)|research)\b/i;
+
+function isLocalExplorationTask(text: string): boolean {
+  return LOCAL_EXPLORATION_VERB.test(text) && LOCAL_EXPLORATION_SUBJECT.test(text);
+}
+
+function isDependencyEvaluationTask(text: string): boolean {
+  return DEPENDENCY_EVALUATION_SIGNAL.test(text)
+    && (
+      DEPENDENCY_EVALUATION_VERB.test(text)
+      || /\b(?:candidate|compare|maintenance|migration|risk|replace|replacement)\b/i.test(text)
+    );
+}
+
+function isResearchTask(text: string): boolean {
+  return RESEARCH_SIGNAL.test(text) && !isLocalExplorationTask(text) && !isDependencyEvaluationTask(text);
+}
 
 function inferLaneIntent(text: string): LaneIntent {
   if (BUILD_FIX_INTENT.test(text) && /\b(?:fix|resolve|repair)\b|(?:수정|해결)/i.test(text)) return 'build-fix';
@@ -152,6 +173,30 @@ export function routeTaskToRole(
       role: 'debugger',
       confidence: 'high',
       reason: 'primary intent is investigation/debugging',
+    };
+  }
+
+  if (isLocalExplorationTask(text)) {
+    return {
+      role: 'explore',
+      confidence: 'high',
+      reason: 'primary intent is local codebase/file/symbol exploration',
+    };
+  }
+
+  if (isDependencyEvaluationTask(text)) {
+    return {
+      role: 'dependency-expert',
+      confidence: 'high',
+      reason: 'primary intent is external dependency/package evaluation',
+    };
+  }
+
+  if (isResearchTask(text)) {
+    return {
+      role: 'researcher',
+      confidence: 'high',
+      reason: 'primary intent is external documentation/reference research',
     };
   }
 
