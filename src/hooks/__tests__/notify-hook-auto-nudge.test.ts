@@ -1653,6 +1653,124 @@ exit 0
     });
   });
 
+  it('keeps autoresearch active when assistant claims completion without validator evidence', async () => {
+    await withTempWorkingDir(async (cwd) => {
+      const omxDir = join(cwd, '.omx');
+      const stateDir = join(omxDir, 'state');
+      const logsDir = join(omxDir, 'logs');
+      const codexHome = join(cwd, 'codex-home');
+      const fakeBinDir = join(cwd, 'fake-bin');
+      const tmuxLogPath = join(cwd, 'tmux.log');
+
+      await mkdir(logsDir, { recursive: true });
+      await mkdir(stateDir, { recursive: true });
+      await mkdir(codexHome, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+      await writeJson(join(codexHome, '.omx-config.json'), {
+        autoNudge: { enabled: true, delaySec: 0, stallMs: 0 },
+      });
+      await writeManagedSessionState(stateDir, cwd);
+      const sessionStateDir = join(stateDir, 'sessions', 'sess-managed');
+      await mkdir(sessionStateDir, { recursive: true });
+      await writeJson(join(sessionStateDir, 'skill-active-state.json'), {
+        active: true,
+        skill: 'autoresearch',
+        keyword: '$autoresearch',
+        phase: 'executing',
+        source: 'keyword-detector',
+        session_id: 'sess-managed',
+      });
+      await writeJson(join(sessionStateDir, 'autoresearch-state.json'), {
+        active: true,
+        mode: 'autoresearch',
+        current_phase: 'executing',
+        session_id: 'sess-managed',
+        validation_mode: 'mission-validator-script',
+        mission_validator_command: 'node scripts/validate.js',
+        completion_artifact_path: '.omx/specs/autoresearch-demo/completion.json',
+      });
+
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+
+      const result = runNotifyHook(cwd, fakeBinDir, codexHome, {
+        'last-assistant-message': 'All tests pass. Completed with summary.',
+      });
+      assert.equal(result.status, 0, `hook failed: ${result.stderr || result.stdout}`);
+
+      const skillState = JSON.parse(await readFile(join(sessionStateDir, 'skill-active-state.json'), 'utf-8')) as {
+        active: boolean;
+        phase: string;
+        autoresearch_completion_reason?: string;
+      };
+      assert.equal(skillState.active, true);
+      assert.equal(skillState.phase, 'executing');
+      assert.equal(skillState.autoresearch_completion_reason, 'missing_or_invalid_completion_artifact');
+    });
+  });
+
+  it('completes autoresearch when validator artifact passes', async () => {
+    await withTempWorkingDir(async (cwd) => {
+      const omxDir = join(cwd, '.omx');
+      const stateDir = join(omxDir, 'state');
+      const logsDir = join(omxDir, 'logs');
+      const codexHome = join(cwd, 'codex-home');
+      const fakeBinDir = join(cwd, 'fake-bin');
+      const tmuxLogPath = join(cwd, 'tmux.log');
+      const specDir = join(cwd, '.omx', 'specs', 'autoresearch-demo');
+
+      await mkdir(logsDir, { recursive: true });
+      await mkdir(stateDir, { recursive: true });
+      await mkdir(codexHome, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+      await mkdir(specDir, { recursive: true });
+      await writeJson(join(codexHome, '.omx-config.json'), {
+        autoNudge: { enabled: true, delaySec: 0, stallMs: 0 },
+      });
+      await writeManagedSessionState(stateDir, cwd);
+      const sessionStateDir = join(stateDir, 'sessions', 'sess-managed');
+      await mkdir(sessionStateDir, { recursive: true });
+      await writeJson(join(sessionStateDir, 'skill-active-state.json'), {
+        active: true,
+        skill: 'autoresearch',
+        keyword: '$autoresearch',
+        phase: 'reviewing',
+        source: 'keyword-detector',
+        session_id: 'sess-managed',
+      });
+      await writeJson(join(sessionStateDir, 'autoresearch-state.json'), {
+        active: true,
+        mode: 'autoresearch',
+        current_phase: 'reviewing',
+        session_id: 'sess-managed',
+        validation_mode: 'mission-validator-script',
+        mission_validator_command: 'node scripts/validate.js',
+        completion_artifact_path: '.omx/specs/autoresearch-demo/completion.json',
+      });
+      await writeJson(join(specDir, 'completion.json'), {
+        status: 'passed',
+        passed: true,
+      });
+
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+
+      const result = runNotifyHook(cwd, fakeBinDir, codexHome, {
+        'last-assistant-message': 'Completed with final summary after validator pass.',
+      });
+      assert.equal(result.status, 0, `hook failed: ${result.stderr || result.stdout}`);
+
+      const skillState = JSON.parse(await readFile(join(sessionStateDir, 'skill-active-state.json'), 'utf-8')) as {
+        active: boolean;
+        phase: string;
+        autoresearch_completion_reason?: string;
+      };
+      assert.equal(skillState.active, false);
+      assert.equal(skillState.phase, 'completing');
+      assert.equal(skillState.autoresearch_completion_reason, 'validator_passed');
+    });
+  });
+
   it('releases the deep-interview input lock on success', async () => {
     await withTempWorkingDir(async (cwd) => {
       const omxDir = join(cwd, '.omx');
