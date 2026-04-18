@@ -262,6 +262,45 @@ describe("codex native hook dispatch", () => {
     }
   });
 
+  it("passes the canonical OMX session id when UserPromptSubmit revives HUD", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-hud-session-revive-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const canonicalSessionId = "omx-launch-hud";
+      const nativeSessionId = "codex-native-hud";
+      await mkdir(join(stateDir, "sessions", canonicalSessionId), { recursive: true });
+      await writeSessionStart(cwd, canonicalSessionId);
+
+      let reconcileCall: { cwd: string; sessionId?: string } | null = null;
+      const promptResult = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "UserPromptSubmit",
+          cwd,
+          session_id: nativeSessionId,
+          thread_id: "thread-hud",
+          turn_id: "turn-hud",
+          prompt: "$ralplan fix orphaned hud session handoff",
+        },
+        {
+          cwd,
+          reconcileHudForPromptSubmitFn: async (hookCwd, deps = {}) => {
+            reconcileCall = { cwd: hookCwd, sessionId: deps.sessionId };
+            return { status: 'recreated', paneId: '%9', desiredHeight: 3, duplicateCount: 0 };
+          },
+        },
+      );
+
+      assert.equal(promptResult.omxEventName, "keyword-detector");
+      assert.deepEqual(reconcileCall, { cwd, sessionId: canonicalSessionId });
+      assert.equal(existsSync(join(stateDir, "sessions", canonicalSessionId, "skill-active-state.json")), true);
+      assert.equal(existsSync(join(stateDir, "sessions", canonicalSessionId, "ralplan-state.json")), true);
+      assert.equal(existsSync(join(stateDir, "sessions", nativeSessionId, "skill-active-state.json")), false);
+      assert.equal(existsSync(join(stateDir, "sessions", nativeSessionId, "ralplan-state.json")), false);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("appends .omx/ to repo-root .gitignore during SessionStart when missing", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-session-gitignore-"));
     try {
