@@ -36,6 +36,7 @@ import { listNotifyCanonicalActiveTeams } from './notify-hook/active-team.js';
 import { sameFilePath } from '../utils/paths.js';
 import { validateSessionId } from '../mcp/state-paths.js';
 import { TEAM_NAME_SAFE_PATTERN } from '../team/contracts.js';
+import { shouldContinueRun } from '../runtime/run-loop.js';
 
 function argValue(name: string, fallback = ''): string {
   const idx = process.argv.indexOf(name);
@@ -145,7 +146,7 @@ const watcherOwnerToken = `${process.pid}-${startedAt}-${Math.random().toString(
 const RALPH_CONTINUE_TEXT = 'Ralph loop active continue';
 const RALPH_CONTINUE_CADENCE_MS = 60_000;
 const RALPH_STEER_LOCK_STALE_MS = 30_000;
-const RALPH_TERMINAL_PHASES = new Set(['complete', 'failed', 'cancelled']);
+const RALPH_TERMINAL_PHASES = new Set(['blocked_on_user', 'complete', 'failed', 'cancelled']);
 const RALPH_STARTING_PHASE_TIMEOUT_MS = RALPH_CONTINUE_CADENCE_MS * 2;
 const QUIET_ONCE_EVENT_TYPES = new Set(['watcher_start', 'watcher_once_complete']);
 
@@ -474,6 +475,7 @@ function normalizeRalphContinueSteerState(raw: Record<string, unknown> | null | 
 function hasRalphTerminalState(raw: Record<string, unknown> | null | undefined): boolean {
   if (!raw || typeof raw !== 'object') return true;
   if (raw.active !== true) return true;
+  if (!shouldContinueRun(raw)) return true;
   const phase = safeString(raw.current_phase).trim().toLowerCase();
   if (phase && RALPH_TERMINAL_PHASES.has(phase)) return true;
   if (isStaleRalphStartingPhase(raw)) return true;

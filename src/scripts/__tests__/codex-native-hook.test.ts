@@ -1989,6 +1989,33 @@ esac
     }
   });
 
+  it("does not block Stop when an explicit blocked_on_user run_outcome is present on a mode state", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-autopilot-blocked-outcome-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      await mkdir(stateDir, { recursive: true });
+      await writeJson(join(stateDir, "autopilot-state.json"), {
+        active: true,
+        current_phase: "execution",
+        run_outcome: "blocked_on_user",
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-stop-autopilot-blocked-outcome",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("returns Stop continuation output while Ultrawork is active", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-ultrawork-"));
     try {
