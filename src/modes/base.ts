@@ -15,6 +15,7 @@ import { reconcileWorkflowTransition } from '../state/workflow-transition-reconc
 import { syncCanonicalSkillStateForMode } from '../state/skill-active.js';
 import { validateAndNormalizeRalphState } from '../ralph/contract.js';
 import { applyRunOutcomeContract } from '../runtime/run-outcome.js';
+import { syncRunStateFromModeState } from '../runtime/run-state.js';
 import {
   getBaseStateDir,
   getReadScopedStateDirs,
@@ -144,6 +145,7 @@ export async function startMode(
   const withContext = withModeRuntimeContext({}, stateBase) as ModeState;
   const state = normalizeModeStateOrThrow(mode, withContext);
   await writeFile(getStatePath(mode, projectRoot, scope.sessionId), JSON.stringify(state, null, 2));
+  await syncRunStateFromModeState(state, projectRoot, scope.sessionId);
   if (isTrackedWorkflowMode(mode)) {
     await syncCanonicalSkillStateForMode({
       cwd: projectRoot ?? process.cwd(),
@@ -217,6 +219,7 @@ export async function updateModeState(
   const normalizedBase = normalizeModeStateOrThrow(mode, updatedBase as ModeState);
   const updated = withModeRuntimeContext(current, normalizedBase) as ModeState;
   await writeFile(getStatePath(mode, projectRoot, scope.sessionId), JSON.stringify(updated, null, 2));
+  await syncRunStateFromModeState(updated, projectRoot, scope.sessionId);
   if (isTrackedWorkflowMode(mode)) {
     await syncCanonicalSkillStateForMode({
       cwd: projectRoot ?? process.cwd(),
