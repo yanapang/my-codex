@@ -59,16 +59,18 @@ describe('keyword detector swarm/team compatibility', () => {
     assert.equal(primary, null);
   });
 
-  it('maps analyze keyword to analyze skill', () => {
-    const match = detectPrimaryKeyword('please analyze this workflow');
+  it('maps explicit $analyze invocation to analyze skill', () => {
+    const match = detectPrimaryKeyword('please run $analyze on this workflow');
     assert.ok(match);
     assert.equal(match.skill, 'analyze');
+    assert.equal(match.keyword.toLowerCase(), '$analyze');
   });
 
   it('maps code-review keyword variants to code-review skill', () => {
-    const hyphen = detectPrimaryKeyword('run code-review before merge');
+    const hyphen = detectPrimaryKeyword('run $code-review before merge');
     assert.ok(hyphen);
     assert.equal(hyphen.skill, 'code-review');
+    assert.equal(hyphen.keyword.toLowerCase(), '$code-review');
 
     const spaced = detectPrimaryKeyword('please do a code review');
     assert.ok(spaced);
@@ -105,8 +107,8 @@ describe('keyword detector swarm/team compatibility', () => {
     assert.match(match.keyword.toLowerCase(), /swarm/);
   });
 
-  it('keeps swarm trigger priority aligned with team trigger', () => {
-    const teamMatch = detectKeywords('use team agents for this').find((entry) => entry.skill === 'team');
+  it('keeps swarm trigger priority aligned with explicit team invocation', () => {
+    const teamMatch = detectKeywords('use $team agents for this').find((entry) => entry.skill === 'team');
     const swarmMatch = detectKeywords('use swarm for this').find((entry) => entry.skill === 'team');
 
     assert.ok(teamMatch);
@@ -121,6 +123,11 @@ describe('keyword detector swarm/team compatibility', () => {
 
   it('does not trigger team skill from incidental prose usage', () => {
     const match = detectPrimaryKeyword('the team reviewed the document and shared feedback');
+    assert.equal(match, null);
+  });
+
+  it('does not trigger team from bare skill-name phrasing without $ invocation', () => {
+    const match = detectPrimaryKeyword('please use team agents for this');
     assert.equal(match, null);
   });
 
@@ -147,8 +154,8 @@ describe('keyword detector swarm/team compatibility', () => {
     assert.equal(match.keyword.toLowerCase(), '$ralph');
   });
 
-  it('prefers ralplan over ralph when both keywords are present', () => {
-    const match = detectPrimaryKeyword('use ralph mode but do ralplan first');
+  it('prefers ralplan over ralph follow-up language when both implicit routes are present', () => {
+    const match = detectPrimaryKeyword('keep going but do consensus plan first');
 
     assert.ok(match);
     assert.equal(match.skill, 'ralplan');
@@ -245,10 +252,9 @@ describe('autoresearch keyword detection', () => {
     assert.equal(match.keyword.toLowerCase(), '$autoresearch');
   });
 
-  it('detects explicit implicit-intent autoresearch phrasing', () => {
+  it('does not detect bare autoresearch phrasing without explicit $ invocation', () => {
     const match = detectPrimaryKeyword('please use autoresearch workflow for this mission');
-    assert.ok(match);
-    assert.equal(match.skill, 'autoresearch');
+    assert.equal(match, null);
   });
 
   it('does not trigger autoresearch from incidental prose', () => {
@@ -257,14 +263,32 @@ describe('autoresearch keyword detection', () => {
   });
 });
 
+describe('explicit skill-name invocation requirement', () => {
+  it('does not trigger analyze from bare skill-name usage', () => {
+    assert.equal(detectPrimaryKeyword('please analyze this workflow'), null);
+  });
+
+  it('does not trigger autoresearch from bare skill-name usage', () => {
+    assert.equal(detectPrimaryKeyword('please run autoresearch now'), null);
+  });
+
+  it('does not trigger ralph from bare skill-name usage', () => {
+    assert.equal(detectPrimaryKeyword('please use ralph for this task'), null);
+  });
+
+  it('does not trigger ralplan from bare skill-name usage', () => {
+    assert.equal(detectPrimaryKeyword('please do ralplan first'), null);
+  });
+});
+
 describe('keyword registry coverage', () => {
   it('includes key team/swarm aliases in runtime keyword registry', () => {
     const registryKeywords = new Set(KEYWORD_TRIGGER_DEFINITIONS.map((v) => v.keyword.toLowerCase()));
-    assert.ok(registryKeywords.has('ultraqa'));
-    assert.ok(registryKeywords.has('analyze'));
+    assert.ok(registryKeywords.has('$ultraqa'));
+    assert.ok(registryKeywords.has('$analyze'));
     assert.ok(registryKeywords.has('investigate'));
     assert.ok(registryKeywords.has('code review'));
-    assert.ok(registryKeywords.has('code-review'));
+    assert.ok(registryKeywords.has('$code-review'));
     assert.ok(registryKeywords.has('coordinated team'));
     assert.ok(registryKeywords.has('swarm'));
     assert.ok(registryKeywords.has('coordinated swarm'));
@@ -274,7 +298,7 @@ describe('keyword registry coverage', () => {
     assert.ok(registryKeywords.has('wiki query'));
     assert.ok(registryKeywords.has('wiki add'));
     assert.ok(registryKeywords.has('wiki lint'));
-    assert.ok(registryKeywords.has('autoresearch'));
+    assert.ok(registryKeywords.has('$autoresearch'));
   });
 });
 
@@ -286,7 +310,7 @@ describe('keyword detector skill-active-state lifecycle', () => {
       await mkdir(stateDir, { recursive: true });
       const result = await recordSkillActivation({
         stateDir,
-        text: 'please run autopilot and keep going',
+        text: 'please run $autopilot and keep going',
         sessionId: 'sess-1',
         threadId: 'thread-1',
         turnId: 'turn-1',
@@ -944,7 +968,7 @@ describe('keyword detector skill-active-state lifecycle', () => {
       await mkdir(stateDir, { recursive: true });
       await recordSkillActivation({
         stateDir,
-        text: 'please run deep interview',
+        text: 'please run $deep-interview',
         nowIso: '2026-02-25T00:00:00.000Z',
       });
 
@@ -1019,7 +1043,7 @@ describe('keyword detector skill-active-state lifecycle', () => {
 
     const result = await recordSkillActivation({
       stateDir: join('/definitely-missing', 'nested', 'state-dir'),
-      text: 'please run autopilot',
+        text: 'please run $autopilot',
       nowIso: '2026-02-25T00:00:00.000Z',
     });
 
@@ -1041,7 +1065,7 @@ describe('keyword detector skill-active-state lifecycle', () => {
           version: 1,
           active: true,
           skill: 'autopilot',
-          keyword: 'autopilot',
+          keyword: '$autopilot',
           phase: 'planning',
           activated_at: '2026-02-25T00:00:00.000Z',
           updated_at: '2026-02-25T00:10:00.000Z',
@@ -1214,7 +1238,7 @@ describe('keyword detector skill-active-state lifecycle', () => {
 
       const result = await recordSkillActivation({
         stateDir,
-        text: 'please run ralph now',
+        text: 'please run $ralph now',
         nowIso: '2026-02-26T00:00:00.000Z',
       });
 
