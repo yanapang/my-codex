@@ -624,7 +624,17 @@ describe('keyword detector skill-active-state lifecycle', () => {
       );
       await writeFile(
         join(stateDir, 'sessions', 'sess-handoff', 'deep-interview-state.json'),
-        JSON.stringify({ active: true, mode: 'deep-interview', current_phase: 'intent-first' }, null, 2),
+        JSON.stringify({
+          active: true,
+          mode: 'deep-interview',
+          current_phase: 'intent-first',
+          question_enforcement: {
+            obligation_id: 'obligation-handoff',
+            source: 'omx-question',
+            status: 'pending',
+            requested_at: '2026-04-09T23:59:00.000Z',
+          },
+        }, null, 2),
       );
 
       const result = await recordSkillActivation({
@@ -639,9 +649,16 @@ describe('keyword detector skill-active-state lifecycle', () => {
 
       const completed = JSON.parse(
         await readFile(join(stateDir, 'sessions', 'sess-handoff', 'deep-interview-state.json'), 'utf-8'),
-      ) as { active?: boolean; current_phase?: string };
+      ) as {
+        active?: boolean;
+        current_phase?: string;
+        question_enforcement?: { status?: string; clear_reason?: string; cleared_at?: string };
+      };
       assert.equal(completed.active, false);
       assert.equal(completed.current_phase, 'completed');
+      assert.equal(completed.question_enforcement?.status, 'cleared');
+      assert.equal(completed.question_enforcement?.clear_reason, 'handoff');
+      assert.ok(completed.question_enforcement?.cleared_at);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
@@ -932,6 +949,69 @@ describe('keyword detector skill-active-state lifecycle', () => {
       ) as { active: boolean; mode: string };
       assert.equal(modeState.active, true);
       assert.equal(modeState.mode, 'deep-interview');
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('clears stale pending deep-interview question enforcement when deep-interview is reactivated', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-deep-interview-reactivation-'));
+    const stateDir = join(cwd, '.omx', 'state');
+    try {
+      await mkdir(join(stateDir, 'sessions', 'sess-reactivate'), { recursive: true });
+      await writeFile(
+        join(stateDir, 'sessions', 'sess-reactivate', DEEP_INTERVIEW_STATE_FILE),
+        JSON.stringify({
+          active: false,
+          mode: 'deep-interview',
+          current_phase: 'completed',
+          started_at: '2026-04-10T00:00:00.000Z',
+          updated_at: '2026-04-10T00:10:00.000Z',
+          completed_at: '2026-04-10T00:10:00.000Z',
+          question_enforcement: {
+            obligation_id: 'obligation-reactivate',
+            source: 'omx-question',
+            status: 'pending',
+            requested_at: '2026-04-10T00:05:00.000Z',
+          },
+        }, null, 2),
+      );
+
+      await persistDeepInterviewModeState(
+        stateDir,
+        {
+          version: 1,
+          active: true,
+          skill: 'deep-interview',
+          keyword: 'deep interview',
+          phase: 'planning',
+          activated_at: '2026-04-10T00:11:00.000Z',
+          updated_at: '2026-04-10T00:11:00.000Z',
+          source: 'keyword-detector',
+          session_id: 'sess-reactivate',
+          input_lock: {
+            active: true,
+            scope: 'deep-interview-auto-approval',
+            acquired_at: '2026-04-10T00:11:00.000Z',
+            blocked_inputs: [...DEEP_INTERVIEW_BLOCKED_APPROVAL_INPUTS],
+            message: DEEP_INTERVIEW_INPUT_LOCK_MESSAGE,
+          },
+        },
+        '2026-04-10T00:11:00.000Z',
+        null,
+        { sessionId: 'sess-reactivate' },
+      );
+
+      const reactivated = JSON.parse(
+        await readFile(join(stateDir, 'sessions', 'sess-reactivate', DEEP_INTERVIEW_STATE_FILE), 'utf-8'),
+      ) as {
+        active?: boolean;
+        question_enforcement?: { status?: string; clear_reason?: string; cleared_at?: string };
+      };
+      assert.equal(reactivated.active, true);
+      assert.equal(reactivated.question_enforcement?.status, 'cleared');
+      assert.equal(reactivated.question_enforcement?.clear_reason, 'handoff');
+      assert.ok(reactivated.question_enforcement?.cleared_at);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

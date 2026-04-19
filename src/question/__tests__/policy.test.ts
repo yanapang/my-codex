@@ -31,6 +31,7 @@ describe('evaluateQuestionPolicy', () => {
     const result = await evaluateQuestionPolicy({ cwd, explicitSessionId: 'sess-1', env: { ...process.env, OMX_TEAM_WORKER: 'demo/worker-1' } });
     assert.equal(result.allowed, false);
     assert.equal(result.code, 'worker_blocked');
+    assert.equal(result.fallbackAllowed, false);
   });
 
   it('blocks canonical active team ownership for the current session', async () => {
@@ -60,6 +61,7 @@ describe('evaluateQuestionPolicy', () => {
     const result = await evaluateQuestionPolicy({ cwd, explicitSessionId: 'sess-team', env: { ...process.env, OMX_TEAM_WORKER: '' } });
     assert.equal(result.allowed, false);
     assert.equal(result.code, 'team_blocked');
+    assert.equal(result.fallbackAllowed, false);
   });
 
   it('blocks active execution-like workflows for the current session', async () => {
@@ -70,6 +72,7 @@ describe('evaluateQuestionPolicy', () => {
     const result = await evaluateQuestionPolicy({ cwd, explicitSessionId: 'sess-ralph', env: { ...process.env, OMX_TEAM_WORKER: '' } });
     assert.equal(result.allowed, false);
     assert.equal(result.code, 'active_execution_mode_blocked');
+    assert.equal(result.fallbackAllowed, false);
   });
 
   it('does not falsely block from another session team state', async () => {
@@ -107,5 +110,6 @@ describe('evaluateQuestionPolicy', () => {
     await writeFile(join(sessionDir, 'deep-interview-state.json'), JSON.stringify({ mode: 'deep-interview', active: true }));
     const result = await evaluateQuestionPolicy({ cwd, explicitSessionId: 'sess-di', env: { ...process.env, OMX_TEAM_WORKER: '' } });
     assert.equal(result.allowed, true);
+    assert.equal(result.fallbackAllowed, true);
   });
 });

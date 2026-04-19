@@ -17,6 +17,7 @@ export interface QuestionPolicyDecision {
   sessionId?: string;
   code?: 'worker_blocked' | 'team_blocked' | 'active_execution_mode_blocked';
   message?: string;
+  fallbackAllowed?: boolean;
   activeModes: string[];
   activeSkills: string[];
   activeTeams: NotifyCanonicalActiveTeam[];
@@ -48,6 +49,7 @@ export async function evaluateQuestionPolicy(
       sessionId,
       code: 'worker_blocked',
       message: 'omx question is unavailable for OMX team workers; only non-team leader sessions may ask user questions.',
+      fallbackAllowed: false,
       activeModes: [],
       activeSkills: [],
       activeTeams: [],
@@ -69,6 +71,7 @@ export async function evaluateQuestionPolicy(
       sessionId,
       code: 'team_blocked',
       message: `omx question is unavailable while this session owns active team mode: ${summary}.`,
+      fallbackAllowed: false,
       activeModes,
       activeSkills,
       activeTeams,
@@ -85,6 +88,7 @@ export async function evaluateQuestionPolicy(
       sessionId,
       code: 'active_execution_mode_blocked',
       message: `omx question is unavailable while auto-executing workflows are active: ${blocked.join(', ')}.`,
+      fallbackAllowed: false,
       activeModes,
       activeSkills,
       activeTeams,
@@ -93,6 +97,7 @@ export async function evaluateQuestionPolicy(
 
   return {
     allowed: true,
+    fallbackAllowed: true,
     sessionId,
     activeModes,
     activeSkills,

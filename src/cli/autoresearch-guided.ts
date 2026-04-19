@@ -8,6 +8,7 @@ import {
 	OmxQuestionError,
 	type OmxQuestionSuccessPayload,
 } from "../question/client.js";
+import { evaluateQuestionPolicy } from "../question/policy.js";
 import type { QuestionType } from "../question/types.js";
 import { runDeepInterviewQuestion } from "../question/deep-interview.js";
 import {
@@ -166,8 +167,26 @@ function createStructuredQuestionAsker(
 		);
 }
 
+async function ensureStructuredQuestionFallbackAllowed(
+	repoRoot: string,
+): Promise<void> {
+	const policy = await evaluateQuestionPolicy({ cwd: repoRoot });
+	if (policy.allowed || policy.fallbackAllowed !== false) return;
+	throw new OmxQuestionError(
+		policy.code ?? "question_policy_denied",
+		policy.message ?? "Structured questions are unavailable in the current OMX workflow context.",
+	);
+}
+
 function shouldFallbackFromStructuredQuestion(error: unknown): boolean {
 	if (error instanceof OmxQuestionError) {
+		if (
+			error.code === "worker_blocked"
+			|| error.code === "team_blocked"
+			|| error.code === "active_execution_mode_blocked"
+		) {
+			return false;
+		}
 		return true;
 	}
 
@@ -390,6 +409,7 @@ export async function runAutoresearchNoviceBridge(
 export async function guidedAutoresearchSetup(
 	repoRoot: string,
 ): Promise<InitAutoresearchResult> {
+	await ensureStructuredQuestionFallbackAllowed(repoRoot);
 	return runAutoresearchNoviceBridge(
 		repoRoot,
 		{},

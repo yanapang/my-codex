@@ -17,6 +17,7 @@ import {
   syncCanonicalSkillStateForMode,
 } from './skill-active.js';
 import { applyRunOutcomeContract } from '../runtime/run-outcome.js';
+import { clearDeepInterviewQuestionObligation } from '../question/deep-interview.js';
 
 interface TransitionStateLike {
   active?: unknown;
@@ -106,6 +107,18 @@ async function completeSourceModeState(
       transition_source: source,
       transition_target_mode: destinationMode,
     };
+    if (sourceMode === 'deep-interview') {
+      const nextQuestionEnforcement = clearDeepInterviewQuestionObligation(
+        existing.question_enforcement as Parameters<typeof clearDeepInterviewQuestionObligation>[0],
+        'handoff',
+        new Date(nowIso),
+      );
+      if (nextQuestionEnforcement) {
+        nextCandidate.question_enforcement = nextQuestionEnforcement;
+      } else {
+        delete nextCandidate.question_enforcement;
+      }
+    }
     delete nextCandidate.run_outcome;
     const nextState = applyRunOutcomeContract(nextCandidate, { nowIso }).state as TransitionStateLike;
 

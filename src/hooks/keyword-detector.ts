@@ -236,6 +236,11 @@ export async function persistDeepInterviewModeState(
   const previousModeState = await readExistingDeepInterviewState(statePath);
 
   if (nextSkill?.skill === 'deep-interview' && nextSkill.active) {
+    const nextQuestionEnforcement = clearDeepInterviewQuestionObligation(
+      previousModeState?.question_enforcement,
+      'handoff',
+      new Date(nowIso),
+    );
     const nextState: DeepInterviewModeState = {
       active: true,
       mode: 'deep-interview',
@@ -246,7 +251,7 @@ export async function persistDeepInterviewModeState(
       thread_id: input.threadId ?? previousModeState?.thread_id,
       turn_id: input.turnId ?? previousModeState?.turn_id,
       ...(nextSkill.input_lock ? { input_lock: nextSkill.input_lock } : {}),
-      ...(previousModeState?.question_enforcement ? { question_enforcement: previousModeState.question_enforcement } : {}),
+      ...(nextQuestionEnforcement ? { question_enforcement: nextQuestionEnforcement } : {}),
     };
     await writeFile(statePath, JSON.stringify(nextState, null, 2));
     return;

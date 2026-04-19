@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { OmxQuestionError } from "../../question/client.js";
 import {
 	type AutoresearchStructuredQuestionAsker,
 	type AutoresearchQuestionIO,
@@ -298,6 +299,57 @@ describe("runAutoresearchNoviceBridge", () => {
 
 			assert.equal(result.slug, "ux-eval");
 			assert.equal(result.resultPath, join(repo, ".omx", "specs", "autoresearch-ux-eval", "result.json"));
+		} finally {
+			await rm(repo, { recursive: true, force: true });
+		}
+	});
+
+	it("does not fall back to plain prompts when question policy denies structured questions", async () => {
+		const repo = await initWorkspace();
+		try {
+			await mkdir(join(repo, ".omx", "state", "sessions", "sess-autoresearch"), {
+				recursive: true,
+			});
+			await writeFile(
+				join(repo, ".omx", "state", "session.json"),
+				JSON.stringify({ session_id: "sess-autoresearch" }),
+			);
+			await writeFile(
+				join(
+					repo,
+					".omx",
+					"state",
+					"sessions",
+					"sess-autoresearch",
+					"autoresearch-state.json",
+				),
+				JSON.stringify({ mode: "autoresearch", active: true }),
+			);
+
+			await assert.rejects(
+				() =>
+					withMockedTty(() =>
+						runAutoresearchNoviceBridge(
+							repo,
+							{},
+							makeFakeIo([
+								"should not be used",
+								"should not be used",
+							]),
+							async () => {
+								throw new OmxQuestionError(
+									"active_execution_mode_blocked",
+									"omx question is unavailable while auto-executing workflows are active: autoresearch.",
+								);
+							},
+						),
+					),
+				(error) => {
+					assert.ok(error instanceof OmxQuestionError);
+					assert.equal(error.code, "active_execution_mode_blocked");
+					return true;
+				},
+			);
 		} finally {
 			await rm(repo, { recursive: true, force: true });
 		}
