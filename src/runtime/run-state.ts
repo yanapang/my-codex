@@ -4,9 +4,12 @@ import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { getStateFilePath, resolveStateScope } from '../mcp/state-paths.js';
 import {
   classifyRunOutcome,
+  compatibilityRunOutcomeFromTerminalLifecycleOutcome,
+  inferTerminalLifecycleOutcome,
   isTerminalRunOutcome,
   normalizeRunOutcome,
   type RunOutcome,
+  type TerminalLifecycleOutcome,
 } from './run-outcome.js';
 
 const RUN_STATE_FILENAME = 'run-state.json';
@@ -23,6 +26,9 @@ export interface RunStateLike {
   error?: unknown;
   outcome?: unknown;
   run_outcome?: unknown;
+  lifecycle_outcome?: unknown;
+  terminal_outcome?: unknown;
+  question_enforcement?: unknown;
   owner_omx_session_id?: unknown;
   [key: string]: unknown;
 }
@@ -32,6 +38,7 @@ export interface RunState {
   mode: string;
   active: boolean;
   outcome: RunOutcome;
+  lifecycle_outcome?: TerminalLifecycleOutcome;
   updated_at: string;
   current_phase?: string;
   task_description?: string;
@@ -55,12 +62,17 @@ function optionalFiniteNumber(value: unknown): number | undefined {
 
 function terminalOutcomeFromPhase(phase: string | undefined): RunOutcome | null {
   if (!phase) return null;
-  const normalizedPhase = normalizeRunOutcome(phase).outcome;
-  return normalizedPhase && isTerminalRunOutcome(normalizedPhase) ? normalizedPhase : null;
+  const normalized = normalizeRunOutcome(phase).outcome;
+  return normalized && isTerminalRunOutcome(normalized) ? normalized : null;
 }
 
 export function deriveRunOutcomeFromModeState(state: RunStateLike): RunOutcome {
   if (state.active === true) return 'continue';
+
+  const lifecycleOutcome = inferTerminalLifecycleOutcome(state as Record<string, unknown>, {
+    includeQuestionEnforcement: true,
+  });
+  if (lifecycleOutcome) return compatibilityRunOutcomeFromTerminalLifecycleOutcome(lifecycleOutcome);
 
   const explicitOutcome = normalizeRunOutcome(state.outcome ?? state.run_outcome).outcome;
   if (explicitOutcome) return explicitOutcome;
@@ -79,6 +91,9 @@ export function buildRunState(
   existing?: Partial<RunState> | null,
   nowIso: string = new Date().toISOString(),
 ): RunState {
+  const lifecycleOutcome = inferTerminalLifecycleOutcome(state as Record<string, unknown>, {
+    includeQuestionEnforcement: true,
+  }) ?? existing?.lifecycle_outcome;
   const outcome = deriveRunOutcomeFromModeState(state);
   const active = state.active === true;
   const next: RunState = {
@@ -88,6 +103,8 @@ export function buildRunState(
     outcome,
     updated_at: nowIso,
   };
+
+  if (lifecycleOutcome) next.lifecycle_outcome = lifecycleOutcome;
 
   const currentPhase = optionalString(state.current_phase);
   if (currentPhase) next.current_phase = currentPhase;
