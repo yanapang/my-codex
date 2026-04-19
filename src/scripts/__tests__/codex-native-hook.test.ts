@@ -542,23 +542,32 @@ describe("codex native hook dispatch", () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-execution-handoff-"));
     try {
       await mkdir(join(cwd, ".omx", "state"), { recursive: true });
-      const result = await dispatchCodexNativeHook(
-        {
-          hook_event_name: "UserPromptSubmit",
-          cwd,
-          session_id: "sess-exec-handoff",
-          thread_id: "thread-exec-handoff",
-          turn_id: "turn-exec-handoff",
-          prompt: "按照这个plan开始执行优化",
-        },
-        { cwd },
-      );
+      const prompts = [
+        "按照这个plan开始执行优化",
+        "开始执行",
+        "继续优化",
+        "直接修复",
+      ];
 
-      const message = String(
-        (result.outputJson as { hookSpecificOutput?: { additionalContext?: string } })?.hookSpecificOutput?.additionalContext || "",
-      );
-      assert.match(message, /execution handoff/i);
-      assert.match(message, /Do not restate the prior plan/i);
+      for (const [index, prompt] of prompts.entries()) {
+        const result = await dispatchCodexNativeHook(
+          {
+            hook_event_name: "UserPromptSubmit",
+            cwd,
+            session_id: `sess-exec-handoff-${index}`,
+            thread_id: `thread-exec-handoff-${index}`,
+            turn_id: `turn-exec-handoff-${index}`,
+            prompt,
+          },
+          { cwd },
+        );
+
+        const message = String(
+          (result.outputJson as { hookSpecificOutput?: { additionalContext?: string } })?.hookSpecificOutput?.additionalContext || "",
+        );
+        assert.match(message, /execution handoff/i, prompt);
+        assert.match(message, /Do not restate the prior plan/i, prompt);
+      }
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
