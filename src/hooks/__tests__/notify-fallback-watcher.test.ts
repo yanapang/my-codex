@@ -2911,6 +2911,58 @@ exit 0
     }
   });
 
+  it('treats blocked_on_user as terminal so Ralph continue steer stays off', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-ralph-blocked-on-user-'));
+    const fakeBinDir = join(wd, 'fake-bin');
+    const tmuxLogPath = join(wd, 'tmux.log');
+    const stateDir = join(wd, '.omx', 'state');
+    const watcherStatePath = join(stateDir, 'notify-fallback-state.json');
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+      await writeFile(join(stateDir, 'ralph-state.json'), JSON.stringify({
+        active: false,
+        current_phase: 'blocked_on_user',
+        completed_at: new Date().toISOString(),
+        tmux_pane_id: '%42',
+      }, null, 2));
+      await writeFile(join(stateDir, 'hud-state.json'), JSON.stringify({
+        last_progress_at: new Date(Date.now() - 61_000).toISOString(),
+      }, null, 2));
+      await writeFile(watcherStatePath, JSON.stringify({
+        ralph_continue_steer: {
+          last_sent_at: new Date(Date.now() - 61_000).toISOString(),
+        },
+      }, null, 2));
+
+      const watcherScript = new URL('../../../dist/scripts/notify-fallback-watcher.js', import.meta.url).pathname;
+      const notifyHook = new URL('../../../dist/scripts/notify-hook.js', import.meta.url).pathname;
+      const run = spawnSync(
+        process.execPath,
+        [watcherScript, '--once', '--cwd', wd, '--notify-script', notifyHook, '--poll-ms', '50'],
+        {
+          encoding: 'utf-8',
+          env: buildCleanNotifyEnv({
+            PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+          }),
+        },
+      );
+      assert.equal(run.status, 0, run.stderr || run.stdout);
+
+      const tmuxLog = await readFile(tmuxLogPath, 'utf8').catch(() => '');
+      const sends = tmuxLog.match(/send-keys -t %42 -l Ralph loop active continue \[OMX_TMUX_INJECT\]/g) || [];
+      assert.equal(sends.length, 0, 'blocked_on_user should suppress Ralph continue steer');
+
+      const watcherState = JSON.parse(await readFile(watcherStatePath, 'utf-8'));
+      assert.equal(watcherState.ralph_continue_steer?.active, false);
+      assert.equal(watcherState.ralph_continue_steer?.last_reason, 'terminal');
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it('stops Ralph continue steer immediately once Ralph state is terminal or cleared', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-ralph-terminal-'));
     const fakeBinDir = join(wd, 'fake-bin');
