@@ -29,4 +29,18 @@ describe('prompt guidance contract', () => {
       }
     }
   });
+
+  it('tracked AGENTS and core prompt surfaces encode AUTO-CONTINUE vs ASK autonomy steering', () => {
+    const surfaces = [...listTrackedAgentSurfaces(), ...CORE_ROLE_CONTRACTS.map((contract) => contract.path)];
+
+    for (const surface of surfaces) {
+      const content = loadSurface(surface);
+      assert.match(content, /AUTO-CONTINUE.*clear.*already-requested.*low-risk.*reversible.*local/i);
+      assert.match(
+        content,
+        /ASK only.*destructive.*irreversible.*credential-gated.*external-production.*materially scope-changing/i,
+      );
+      assert.match(content, /AUTO-CONTINUE branches.*permission-handoff phrasing/i);
+    }
+  });
 });
