@@ -538,6 +538,67 @@ describe("codex native hook dispatch", () => {
     }
   });
 
+  it("adds execution handoff context for non-keyword prompts that authorize implementation", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-execution-handoff-"));
+    try {
+      await mkdir(join(cwd, ".omx", "state"), { recursive: true });
+      const prompts = [
+        "按照这个plan开始执行优化",
+        "开始执行",
+        "继续优化",
+        "直接修复",
+      ];
+
+      for (const [index, prompt] of prompts.entries()) {
+        const result = await dispatchCodexNativeHook(
+          {
+            hook_event_name: "UserPromptSubmit",
+            cwd,
+            session_id: `sess-exec-handoff-${index}`,
+            thread_id: `thread-exec-handoff-${index}`,
+            turn_id: `turn-exec-handoff-${index}`,
+            prompt,
+          },
+          { cwd },
+        );
+
+        const message = String(
+          (result.outputJson as { hookSpecificOutput?: { additionalContext?: string } })?.hookSpecificOutput?.additionalContext || "",
+        );
+        assert.match(message, /execution handoff/i, prompt);
+        assert.match(message, /Do not restate the prior plan/i, prompt);
+      }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("adds latest-followup priority context for short same-thread follow-up prompts", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-followup-priority-"));
+    try {
+      await mkdir(join(cwd, ".omx", "state"), { recursive: true });
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "UserPromptSubmit",
+          cwd,
+          session_id: "sess-followup-priority",
+          thread_id: "thread-followup-priority",
+          turn_id: "turn-followup-priority",
+          prompt: "这些优化都做了么",
+        },
+        { cwd },
+      );
+
+      const message = String(
+        (result.outputJson as { hookSpecificOutput?: { additionalContext?: string } })?.hookSpecificOutput?.additionalContext || "",
+      );
+      assert.match(message, /same-thread follow-up/i);
+      assert.match(message, /prefer it over older unresolved prompts/i);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("clarifies that prompt-side $ralph activation does not invoke the PRD-gated CLI path", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-ralph-routing-"));
     try {
