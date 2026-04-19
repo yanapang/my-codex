@@ -25,6 +25,7 @@ import {
   maybeNudgeTeamLeader,
   resolveLeaderStalenessThresholdMs,
 } from './notify-hook/team-leader-nudge.js';
+import { resolveManagedPaneFromAnchor, resolveManagedSessionPane } from './notify-hook/managed-tmux.js';
 import { DEFAULT_MARKER } from './tmux-hook-engine.js';
 import { isTerminalPhase } from './notify-hook/utils.js';
 import { isSessionStale, isSessionStateAuthoritativeForCwd, readSessionState } from '../hooks/session.js';
@@ -1031,6 +1032,90 @@ async function writePidFileRecord(): Promise<void> {
   await writeFile(pidFilePath, JSON.stringify(nextRecord, null, 2)).catch(() => {});
 }
 
+async function buildWatcherManagedPayload(): Promise<Record<string, string> | null> {
+  const session = await readSessionState(cwd).catch(() => null);
+  const sessionId = safeString(session?.session_id).trim();
+  if (!sessionId || !session || isSessionStale(session)) return null;
+  return { session_id: sessionId };
+}
+
+async function persistReboundRalphPaneState(
+  statePath: string,
+  state: Record<string, unknown> | null,
+  paneId: string,
+  nowIso: string,
+): Promise<Record<string, unknown>> {
+  const latestState = await readFile(statePath, 'utf-8')
+    .then((content) => JSON.parse(content) as Record<string, unknown>)
+    .catch(() => null);
+  const nextState = {
+    ...((latestState && typeof latestState === 'object') ? latestState : (state || {})),
+    tmux_pane_id: paneId,
+    tmux_pane_set_at: nowIso,
+  };
+  const tmpPath = `${statePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`;
+  await writeFile(tmpPath, JSON.stringify(nextState, null, 2));
+  try {
+    await rename(tmpPath, statePath);
+  } catch (error) {
+    await unlink(tmpPath).catch(() => {});
+    throw error;
+  }
+  return nextState;
+}
+
+async function resolveRalphContinuePaneTarget(
+  activeRalph: ActiveModeResult,
+  nowIso: string,
+): Promise<{ paneId: string; state: Record<string, unknown> | null; reboundFrom: string }> {
+  const currentState = activeRalph.state && typeof activeRalph.state === 'object'
+    ? activeRalph.state as Record<string, unknown>
+    : null;
+  const anchorPaneId = safeString(currentState?.tmux_pane_id).trim();
+  if (!anchorPaneId) {
+    return {
+      paneId: '',
+      state: currentState,
+      reboundFrom: '',
+    };
+  }
+
+  const managedPayload = await buildWatcherManagedPayload();
+  if (!managedPayload) {
+    return {
+      paneId: anchorPaneId,
+      state: currentState,
+      reboundFrom: '',
+    };
+  }
+
+  let resolvedPaneId = await resolveManagedPaneFromAnchor(anchorPaneId, cwd, managedPayload, { allowTeamWorker: false });
+  if (!resolvedPaneId) {
+    resolvedPaneId = await resolveManagedSessionPane(cwd, managedPayload);
+  }
+  if (!resolvedPaneId) {
+    return {
+      paneId: '',
+      state: currentState,
+      reboundFrom: '',
+    };
+  }
+  if (resolvedPaneId === anchorPaneId) {
+    return {
+      paneId: resolvedPaneId,
+      state: currentState,
+      reboundFrom: '',
+    };
+  }
+
+  const updatedState = await persistReboundRalphPaneState(activeRalph.path, currentState, resolvedPaneId, nowIso);
+  return {
+    paneId: resolvedPaneId,
+    state: updatedState,
+    reboundFrom: anchorPaneId,
+  };
+}
+
 async function runRalphContinueSteerTick(): Promise<void> {
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
@@ -1090,7 +1175,9 @@ async function runRalphContinueSteerTick(): Promise<void> {
       return { sent: false, skipped: true };
     }
 
-    const paneId = safeString(activeRalph.state?.tmux_pane_id).trim();
+    const resolvedPane = await resolveRalphContinuePaneTarget(activeRalph, nowIso);
+    activeRalph.state = resolvedPane.state;
+    const paneId = resolvedPane.paneId;
     if (!paneId) {
       lastRalphContinueSteer.last_reason = 'pane_missing';
       lastRalphContinueSteer.pane_id = '';
@@ -1115,6 +1202,7 @@ async function runRalphContinueSteerTick(): Promise<void> {
       type: 'ralph_continue_steer',
       reason: 'sent',
       pane_id: paneId,
+      rebound_from: resolvedPane.reboundFrom || null,
       state_path: activeRalph.path,
       current_phase: safeString(activeRalph.state?.current_phase) || null,
       cadence_ms: RALPH_CONTINUE_CADENCE_MS,
