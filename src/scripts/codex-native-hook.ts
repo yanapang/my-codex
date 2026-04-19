@@ -55,6 +55,7 @@ import {
   promptSignature,
   type TriageStateFile,
 } from "../hooks/triage-state.js";
+import { isPendingDeepInterviewQuestionEnforcement } from "../question/deep-interview.js";
 
 type CodexHookEventName =
   | "SessionStart"
@@ -985,6 +986,51 @@ async function readStopAutoNudgePhase(
   return modePhase === "intent-first" ? "planning" : "";
 }
 
+async function buildDeepInterviewQuestionStopOutput(
+  cwd: string,
+  sessionId: string,
+  threadId: string,
+): Promise<{ output: Record<string, unknown>; obligationId: string } | null> {
+  const modeState = await readStopSessionPinnedState("deep-interview-state.json", cwd, sessionId);
+  if (!modeState || modeState.active !== true) return null;
+
+  const phase = formatPhase(modeState.current_phase, "planning");
+  if (TERMINAL_MODE_PHASES.has(phase.toLowerCase()) || phase === "completing") {
+    return null;
+  }
+
+  const canonicalState = await readVisibleSkillActiveState(cwd, sessionId);
+  if (canonicalState) {
+    const blocker = listActiveSkills(canonicalState).find((entry) => (
+      entry.skill === "deep-interview"
+      && matchesSkillStopContext(entry, canonicalState, sessionId, threadId)
+    ));
+    if (!blocker) return null;
+  }
+
+  const questionEnforcement = safeObject(modeState.question_enforcement);
+  if (!isPendingDeepInterviewQuestionEnforcement(questionEnforcement)) {
+    return null;
+  }
+
+  const obligationId = safeString(questionEnforcement.obligation_id).trim();
+  if (!obligationId) return null;
+
+  const systemMessage =
+    `OMX deep-interview is still active (phase: ${phase}) and requires a structured question via omx question before stopping.`;
+
+  return {
+    obligationId,
+    output: {
+      decision: "block",
+      reason:
+        `Deep interview is still active (phase: ${phase}) and has a pending structured question obligation; use \`omx question\` before stopping.`,
+      stopReason: "deep_interview_question_required",
+      systemMessage,
+    },
+  };
+}
+
 function resolveRepeatableStopSessionId(
   payload: CodexHookPayload,
   canonicalSessionId?: string,
@@ -1423,6 +1469,22 @@ async function buildStopHookOutput(
     }
 
     if (canonicalSessionId) {
+      const deepInterviewQuestionOutput = await buildDeepInterviewQuestionStopOutput(
+        cwd,
+        canonicalSessionId,
+        threadId,
+      );
+      if (deepInterviewQuestionOutput) {
+        return await returnPersistentStopBlock(
+          payload,
+          stateDir,
+          "deep-interview-question-stop",
+          deepInterviewQuestionOutput.obligationId,
+          deepInterviewQuestionOutput.output,
+          canonicalSessionId,
+        );
+      }
+
       const canonicalTeam = await findCanonicalActiveTeamForSession(cwd, canonicalSessionId);
       if (canonicalTeam) {
         const canonicalTeamOutput = buildTeamStopOutputForPhase(

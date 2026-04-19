@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import {
+	type AutoresearchStructuredQuestionAsker,
 	type AutoresearchQuestionIO,
 	buildAutoresearchDeepInterviewPrompt,
 	parseInitArgs,
@@ -45,6 +46,64 @@ function makeFakeIo(answers: string[]): AutoresearchQuestionIO {
 			return queue.shift() ?? "";
 		},
 		close(): void {},
+	};
+}
+
+function makeFakeStructuredQuestionAsker(
+	answers: string[],
+	questions: Array<{ question: string; options: string[]; allowOther: boolean }> = [],
+): AutoresearchStructuredQuestionAsker {
+	const queue = [...answers];
+	return async (input) => {
+		questions.push({
+			question: input.question,
+			options: input.options.map((option) => option.value),
+			allowOther: input.allow_other,
+		});
+		const next = queue.shift() ?? "";
+		const matchingOption = input.options.find((option) => option.value === next);
+		if (matchingOption) {
+			return {
+				ok: true,
+				question_id: `q-${questions.length}`,
+				prompt: {
+					header: input.header,
+					question: input.question,
+					options: input.options,
+					allow_other: input.allow_other,
+					other_label: input.other_label ?? "Other",
+					multi_select: input.multi_select ?? false,
+					source: input.source,
+				},
+				answer: {
+					kind: "option",
+					value: matchingOption.value,
+					selected_labels: [matchingOption.label],
+					selected_values: [matchingOption.value],
+				},
+			};
+		}
+
+		return {
+			ok: true,
+			question_id: `q-${questions.length}`,
+			prompt: {
+				header: input.header,
+				question: input.question,
+				options: input.options,
+				allow_other: input.allow_other,
+				other_label: input.other_label ?? "Other",
+				multi_select: input.multi_select ?? false,
+				source: input.source,
+			},
+			answer: {
+				kind: "other",
+				value: next,
+				selected_labels: [input.other_label ?? "Other"],
+				selected_values: [next],
+				other_text: next,
+			},
+		};
 	};
 }
 
@@ -216,6 +275,71 @@ describe("buildAutoresearchDeepInterviewPrompt", () => {
 });
 
 describe("runAutoresearchNoviceBridge", () => {
+	it("falls back to plain terminal prompts when omx question is unavailable", async () => {
+		const repo = await initWorkspace();
+		try {
+			const result = await withMockedTty(() =>
+				runAutoresearchNoviceBridge(
+					repo,
+					{},
+					makeFakeIo([
+						"Improve evaluator UX",
+						"Passing evaluator output",
+						"node scripts/eval.js",
+						"pass_only",
+						"ux-eval",
+						"launch",
+					]),
+					async () => {
+						throw new Error("omx question requires tmux for OMX-owned question UI rendering in this session.");
+					},
+				),
+			);
+
+			assert.equal(result.slug, "ux-eval");
+			assert.equal(result.resultPath, join(repo, ".omx", "specs", "autoresearch-ux-eval", "result.json"));
+		} finally {
+			await rm(repo, { recursive: true, force: true });
+		}
+	});
+
+	it("uses structured omx-question prompts and resumes from returned stdout answers", async () => {
+		const repo = await initWorkspace();
+		const askedQuestions: Array<{ question: string; options: string[]; allowOther: boolean }> = [];
+		try {
+			const result = await withMockedTty(() =>
+				runAutoresearchNoviceBridge(
+					repo,
+					{},
+					makeFakeIo([]),
+					makeFakeStructuredQuestionAsker(
+						[
+							"Improve evaluator UX",
+							"Passing evaluator output",
+							"node scripts/eval.js",
+							"pass_only",
+							"ux-eval",
+							"launch",
+						],
+						askedQuestions,
+					),
+				),
+			);
+
+			assert.equal(result.slug, "ux-eval");
+			assert.equal(result.resultPath, join(repo, ".omx", "specs", "autoresearch-ux-eval", "result.json"));
+			assert.equal(askedQuestions.length, 6);
+			assert.equal(askedQuestions[0]?.question, "Research topic/goal");
+			assert.deepEqual(askedQuestions[0]?.options, []);
+			assert.equal(askedQuestions[0]?.allowOther, true);
+			assert.match(askedQuestions[5]?.question || "", /Next step/);
+			assert.deepEqual(askedQuestions[5]?.options, ["launch", "refine"]);
+			assert.equal(askedQuestions[5]?.allowOther, false);
+		} finally {
+			await rm(repo, { recursive: true, force: true });
+		}
+	});
+
 	it("loops through refine further before launching and writes canonical spec artifacts", async () => {
 		const repo = await initWorkspace();
 		try {
