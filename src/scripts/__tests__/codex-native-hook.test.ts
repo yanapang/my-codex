@@ -2970,6 +2970,247 @@ esac
     }
   });
 
+  it("blocks Stop when deep-interview has a pending omx question obligation", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-deep-interview-question-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      await mkdir(join(stateDir, "sessions", "sess-stop-deep-interview-question"), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: "sess-stop-deep-interview-question" });
+      await writeJson(join(stateDir, "sessions", "sess-stop-deep-interview-question", "skill-active-state.json"), {
+        version: 1,
+        active: true,
+        skill: "deep-interview",
+        phase: "planning",
+        session_id: "sess-stop-deep-interview-question",
+        thread_id: "thread-stop-deep-interview-question",
+      });
+      await writeJson(join(stateDir, "sessions", "sess-stop-deep-interview-question", "deep-interview-state.json"), {
+        active: true,
+        mode: "deep-interview",
+        current_phase: "intent-first",
+        session_id: "sess-stop-deep-interview-question",
+        thread_id: "thread-stop-deep-interview-question",
+        question_enforcement: {
+          obligation_id: "obligation-1",
+          source: "omx-question",
+          status: "pending",
+          requested_at: "2026-04-19T03:20:00.000Z",
+        },
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-stop-deep-interview-question",
+          thread_id: "thread-stop-deep-interview-question",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.deepEqual(result.outputJson, {
+        decision: "block",
+        reason:
+          "Deep interview is still active (phase: intent-first) and has a pending structured question obligation; use `omx question` before stopping.",
+        stopReason: "deep_interview_question_required",
+        systemMessage:
+          "OMX deep-interview is still active (phase: intent-first) and requires a structured question via omx question before stopping.",
+      });
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps blocking pending deep-interview question Stop replays until the obligation changes", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-deep-interview-question-replay-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      await mkdir(join(stateDir, "sessions", "sess-stop-deep-interview-question-replay"), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: "sess-stop-deep-interview-question-replay" });
+      await writeJson(join(stateDir, "sessions", "sess-stop-deep-interview-question-replay", "skill-active-state.json"), {
+        version: 1,
+        active: true,
+        skill: "deep-interview",
+        phase: "planning",
+        session_id: "sess-stop-deep-interview-question-replay",
+      });
+      await writeJson(join(stateDir, "sessions", "sess-stop-deep-interview-question-replay", "deep-interview-state.json"), {
+        active: true,
+        mode: "deep-interview",
+        current_phase: "intent-first",
+        question_enforcement: {
+          obligation_id: "obligation-replay",
+          source: "omx-question",
+          status: "pending",
+          requested_at: "2026-04-19T03:20:00.000Z",
+        },
+      });
+
+      const payload = {
+        hook_event_name: "Stop",
+        cwd,
+        session_id: "sess-stop-deep-interview-question-replay",
+      };
+      const expected = {
+        decision: "block",
+        reason:
+          "Deep interview is still active (phase: intent-first) and has a pending structured question obligation; use `omx question` before stopping.",
+        stopReason: "deep_interview_question_required",
+        systemMessage:
+          "OMX deep-interview is still active (phase: intent-first) and requires a structured question via omx question before stopping.",
+      };
+
+      const first = await dispatchCodexNativeHook(payload, { cwd });
+      const replay = await dispatchCodexNativeHook({ ...payload, stop_hook_active: true }, { cwd });
+
+      assert.equal(first.omxEventName, "stop");
+      assert.deepEqual(first.outputJson, expected);
+      assert.equal(replay.omxEventName, "stop");
+      assert.deepEqual(replay.outputJson, expected);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("does not block Stop once the deep-interview question obligation is satisfied or cleared", async () => {
+    for (const status of ["satisfied", "cleared"] as const) {
+      const cwd = await mkdtemp(join(tmpdir(), `omx-native-hook-stop-deep-interview-question-${status}-`));
+      try {
+        const stateDir = join(cwd, ".omx", "state");
+        await mkdir(join(stateDir, "sessions", `sess-stop-deep-interview-question-${status}`), { recursive: true });
+        await writeJson(join(stateDir, "session.json"), { session_id: `sess-stop-deep-interview-question-${status}` });
+        await writeJson(join(stateDir, "sessions", `sess-stop-deep-interview-question-${status}`, "skill-active-state.json"), {
+          version: 1,
+          active: true,
+          skill: "deep-interview",
+          phase: "planning",
+          session_id: `sess-stop-deep-interview-question-${status}`,
+        });
+        await writeJson(join(stateDir, "sessions", `sess-stop-deep-interview-question-${status}`, "deep-interview-state.json"), {
+          active: true,
+          mode: "deep-interview",
+          current_phase: "intent-first",
+          question_enforcement: {
+            obligation_id: `obligation-${status}`,
+            source: "omx-question",
+            status,
+            requested_at: "2026-04-19T03:20:00.000Z",
+            ...(status === "satisfied"
+              ? { question_id: "question-1", satisfied_at: "2026-04-19T03:21:00.000Z" }
+              : { cleared_at: "2026-04-19T03:21:00.000Z", clear_reason: "error" }),
+          },
+        });
+
+        const result = await dispatchCodexNativeHook(
+          {
+            hook_event_name: "Stop",
+            cwd,
+            session_id: `sess-stop-deep-interview-question-${status}`,
+          },
+          { cwd },
+        );
+
+        assert.equal(result.omxEventName, "stop");
+        assert.equal(result.outputJson, null);
+      } finally {
+        await rm(cwd, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("ignores pending deep-interview question obligations from another session", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-deep-interview-question-foreign-session-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      await mkdir(join(stateDir, "sessions", "sess-other"), { recursive: true });
+      await mkdir(join(stateDir, "sessions", "sess-current"), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: "sess-current" });
+      await writeJson(join(stateDir, "sessions", "sess-other", "skill-active-state.json"), {
+        version: 1,
+        active: true,
+        skill: "deep-interview",
+        phase: "planning",
+        session_id: "sess-other",
+      });
+      await writeJson(join(stateDir, "sessions", "sess-other", "deep-interview-state.json"), {
+        active: true,
+        mode: "deep-interview",
+        current_phase: "intent-first",
+        question_enforcement: {
+          obligation_id: "obligation-foreign",
+          source: "omx-question",
+          status: "pending",
+          requested_at: "2026-04-19T03:20:00.000Z",
+        },
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-current",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks a new same-session deep-interview question obligation even after an earlier round was satisfied", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-deep-interview-question-next-round-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      await mkdir(join(stateDir, "sessions", "sess-stop-deep-interview-question-next-round"), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: "sess-stop-deep-interview-question-next-round" });
+      await writeJson(join(stateDir, "sessions", "sess-stop-deep-interview-question-next-round", "skill-active-state.json"), {
+        version: 1,
+        active: true,
+        skill: "deep-interview",
+        phase: "planning",
+        session_id: "sess-stop-deep-interview-question-next-round",
+      });
+      await writeJson(join(stateDir, "sessions", "sess-stop-deep-interview-question-next-round", "deep-interview-state.json"), {
+        active: true,
+        mode: "deep-interview",
+        current_phase: "intent-first",
+        question_enforcement: {
+          obligation_id: "obligation-next-round",
+          source: "omx-question",
+          status: "pending",
+          requested_at: "2026-04-19T03:22:00.000Z",
+          question_id: "question-old-round",
+          satisfied_at: "2026-04-19T03:21:00.000Z",
+        },
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-stop-deep-interview-question-next-round",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.deepEqual(result.outputJson, {
+        decision: "block",
+        reason:
+          "Deep interview is still active (phase: intent-first) and has a pending structured question obligation; use `omx question` before stopping.",
+        stopReason: "deep_interview_question_required",
+        systemMessage:
+          "OMX deep-interview is still active (phase: intent-first) and requires a structured question via omx question before stopping.",
+      });
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("ignores root skill-active fallback from a different thread when evaluating Stop", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-foreign-thread-"));
     try {

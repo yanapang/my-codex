@@ -29,6 +29,10 @@ import {
   type TrackedWorkflowMode,
 } from '../state/workflow-transition.js';
 import { reconcileWorkflowTransition } from '../state/workflow-transition-reconcile.js';
+import {
+  clearDeepInterviewQuestionObligation,
+  type DeepInterviewQuestionEnforcementState,
+} from '../question/deep-interview.js';
 
 export interface KeywordMatch {
   keyword: string;
@@ -129,7 +133,7 @@ const STATEFUL_SKILL_SEED_CONFIG: Record<StatefulSkillMode, StatefulSkillSeedCon
   ultraqa: { mode: 'ultraqa', initialPhase: 'planning' },
 };
 
-interface DeepInterviewModeState {
+export interface DeepInterviewModeState {
   active: boolean;
   mode: 'deep-interview';
   current_phase: string;
@@ -140,6 +144,7 @@ interface DeepInterviewModeState {
   thread_id?: string;
   turn_id?: string;
   input_lock?: DeepInterviewInputLock;
+  question_enforcement?: DeepInterviewQuestionEnforcementState;
 }
 
 function createDeepInterviewInputLock(nowIso: string, previous?: DeepInterviewInputLock): DeepInterviewInputLock {
@@ -231,6 +236,11 @@ export async function persistDeepInterviewModeState(
   const previousModeState = await readExistingDeepInterviewState(statePath);
 
   if (nextSkill?.skill === 'deep-interview' && nextSkill.active) {
+    const nextQuestionEnforcement = clearDeepInterviewQuestionObligation(
+      previousModeState?.question_enforcement,
+      'handoff',
+      new Date(nowIso),
+    );
     const nextState: DeepInterviewModeState = {
       active: true,
       mode: 'deep-interview',
@@ -241,6 +251,7 @@ export async function persistDeepInterviewModeState(
       thread_id: input.threadId ?? previousModeState?.thread_id,
       turn_id: input.turnId ?? previousModeState?.turn_id,
       ...(nextSkill.input_lock ? { input_lock: nextSkill.input_lock } : {}),
+      ...(nextQuestionEnforcement ? { question_enforcement: nextQuestionEnforcement } : {}),
     };
     await writeFile(statePath, JSON.stringify(nextState, null, 2));
     return;
@@ -250,6 +261,7 @@ export async function persistDeepInterviewModeState(
   if (!previousModeState?.active && !hadActiveDeepInterview) return;
 
   const releasedInputLock = nextSkill?.skill === 'deep-interview' ? nextSkill.input_lock : previousSkill?.input_lock;
+  const questionExitReason = nextSkill?.skill === 'deep-interview' && nextSkill.active === false ? 'abort' : 'handoff';
   const nextState: DeepInterviewModeState = {
     active: false,
     mode: 'deep-interview',
@@ -261,6 +273,15 @@ export async function persistDeepInterviewModeState(
     thread_id: input.threadId ?? previousModeState?.thread_id ?? previousSkill?.thread_id,
     turn_id: input.turnId ?? previousModeState?.turn_id ?? previousSkill?.turn_id,
     ...(releasedInputLock ? { input_lock: releasedInputLock } : {}),
+    ...(previousModeState?.question_enforcement
+      ? {
+          question_enforcement: clearDeepInterviewQuestionObligation(
+            previousModeState.question_enforcement,
+            questionExitReason,
+            new Date(nowIso),
+          ),
+        }
+      : {}),
   };
   await writeFile(statePath, JSON.stringify(nextState, null, 2));
 }

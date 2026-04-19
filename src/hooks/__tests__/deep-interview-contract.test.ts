@@ -149,6 +149,14 @@ describe("deep-interview Ouroboros contract", () => {
 		assert.match(deepInterviewSkill, /Do NOT implement directly/i);
 	});
 
+	it("documents omx question as the preferred structured questioning path", () => {
+		assert.match(deepInterviewSkill, /omx question/i);
+		assert.match(
+			deepInterviewSkill,
+			/preferred `AskUserQuestion` equivalent/i,
+		);
+	});
+
 	it("preserves clarified intent and boundary constraints across execution handoff", () => {
 		assert.match(
 			deepInterviewSkill,

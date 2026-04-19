@@ -51,7 +51,7 @@ If no flag is provided, use **Standard**.
 - Always run a preflight context intake before the first interview question
 - Reduce user effort: ask only the highest-leverage unresolved question, and never ask the user for codebase facts that can be discovered directly
 - For brownfield work, prefer evidence-backed confirmation questions such as "I found X in Y. Should this change follow that pattern?"
-- In Codex CLI, prefer `request_user_input` when available; if unavailable, fall back to concise plain-text one-question turns
+- In Codex CLI, prefer `omx question` for OMX-owned structured questioning when available; otherwise use `request_user_input` when available, then fall back to concise plain-text one-question turns
 - Re-score ambiguity after each answer and show progress transparently
 - Do not hand off to execution while ambiguity remains above threshold unless user explicitly opts to proceed with warning
 - Do not crystallize or hand off while `Non-goals` or `Decision Boundaries` remain unresolved, even if the weighted ambiguity threshold is met
@@ -145,7 +145,7 @@ Detailed dimensions:
 `Non-goals` and `Decision Boundaries` are mandatory readiness gates. Ask about them early and keep revisiting them until they are explicit.
 
 ### 2b) Ask the question
-Use structured user-input tooling available in the runtime (`AskUserQuestion` / equivalent) and present:
+Use OMX-owned structured questioning via `omx question` when available (this is the preferred `AskUserQuestion` equivalent) and present:
 
 ```
 Round {n} | Target: {weakest_dimension} | Ambiguity: {score}%
@@ -296,7 +296,8 @@ Present execution options after artifact generation using explicit handoff contr
 
 <Tool_Usage>
 - Use `explore` for codebase fact gathering
-- Use `request_user_input` / structured user-input tool for each interview round when available
+- Use `omx question` as the OMX-native structured user-input tool for each interview round when available
+- If `omx question` is unavailable in the current runtime, fall back to `request_user_input` when available
 - If structured question tools are unavailable, use plain-text single-question rounds and keep the same stage order
 - Use `state_write` / `state_read` for resumable mode state
 - Read/write context snapshots under `.omx/context/`
