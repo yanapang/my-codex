@@ -1080,6 +1080,8 @@ describe('keyword detector skill-active-state lifecycle', () => {
       });
 
       assert.ok(result);
+      assert.equal(result.skill, 'autopilot');
+      assert.equal(result.transition_error, undefined);
       assert.equal(result.activated_at, '2026-02-25T00:00:00.000Z');
       assert.equal(result.updated_at, '2026-02-26T00:00:00.000Z');
     } finally {
@@ -1129,6 +1131,9 @@ describe('keyword detector skill-active-state lifecycle', () => {
       });
 
       assert.ok(result);
+      assert.equal(result.skill, 'autopilot');
+      assert.equal(result.phase, 'planning');
+      assert.equal(result.transition_error, undefined);
       const modeState = JSON.parse(
         await readFile(join(stateDir, 'sessions', 'sess-autopilot', 'autopilot-state.json'), 'utf-8'),
       ) as { current_phase: string; started_at: string; state?: { context_snapshot_path?: string } };
@@ -1203,6 +1208,8 @@ describe('keyword detector skill-active-state lifecycle', () => {
       });
 
       assert.ok(result);
+      assert.equal(result.skill, 'ralph');
+      assert.equal(result.transition_error, undefined);
       const modeState = JSON.parse(await readFile(join(stateDir, 'ralph-state.json'), 'utf-8')) as {
         current_phase: string;
         iteration: number;
@@ -1211,6 +1218,135 @@ describe('keyword detector skill-active-state lifecycle', () => {
       assert.equal(modeState.current_phase, 'verifying');
       assert.equal(modeState.iteration, 3);
       assert.equal(modeState.max_iterations, 10);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('routes bare keep-going continuation to the active autopilot skill instead of generic ralph continuation', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-autopilot-bare-continuation-'));
+    const stateDir = join(cwd, '.omx', 'state');
+    try {
+      await mkdir(join(stateDir, 'sessions', 'sess-autopilot-bare'), { recursive: true });
+      await writeFile(
+        join(stateDir, 'sessions', 'sess-autopilot-bare', SKILL_ACTIVE_STATE_FILE),
+        JSON.stringify({
+          version: 1,
+          active: true,
+          skill: 'autopilot',
+          keyword: '$autopilot',
+          phase: 'planning',
+          activated_at: '2026-04-19T00:00:00.000Z',
+          updated_at: '2026-04-19T00:10:00.000Z',
+          source: 'keyword-detector',
+          session_id: 'sess-autopilot-bare',
+          active_skills: [
+            {
+              skill: 'autopilot',
+              phase: 'planning',
+              active: true,
+              activated_at: '2026-04-19T00:00:00.000Z',
+              updated_at: '2026-04-19T00:10:00.000Z',
+              session_id: 'sess-autopilot-bare',
+            },
+          ],
+        }, null, 2),
+      );
+      await writeFile(
+        join(stateDir, 'sessions', 'sess-autopilot-bare', 'autopilot-state.json'),
+        JSON.stringify({
+          active: true,
+          mode: 'autopilot',
+          current_phase: 'execution',
+          started_at: '2026-04-19T00:00:00.000Z',
+          updated_at: '2026-04-19T00:10:00.000Z',
+          session_id: 'sess-autopilot-bare',
+          state: { context_snapshot_path: '.omx/context/autopilot.md' },
+        }, null, 2),
+      );
+
+      const result = await recordSkillActivation({
+        stateDir,
+        text: '\\ keep going now',
+        sessionId: 'sess-autopilot-bare',
+        nowIso: '2026-04-19T00:15:00.000Z',
+      });
+
+      assert.ok(result);
+      assert.equal(result.skill, 'autopilot');
+      assert.equal(result.keyword, '$autopilot');
+      assert.equal(result.transition_error, undefined);
+      const modeState = JSON.parse(
+        await readFile(join(stateDir, 'sessions', 'sess-autopilot-bare', 'autopilot-state.json'), 'utf-8'),
+      ) as { current_phase: string; state?: { context_snapshot_path?: string } };
+      assert.equal(modeState.current_phase, 'execution');
+      assert.equal(modeState.state?.context_snapshot_path, '.omx/context/autopilot.md');
+      assert.equal(existsSync(join(stateDir, 'sessions', 'sess-autopilot-bare', 'ralph-state.json')), false);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('routes bare keep-going continuation to the active ralph skill instead of resetting through generic keep-going detection', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-ralph-bare-continuation-'));
+    const stateDir = join(cwd, '.omx', 'state');
+    try {
+      await mkdir(join(stateDir, 'sessions', 'sess-ralph-bare'), { recursive: true });
+      await writeFile(
+        join(stateDir, 'sessions', 'sess-ralph-bare', SKILL_ACTIVE_STATE_FILE),
+        JSON.stringify({
+          version: 1,
+          active: true,
+          skill: 'ralph',
+          keyword: '$ralph',
+          phase: 'executing',
+          activated_at: '2026-04-19T00:00:00.000Z',
+          updated_at: '2026-04-19T00:10:00.000Z',
+          source: 'keyword-detector',
+          session_id: 'sess-ralph-bare',
+          active_skills: [
+            {
+              skill: 'ralph',
+              phase: 'executing',
+              active: true,
+              activated_at: '2026-04-19T00:00:00.000Z',
+              updated_at: '2026-04-19T00:10:00.000Z',
+              session_id: 'sess-ralph-bare',
+            },
+          ],
+        }, null, 2),
+      );
+      await writeFile(
+        join(stateDir, 'sessions', 'sess-ralph-bare', 'ralph-state.json'),
+        JSON.stringify({
+          active: true,
+          mode: 'ralph',
+          current_phase: 'verifying',
+          started_at: '2026-04-19T00:00:00.000Z',
+          updated_at: '2026-04-19T00:10:00.000Z',
+          iteration: 7,
+          max_iterations: 50,
+          session_id: 'sess-ralph-bare',
+        }, null, 2),
+      );
+
+      const result = await recordSkillActivation({
+        stateDir,
+        text: 'keep going now',
+        sessionId: 'sess-ralph-bare',
+        nowIso: '2026-04-19T00:15:00.000Z',
+      });
+
+      assert.ok(result);
+      assert.equal(result.skill, 'ralph');
+      assert.equal(result.keyword, '$ralph');
+      assert.equal(result.transition_error, undefined);
+      const modeState = JSON.parse(
+        await readFile(join(stateDir, 'sessions', 'sess-ralph-bare', 'ralph-state.json'), 'utf-8'),
+      ) as { current_phase: string; iteration: number; max_iterations: number };
+      assert.equal(modeState.current_phase, 'verifying');
+      assert.equal(modeState.iteration, 7);
+      assert.equal(modeState.max_iterations, 50);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
