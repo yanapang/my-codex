@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { basename } from 'node:path';
 import { parsePaneIdFromTmuxOutput, shellEscapeSingle } from '../hud/tmux.js';
+import { sleepSync } from '../utils/sleep.js';
 import { sanitizeReplyInput } from '../notifications/reply-listener.js';
 import { getCurrentTmuxPaneId } from '../notifications/tmux.js';
 import { resolveTmuxBinaryForPlatform } from '../utils/platform-command.js';
@@ -18,6 +19,10 @@ export interface LaunchQuestionRendererOptions {
 }
 
 export type ExecTmuxSync = (args: string[]) => string;
+export type SleepSync = (ms: number) => void;
+
+const QUESTION_TEXT_SETTLE_MS = 120;
+const QUESTION_SUBMIT_REPEAT_DELAY_MS = 100;
 
 function safeString(value: unknown): string {
   return typeof value === 'string' ? value : '';
@@ -76,15 +81,19 @@ export function injectQuestionAnswerToPane(
   paneId: string,
   answer: QuestionAnswer,
   execTmux: ExecTmuxSync = defaultExecTmux,
+  sleepImpl: SleepSync = sleepSync,
 ): boolean {
   if (!isPaneId(paneId)) return false;
   const text = formatQuestionAnswerForInjection(answer);
   if (!text) return false;
 
   execTmux(['send-keys', '-t', paneId, '-l', '--', text]);
-  execTmux(['send-keys', '-t', paneId, 'Enter']);
-  execTmux(['send-keys', '-t', paneId, 'Enter']);
-  execTmux(['send-keys', '-t', paneId, 'Enter']);
+  // Match the repo-standard Codex raw-mode submit sequence: let literal text
+  // settle, then send isolated C-m submits rather than Enter key names.
+  sleepImpl(QUESTION_TEXT_SETTLE_MS);
+  execTmux(['send-keys', '-t', paneId, 'C-m']);
+  sleepImpl(QUESTION_SUBMIT_REPEAT_DELAY_MS);
+  execTmux(['send-keys', '-t', paneId, 'C-m']);
   return true;
 }
 
