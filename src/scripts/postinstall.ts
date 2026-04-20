@@ -47,8 +47,8 @@ export function isGlobalInstallLifecycle(env: NodeJS.ProcessEnv = process.env): 
 }
 
 function resolveInstallRoot(env: NodeJS.ProcessEnv): string {
-  const initCwd = env.INIT_CWD?.trim();
-  return initCwd ? resolve(initCwd) : process.cwd();
+  const installPrefix = env.npm_config_prefix?.trim() || env.npm_config_local_prefix?.trim();
+  return installPrefix ? resolve(installPrefix) : process.cwd();
 }
 
 async function runSetupFromInstallRoot(

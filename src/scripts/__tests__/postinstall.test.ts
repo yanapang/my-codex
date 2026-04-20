@@ -157,18 +157,24 @@ describe("runPostinstall", () => {
     assert.match(warnings.join("\n"), /non-fatal error: boom/);
   });
 
-  it("runs interactive setup from INIT_CWD so setup scope state stays under the install root", async () => {
+  it("runs interactive setup from the npm install prefix instead of the package dir or INIT_CWD", async () => {
     const installRoot = await mkdtemp(join(tmpdir(), "omx-postinstall-install-root-"));
     const packageRoot = await mkdtemp(join(tmpdir(), "omx-postinstall-package-root-"));
+    const initCwd = await mkdtemp(join(tmpdir(), "omx-postinstall-init-cwd-"));
     const originalCwd = process.cwd();
     const scopeFile = join(installRoot, ".omx", "setup-scope.json");
     const packageScopeFile = join(packageRoot, ".omx", "setup-scope.json");
+    const initCwdScopeFile = join(initCwd, ".omx", "setup-scope.json");
 
     try {
       process.chdir(packageRoot);
 
       const result = await runPostinstall({
-        env: { npm_config_global: "true", INIT_CWD: installRoot },
+        env: {
+          npm_config_global: "true",
+          npm_config_prefix: installRoot,
+          INIT_CWD: initCwd,
+        },
         getCurrentVersion: async () => "0.14.1",
         isInteractive: () => true,
         readStamp: async () => ({
@@ -193,10 +199,12 @@ describe("runPostinstall", () => {
         "project",
       );
       await assert.rejects(() => readFile(packageScopeFile, "utf-8"));
+      await assert.rejects(() => readFile(initCwdScopeFile, "utf-8"));
     } finally {
       process.chdir(originalCwd);
       await rm(installRoot, { recursive: true, force: true });
       await rm(packageRoot, { recursive: true, force: true });
+      await rm(initCwd, { recursive: true, force: true });
     }
   });
 });
