@@ -1,24 +1,47 @@
 /**
- * Launch-time update checks for oh-my-codex.
- * Non-fatal and throttled; can be disabled via OMX_AUTO_UPDATE=0.
+ * Update orchestration for oh-my-codex.
+ *
+ * The launch-time checker is intentionally passive, non-fatal, and throttled.
+ * The explicit `omx update` command uses the same executor but bypasses the
+ * launch-time cadence so a user request always checks npm immediately.
  */
 
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { spawnSync } from 'child_process';
 import { createInterface } from 'readline/promises';
 import { getPackageRoot } from '../utils/package.js';
-import { setup } from './setup.js';
+import { omxUserInstallStampPath } from '../utils/paths.js';
 
-interface UpdateState {
+export interface UpdateState {
   last_checked_at: string;
   last_seen_latest?: string;
+}
+
+export interface UserInstallStamp {
+  installed_version: string;
+  setup_completed_version?: string;
+  updated_at: string;
 }
 
 interface LatestPackageInfo {
   version?: string;
 }
+
+interface PackageManifest {
+  bin?: string | Record<string, string>;
+  version?: string;
+}
+
+export interface UpdateExecutionResult {
+  status: 'updated' | 'up-to-date' | 'declined' | 'failed' | 'unavailable';
+  currentVersion: string | null;
+  latestVersion: string | null;
+}
+
+type RunGlobalUpdateResult = { ok: boolean; stderr: string };
+type RunSetupRefreshResult = { ok: boolean; stderr: string };
 
 const PACKAGE_NAME = 'oh-my-codex';
 const CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000; // 12h
@@ -97,7 +120,7 @@ async function getCurrentVersion(): Promise<string | null> {
   }
 }
 
-function runGlobalUpdate(): { ok: boolean; stderr: string } {
+function runGlobalUpdate(): RunGlobalUpdateResult {
   const result = spawnSync('npm', ['install', '-g', `${PACKAGE_NAME}@latest`], {
     encoding: 'utf-8',
     stdio: ['ignore', 'ignore', 'pipe'],
@@ -130,7 +153,7 @@ interface UpdateDependencies {
   fetchLatestVersion: typeof fetchLatestVersion;
   getCurrentVersion: typeof getCurrentVersion;
   runGlobalUpdate: typeof runGlobalUpdate;
-  setup: typeof setup;
+  runSetupRefresh: (cwd: string) => Promise<RunSetupRefreshResult>;
 }
 
 const defaultUpdateDependencies: UpdateDependencies = {
@@ -138,8 +161,219 @@ const defaultUpdateDependencies: UpdateDependencies = {
   fetchLatestVersion,
   getCurrentVersion,
   runGlobalUpdate,
-  setup,
+  runSetupRefresh,
 };
+
+function stripLeadingV(version: string): string {
+  return version.trim().replace(/^v/i, '');
+}
+
+async function writeSuccessfulInstallStamp(
+  installedVersion: string,
+): Promise<void> {
+  await writeUserInstallStamp({
+    installed_version: stripLeadingV(installedVersion),
+    setup_completed_version: stripLeadingV(installedVersion),
+    updated_at: new Date().toISOString(),
+  });
+}
+
+export async function readUserInstallStamp(
+  path = omxUserInstallStampPath(),
+): Promise<UserInstallStamp | null> {
+  if (!existsSync(path)) return null;
+  try {
+    const content = await readFile(path, 'utf-8');
+    const parsed = JSON.parse(content) as Partial<UserInstallStamp>;
+    if (typeof parsed.installed_version !== 'string' || typeof parsed.updated_at !== 'string') {
+      return null;
+    }
+    return {
+      installed_version: parsed.installed_version,
+      ...(typeof parsed.setup_completed_version === 'string'
+        ? { setup_completed_version: parsed.setup_completed_version }
+        : {}),
+      updated_at: parsed.updated_at,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function writeUserInstallStamp(
+  stamp: UserInstallStamp,
+  path = omxUserInstallStampPath(),
+): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify(stamp, null, 2));
+}
+
+export function isInstallVersionBump(
+  currentVersion: string | null | undefined,
+  stamp: UserInstallStamp | null,
+): boolean {
+  if (!currentVersion) return false;
+  if (!stamp?.installed_version) return true;
+  return stripLeadingV(currentVersion) !== stripLeadingV(stamp.installed_version);
+}
+
+function resolveGlobalInstallRoot(): string | null {
+  const result = spawnSync('npm', ['root', '-g'], {
+    encoding: 'utf-8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 15000,
+    windowsHide: true,
+  });
+
+  if (result.error || result.status !== 0) {
+    return null;
+  }
+
+  const root = (result.stdout || '').trim();
+  return root === '' ? null : root;
+}
+
+export async function resolveInstalledCliEntry(globalInstallRoot: string): Promise<string | null> {
+  const packageRoot = join(globalInstallRoot, PACKAGE_NAME);
+  const packageJsonPath = join(packageRoot, 'package.json');
+  let cliRelativePath = join('dist', 'cli', 'omx.js');
+
+  try {
+    const content = await readFile(packageJsonPath, 'utf-8');
+    const pkg = JSON.parse(content) as PackageManifest;
+    if (typeof pkg.bin === 'string' && pkg.bin.trim() !== '') {
+      cliRelativePath = pkg.bin;
+    } else if (
+      pkg.bin &&
+      typeof pkg.bin === 'object' &&
+      typeof pkg.bin.omx === 'string' &&
+      pkg.bin.omx.trim() !== ''
+    ) {
+      cliRelativePath = pkg.bin.omx;
+    }
+  } catch {
+    // Fall back to the published contract used in package.json today.
+  }
+
+  const cliEntry = join(packageRoot, cliRelativePath);
+  return existsSync(cliEntry) ? cliEntry : null;
+}
+
+async function runSetupRefresh(cwd: string): Promise<RunSetupRefreshResult> {
+  const globalInstallRoot = resolveGlobalInstallRoot();
+  if (!globalInstallRoot) {
+    return {
+      ok: false,
+      stderr: 'Unable to resolve the npm global install root after updating.',
+    };
+  }
+
+  const cliEntry = await resolveInstalledCliEntry(globalInstallRoot);
+  if (!cliEntry) {
+    return {
+      ok: false,
+      stderr: `Unable to find the updated OMX CLI entry under ${join(globalInstallRoot, PACKAGE_NAME)}.`,
+    };
+  }
+
+  const result = spawnSync(process.execPath, [cliEntry, 'setup'], {
+    cwd,
+    env: process.env,
+    stdio: 'inherit',
+    timeout: 120000,
+    windowsHide: true,
+  });
+
+  if (result.error) {
+    return { ok: false, stderr: result.error.message };
+  }
+
+  if (result.status !== 0) {
+    return {
+      ok: false,
+      stderr: `The updated setup refresh exited with status ${result.status}.`,
+    };
+  }
+
+  return { ok: true, stderr: '' };
+}
+
+async function executeUpdate(
+  options: {
+    cwd: string;
+    dependencies: UpdateDependencies;
+    prompt: boolean;
+    immediate: boolean;
+    nowMs?: number;
+  },
+): Promise<UpdateExecutionResult> {
+  const { cwd, dependencies, prompt, immediate, nowMs = Date.now() } = options;
+  const [current, latest] = await Promise.all([
+    dependencies.getCurrentVersion(),
+    dependencies.fetchLatestVersion(),
+  ]);
+
+  await writeUpdateState(cwd, {
+    last_checked_at: new Date(nowMs).toISOString(),
+    last_seen_latest: latest ?? undefined,
+  });
+
+  if (!current || !latest) {
+    if (immediate) {
+      console.log('[omx] Unable to determine the latest oh-my-codex version. Try again later.');
+    }
+    return { status: 'unavailable', currentVersion: current, latestVersion: latest };
+  }
+
+  if (!isNewerVersion(current, latest)) {
+    if (immediate) {
+      console.log(`[omx] oh-my-codex is already up to date (v${current}).`);
+    }
+    return { status: 'up-to-date', currentVersion: current, latestVersion: latest };
+  }
+
+  if (prompt) {
+    const approved = await dependencies.askYesNo(
+      `[omx] Update available: v${current} → v${latest}. Update now? [Y/n] `,
+    );
+    if (!approved) {
+      return { status: 'declined', currentVersion: current, latestVersion: latest };
+    }
+  }
+
+  console.log(`[omx] Running: npm install -g ${PACKAGE_NAME}@latest`);
+  const result = dependencies.runGlobalUpdate();
+
+  if (!result.ok) {
+    console.log('[omx] Update failed. Run manually: npm install -g oh-my-codex@latest');
+    return { status: 'failed', currentVersion: current, latestVersion: latest };
+  }
+
+  const setupRefreshResult = await dependencies.runSetupRefresh(cwd);
+  if (!setupRefreshResult.ok) {
+    console.log(
+      `[omx] Update installed, but the setup refresh failed. Run \`omx setup\` with the new install. (${setupRefreshResult.stderr})`,
+    );
+    return { status: 'failed', currentVersion: current, latestVersion: latest };
+  }
+
+  await writeSuccessfulInstallStamp(latest);
+  console.log(`[omx] Updated to v${latest}. Restart to use new code.`);
+  return { status: 'updated', currentVersion: current, latestVersion: latest };
+}
+
+export async function runImmediateUpdate(
+  cwd = process.cwd(),
+  dependencies: Partial<UpdateDependencies> = {},
+): Promise<UpdateExecutionResult> {
+  const updateDependencies = { ...defaultUpdateDependencies, ...dependencies };
+  return executeUpdate({
+    cwd,
+    dependencies: updateDependencies,
+    prompt: false,
+    immediate: true,
+  });
+}
 
 export async function maybeCheckAndPromptUpdate(
   cwd: string,
@@ -153,30 +387,11 @@ export async function maybeCheckAndPromptUpdate(
   const state = await readUpdateState(cwd);
   if (!shouldCheckForUpdates(now, state)) return;
 
-  const [current, latest] = await Promise.all([
-    updateDependencies.getCurrentVersion(),
-    updateDependencies.fetchLatestVersion(),
-  ]);
-
-  await writeUpdateState(cwd, {
-    last_checked_at: new Date(now).toISOString(),
-    last_seen_latest: latest || state?.last_seen_latest,
+  await executeUpdate({
+    cwd,
+    dependencies: updateDependencies,
+    prompt: true,
+    immediate: false,
+    nowMs: now,
   });
-
-  if (!current || !latest || !isNewerVersion(current, latest)) return;
-
-  const approved = await updateDependencies.askYesNo(
-    `[omx] Update available: v${current} → v${latest}. Update now? [Y/n] `,
-  );
-  if (!approved) return;
-
-  console.log(`[omx] Running: npm install -g ${PACKAGE_NAME}@latest`);
-  const result = updateDependencies.runGlobalUpdate();
-
-  if (result.ok) {
-    await updateDependencies.setup();
-    console.log(`[omx] Updated to v${latest}. Restart to use new code.`);
-  } else {
-    console.log('[omx] Update failed. Run manually: npm install -g oh-my-codex@latest');
-  }
 }

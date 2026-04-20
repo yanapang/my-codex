@@ -318,6 +318,11 @@ export function omxLogsDir(projectRoot?: string): string {
   return join(projectRoot || process.cwd(), ".omx", "logs");
 }
 
+/** User-scope install/update stamp path ($CODEX_HOME/.omx/install-state.json) */
+export function omxUserInstallStampPath(codexHomeDir?: string): string {
+  return join(codexHomeDir || codexHome(), ".omx", "install-state.json");
+}
+
 /** Get the package root directory (where agents/, skills/, prompts/ live) */
 export function packageRoot(): string {
   try {

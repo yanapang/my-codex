@@ -60,9 +60,10 @@ If you want the default OMX experience, start here:
 
 ```bash
 npm install -g @openai/codex oh-my-codex
-omx setup
 omx --madmax --high
 ```
+
+On a real `oh-my-codex` version bump, the global npm install now launches the interactive `omx setup` refresh automatically when a TTY is available. If npm scripts are skipped or the install is non-interactive, run `omx setup` manually or use `omx update` to force the same refresh path later.
 
 Then work normally inside Codex:
 
@@ -147,13 +148,14 @@ Most users should think of OMX as **better task routing + better workflow + bett
 
 ## Start here if you are new
 
-1. Run `omx setup`
-2. Run `omx doctor`
-3. Run a real execution smoke test: `codex login status` and `omx exec --skip-git-repo-check -C . "Reply with exactly OMX-EXEC-OK"`
-4. Launch with `omx --madmax --high`
-5. Use `$deep-interview "..."` when the request or boundaries are still unclear
-6. Use `$ralplan "..."` to approve the plan and review tradeoffs
-7. Choose `$team` for coordinated parallel execution or `$ralph` for persistent completion loops
+1. Install or update OMX with `npm install -g @openai/codex oh-my-codex`
+2. Let the interactive `omx setup` refresh run automatically on real OMX version bumps, or run `omx setup` / `omx update` yourself when scripts are skipped or you want to rerun it
+3. Run `omx doctor`
+4. Run a real execution smoke test: `codex login status` and `omx exec --skip-git-repo-check -C . "Reply with exactly OMX-EXEC-OK"`
+5. Launch with `omx --madmax --high`
+6. Use `$deep-interview "..."` when the request or boundaries are still unclear
+7. Use `$ralplan "..."` to approve the plan and review tradeoffs
+8. Choose `$team` for coordinated parallel execution or `$ralph` for persistent completion loops
 
 ## Recommended workflow
 
@@ -192,6 +194,8 @@ These are operator/support surfaces:
 - `omx setup` installs prompts, skills, AGENTS scaffolding, `.codex/config.toml`, and OMX-managed native Codex hooks in `.codex/hooks.json`
   - setup refresh preserves non-OMX hook entries in `.codex/hooks.json` and only rewrites OMX-managed wrappers
   - `omx uninstall` removes OMX-managed wrappers from `.codex/hooks.json` but keeps the file when user hooks remain
+- `omx update` checks npm immediately, installs the newest global OMX build, then reruns the same interactive setup refresh path
+- fresh OMX-managed `gpt-5.4` config seeding now recommends `model_context_window = 250000` and `model_auto_compact_token_limit = 200000`, but only when those keys are missing
 - `omx doctor` verifies the install when something seems wrong; it does not prove that the active Codex profile can make an authenticated model call
 - `omx hud --watch` is a monitoring/status surface, not the primary user workflow
 
