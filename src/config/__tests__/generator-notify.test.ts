@@ -145,7 +145,7 @@ describe('config generator', () => {
         (rerun.match(/# oh-my-codex \(OMX\) Configuration/g) ?? []).length,
         1
       );
-      assert.equal((rerun.match(/# End oh-my-codex/g) ?? []).length, 1);
+      assert.equal((rerun.match(/^# End oh-my-codex$/gm) ?? []).length, 1);
 
       // Features correct
       assert.equal((rerun.match(/^\[features\]$/gm) ?? []).length, 1);
