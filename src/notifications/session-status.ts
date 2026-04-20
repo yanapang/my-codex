@@ -99,11 +99,20 @@ async function readRelevantSkillState(
     if (!state) continue;
 
     const stateSessionId = typeof state.session_id === 'string' ? state.session_id.trim() : '';
-    if (candidatePath === rootPath && stateSessionId && stateSessionId !== sessionId) {
+    const entries = listActiveSkills(state);
+    const visibleEntries = entries.filter((entry) => {
+      const entrySessionId = typeof entry.session_id === 'string' ? entry.session_id.trim() : '';
+      return entrySessionId.length === 0 || entrySessionId === sessionId;
+    });
+
+    if (candidatePath === rootPath && (
+      (stateSessionId && stateSessionId !== sessionId)
+      || (entries.length > 0 && visibleEntries.length === 0)
+    )) {
       continue;
     }
 
-    const primary = listActiveSkills(state)[0];
+    const primary = visibleEntries[0];
     const skill = primary?.skill || (typeof state.skill === 'string' ? state.skill.trim() : '');
     const phase = primary?.phase || (typeof state.phase === 'string' ? state.phase.trim() : '');
     const updatedAt = typeof state.updated_at === 'string' ? state.updated_at.trim() : '';
