@@ -1,12 +1,16 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
+  isInstallVersionBump,
   isNewerVersion,
   maybeCheckAndPromptUpdate,
+  readUserInstallStamp,
+  runImmediateUpdate,
   shouldCheckForUpdates,
+  writeUserInstallStamp,
 } from '../update.js';
 
 describe('isNewerVersion', () => {
@@ -82,9 +86,51 @@ describe('shouldCheckForUpdates', () => {
 
   it('respects custom interval', () => {
     const now = Date.now();
-    const customInterval = 60 * 1000; // 1 min
-    const recentCheck = new Date(now - 30 * 1000).toISOString(); // 30s ago
+    const customInterval = 60 * 1000;
+    const recentCheck = new Date(now - 30 * 1000).toISOString();
     assert.equal(shouldCheckForUpdates(now, { last_checked_at: recentCheck }, customInterval), false);
+  });
+});
+
+describe('install stamp helpers', () => {
+  it('treats missing prior stamp as a version bump', () => {
+    assert.equal(isInstallVersionBump('0.14.0', null), true);
+  });
+
+  it('treats matching installed_version as not a bump', () => {
+    assert.equal(
+      isInstallVersionBump('0.14.0', {
+        installed_version: '0.14.0',
+        setup_completed_version: '0.14.0',
+        updated_at: '2026-04-20T00:00:00.000Z',
+      }),
+      false,
+    );
+  });
+
+  it('writes and reads the user-scope install stamp schema', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'omx-install-stamp-'));
+    const stampPath = join(root, '.codex', '.omx', 'install-state.json');
+
+    try {
+      await writeUserInstallStamp(
+        {
+          installed_version: '0.14.0',
+          setup_completed_version: '0.14.0',
+          updated_at: '2026-04-20T00:00:00.000Z',
+        },
+        stampPath,
+      );
+
+      const parsed = await readUserInstallStamp(stampPath);
+      assert.deepEqual(parsed, {
+        installed_version: '0.14.0',
+        setup_completed_version: '0.14.0',
+        updated_at: '2026-04-20T00:00:00.000Z',
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -261,6 +307,129 @@ describe('maybeCheckAndPromptUpdate', () => {
       assert.equal(promptCalls, 0);
       assert.equal(updateAttempts, 0);
     } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('respects the passive launch-time cadence before checking npm', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-update-'));
+    const statePath = join(cwd, '.omx', 'state', 'update-check.json');
+    let latestCalls = 0;
+
+    try {
+      await mkdir(join(cwd, '.omx', 'state'), { recursive: true });
+      await writeFile(statePath, JSON.stringify({
+        last_checked_at: new Date().toISOString(),
+        last_seen_latest: '9.9.9',
+      }, null, 2));
+
+      await withInteractiveTty(async () => {
+        await maybeCheckAndPromptUpdate(cwd, {
+          fetchLatestVersion: async () => {
+            latestCalls += 1;
+            return '9.9.9';
+          },
+          getCurrentVersion: async () => '0.14.0',
+        });
+      });
+
+      assert.equal(latestCalls, 0);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('runImmediateUpdate', () => {
+  it('bypasses the passive cadence and updates immediately on explicit request', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-update-now-'));
+    const statePath = join(cwd, '.omx', 'state', 'update-check.json');
+    const stampPath = join(cwd, '.codex', '.omx', 'install-state.json');
+    const originalCodexHome = process.env.CODEX_HOME;
+    const originalLog = console.log;
+    const logs: string[] = [];
+    let setupCalls = 0;
+    let updateCalls = 0;
+    let latestCalls = 0;
+
+    console.log = (...args: unknown[]) => {
+      logs.push(args.map((arg) => String(arg)).join(' '));
+    };
+
+    process.env.CODEX_HOME = join(cwd, '.codex');
+
+    try {
+      await mkdir(join(cwd, '.omx', 'state'), { recursive: true });
+      await writeFile(statePath, JSON.stringify({
+        last_checked_at: new Date().toISOString(),
+        last_seen_latest: '0.14.1',
+      }, null, 2));
+
+      const result = await runImmediateUpdate(cwd, {
+        getCurrentVersion: async () => '0.14.0',
+        fetchLatestVersion: async () => {
+          latestCalls += 1;
+          return '0.14.1';
+        },
+        runGlobalUpdate: () => {
+          updateCalls += 1;
+          return { ok: true, stderr: '' };
+        },
+        setup: async (options) => {
+          setupCalls += 1;
+          assert.deepEqual(options ?? {}, {});
+        },
+      });
+
+      assert.equal(result.status, 'updated');
+      assert.equal(latestCalls, 1);
+      assert.equal(updateCalls, 1);
+      assert.equal(setupCalls, 1);
+      assert.match(logs.join('\n'), /Running: npm install -g oh-my-codex@latest/);
+      assert.match(logs.join('\n'), /Updated to v0\.14\.1/);
+
+      const stamp = JSON.parse(await readFile(stampPath, 'utf-8')) as {
+        installed_version: string;
+        setup_completed_version: string;
+      };
+      assert.equal(stamp.installed_version, '0.14.1');
+      assert.equal(stamp.setup_completed_version, '0.14.1');
+    } finally {
+      console.log = originalLog;
+      if (typeof originalCodexHome === 'string') {
+        process.env.CODEX_HOME = originalCodexHome;
+      } else {
+        delete process.env.CODEX_HOME;
+      }
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('reports up-to-date status for explicit update when npm is already current', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-update-now-'));
+    const originalLog = console.log;
+    const logs: string[] = [];
+    let updateCalls = 0;
+
+    console.log = (...args: unknown[]) => {
+      logs.push(args.map((arg) => String(arg)).join(' '));
+    };
+
+    try {
+      const result = await runImmediateUpdate(cwd, {
+        getCurrentVersion: async () => '0.14.0',
+        fetchLatestVersion: async () => '0.14.0',
+        runGlobalUpdate: () => {
+          updateCalls += 1;
+          return { ok: true, stderr: '' };
+        },
+      });
+
+      assert.equal(result.status, 'up-to-date');
+      assert.equal(updateCalls, 0);
+      assert.match(logs.join('\n'), /already up to date \(v0\.14\.0\)/);
+    } finally {
+      console.log = originalLog;
       await rm(cwd, { recursive: true, force: true });
     }
   });

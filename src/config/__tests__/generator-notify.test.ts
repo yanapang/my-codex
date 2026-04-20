@@ -18,8 +18,8 @@ describe('config generator', () => {
       const reasoningIdx = toml.indexOf('model_reasoning_effort =');
       const devInstrIdx = toml.indexOf('developer_instructions =');
       const modelIdx = toml.indexOf('model = "gpt-5.4"');
-      const contextIdx = toml.indexOf('model_context_window = 1000000');
-      const compactIdx = toml.indexOf('model_auto_compact_token_limit = 900000');
+      const contextIdx = toml.indexOf('model_context_window = 250000');
+      const compactIdx = toml.indexOf('model_auto_compact_token_limit = 200000');
       const featuresIdx = toml.indexOf('[features]');
 
       assert.ok(notifyIdx >= 0, 'notify not found');
@@ -63,8 +63,8 @@ describe('config generator', () => {
       const toml = await readFile(configPath, 'utf-8');
 
       assert.match(toml, /^model = "gpt-5\.4"$/m);
-      assert.match(toml, /^model_context_window = 1000000$/m);
-      assert.match(toml, /^model_auto_compact_token_limit = 900000$/m);
+      assert.match(toml, /^model_context_window = 250000$/m);
+      assert.match(toml, /^model_auto_compact_token_limit = 200000$/m);
     } finally {
       await rm(wd, { recursive: true, force: true });
     }
@@ -78,8 +78,8 @@ describe('config generator', () => {
       const toml = await readFile(configPath, 'utf-8');
 
       assert.match(toml, /^model = "gpt-5\.4"$/m);
-      assert.match(toml, /^model_context_window = 1000000$/m);
-      assert.match(toml, /^model_auto_compact_token_limit = 900000$/m);
+      assert.match(toml, /^model_context_window = 250000$/m);
+      assert.match(toml, /^model_auto_compact_token_limit = 200000$/m);
 
       const modelIdx = toml.indexOf('model = "gpt-5.4"');
       const featuresIdx = toml.indexOf('[features]');
@@ -168,7 +168,27 @@ describe('config generator', () => {
     }
   });
 
-  it('does not seed 1M context keys for non-gpt-5.4 models', async () => {
+  it('seeds only the missing gpt-5.4 context key while preserving an existing partner value', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-config-gen-'));
+    try {
+      const configPath = join(wd, 'config.toml');
+      await writeFile(
+        configPath,
+        ['model = "gpt-5.4"', 'model_context_window = 640000', ''].join('\n'),
+      );
+
+      await mergeConfig(configPath, wd);
+      const toml = await readFile(configPath, 'utf-8');
+
+      assert.match(toml, /^model = "gpt-5\.4"$/m);
+      assert.match(toml, /^model_context_window = 640000$/m);
+      assert.match(toml, /^model_auto_compact_token_limit = 200000$/m);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('does not seed 250k context keys for non-gpt-5.4 models', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-config-gen-'));
     try {
       const configPath = join(wd, 'config.toml');
@@ -178,8 +198,8 @@ describe('config generator', () => {
       const toml = await readFile(configPath, 'utf-8');
 
       assert.match(toml, /^model = "o3"$/m);
-      assert.doesNotMatch(toml, /^model_context_window = 1000000$/m);
-      assert.doesNotMatch(toml, /^model_auto_compact_token_limit = 900000$/m);
+      assert.doesNotMatch(toml, /^model_context_window = 250000$/m);
+      assert.doesNotMatch(toml, /^model_auto_compact_token_limit = 200000$/m);
     } finally {
       await rm(wd, { recursive: true, force: true });
     }
