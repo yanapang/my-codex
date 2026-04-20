@@ -204,15 +204,26 @@ function readPromptText(payload: CodexHookPayload): string {
 function sanitizePayloadForHookContext(
   payload: CodexHookPayload,
   hookEventName: CodexHookEventName,
+  canonicalSessionId = "",
 ): CodexHookPayload {
-  if (hookEventName !== "UserPromptSubmit") return payload;
-
   const sanitized = { ...payload };
-  delete sanitized.prompt;
-  delete sanitized.input;
-  delete sanitized.user_prompt;
-  delete sanitized.userPrompt;
-  delete sanitized.text;
+
+  if (hookEventName === "UserPromptSubmit") {
+    delete sanitized.prompt;
+    delete sanitized.input;
+    delete sanitized.user_prompt;
+    delete sanitized.userPrompt;
+    delete sanitized.text;
+    return sanitized;
+  }
+
+  if (hookEventName === "Stop") {
+    delete sanitized.stop_hook_active;
+    delete sanitized.stopHookActive;
+    delete sanitized.sessionId;
+    sanitized.session_id = canonicalSessionId.trim() || safeString(payload.session_id ?? payload.sessionId).trim();
+  }
+
   return sanitized;
 }
 
@@ -220,13 +231,14 @@ function buildBaseContext(
   cwd: string,
   payload: CodexHookPayload,
   hookEventName: CodexHookEventName,
+  canonicalSessionId = "",
 ): Record<string, unknown> {
   return {
     cwd,
     project_path: cwd,
     transcript_path: safeString(payload.transcript_path ?? payload.transcriptPath) || null,
     source: safeString(payload.source),
-    payload: sanitizePayloadForHookContext(payload, hookEventName),
+    payload: sanitizePayloadForHookContext(payload, hookEventName, canonicalSessionId),
   };
 }
 
@@ -1579,19 +1591,37 @@ export async function dispatchCodexNativeHook(
   const nativeSessionId = safeString(payload.session_id ?? payload.sessionId).trim();
   const threadId = safeString(payload.thread_id ?? payload.threadId).trim();
   const turnId = safeString(payload.turn_id ?? payload.turnId).trim();
-  let canonicalSessionId = safeString((await readUsableSessionState(cwd))?.session_id).trim();
+  const currentSessionState = await readUsableSessionState(cwd);
+  let canonicalSessionId = safeString(currentSessionState?.session_id).trim();
+  let resolvedNativeSessionId = nativeSessionId;
 
   if (hookEventName === "SessionStart" && nativeSessionId) {
     const sessionState = await reconcileNativeSessionStart(cwd, nativeSessionId, {
       pid: options.sessionOwnerPid ?? resolveSessionOwnerPid(payload),
     });
     canonicalSessionId = safeString(sessionState.session_id).trim();
+    resolvedNativeSessionId = safeString(sessionState.native_session_id).trim() || nativeSessionId;
   } else if (!canonicalSessionId) {
-    canonicalSessionId = safeString((await readUsableSessionState(cwd))?.session_id).trim();
+    canonicalSessionId = safeString(currentSessionState?.session_id).trim();
+  }
+
+  if (hookEventName === "Stop") {
+    const stopCanonicalSessionId = await resolveInternalSessionIdForPayload(
+      cwd,
+      readPayloadSessionId(payload),
+    );
+    if (stopCanonicalSessionId) {
+      canonicalSessionId = stopCanonicalSessionId;
+    }
+    if (canonicalSessionId && safeString(currentSessionState?.session_id).trim() === canonicalSessionId) {
+      resolvedNativeSessionId =
+        safeString(currentSessionState?.native_session_id).trim() || resolvedNativeSessionId;
+    }
   }
 
   const eventSessionId = canonicalSessionId || nativeSessionId || undefined;
   const sessionIdForState = canonicalSessionId || nativeSessionId;
+  let outputJson: Record<string, unknown> | null = null;
 
   if (hookEventName === "UserPromptSubmit") {
     const prompt = readPromptText(payload);
@@ -1676,10 +1706,10 @@ export async function dispatchCodexNativeHook(
   }
 
   if (omxEventName) {
-    const baseContext = buildBaseContext(cwd, payload, hookEventName!);
-    if (nativeSessionId) {
-      baseContext.native_session_id = nativeSessionId;
-      baseContext.codex_session_id = nativeSessionId;
+    const baseContext = buildBaseContext(cwd, payload, hookEventName!, canonicalSessionId);
+    if (resolvedNativeSessionId) {
+      baseContext.native_session_id = resolvedNativeSessionId;
+      baseContext.codex_session_id = resolvedNativeSessionId;
     }
     if (canonicalSessionId) {
       baseContext.omx_session_id = canonicalSessionId;
@@ -1697,7 +1727,6 @@ export async function dispatchCodexNativeHook(
     await dispatchHookEvent(event, { cwd });
   }
 
-  let outputJson: Record<string, unknown> | null = null;
   if (hookEventName === "SessionStart" || hookEventName === "UserPromptSubmit") {
     const additionalContext = hookEventName === "SessionStart"
       ? await buildSessionStartContext(cwd, canonicalSessionId || nativeSessionId)

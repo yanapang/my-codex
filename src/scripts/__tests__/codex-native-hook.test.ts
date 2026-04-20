@@ -27,6 +27,30 @@ async function writeJson(path: string, value: unknown): Promise<void> {
   await writeFile(path, JSON.stringify(value, null, 2));
 }
 
+async function writeHookCounterPlugin(cwd: string): Promise<string> {
+  const markerPath = join(cwd, ".omx", "stop-hook-counter.json");
+  await mkdir(join(cwd, ".omx", "hooks"), { recursive: true });
+  await writeFile(
+    join(cwd, ".omx", "hooks", "count-stop-hook.mjs"),
+    `import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+
+export async function onHookEvent(event) {
+  if (event.event !== "stop") return;
+  const outPath = join(process.cwd(), ".omx", "stop-hook-counter.json");
+  await mkdir(dirname(outPath), { recursive: true });
+  let count = 0;
+  try {
+    count = JSON.parse(await readFile(outPath, "utf-8")).count || 0;
+  } catch {}
+  await writeFile(outPath, JSON.stringify({ count: count + 1 }, null, 2));
+}
+`,
+    "utf-8",
+  );
+  return markerPath;
+}
+
 async function writeReleaseReadinessLeaderAttention(
   teamName: string,
   sessionId: string,
@@ -3664,6 +3688,117 @@ esac
     }
   });
 
+  it("lets dispatcher dedupe identical native stop hook replays after Stop payload normalization", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-ralph-hook-dedupe-"));
+    const previousOmxSessionId = process.env.OMX_SESSION_ID;
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      await mkdir(join(stateDir, "sessions", "sess-stop-ralph-hook-dedupe"), { recursive: true });
+      await writeHookCounterPlugin(cwd);
+      await writeFile(
+        join(stateDir, "sessions", "sess-stop-ralph-hook-dedupe", "ralph-state.json"),
+        JSON.stringify({
+          active: true,
+          current_phase: "executing",
+          session_id: "sess-stop-ralph-hook-dedupe",
+        }),
+      );
+
+      process.env.OMX_SESSION_ID = "sess-stop-ralph-hook-dedupe";
+      const payload = {
+        hook_event_name: "Stop",
+        cwd,
+        session_id: "sess-stop-ralph-hook-dedupe",
+        thread_id: "thread-stop-ralph-hook-dedupe",
+        turn_id: "turn-stop-ralph-hook-dedupe-1",
+        last_assistant_message: "Next active targets:\n\n1. scheduler integration\n\nI am continuing.",
+      };
+
+      await dispatchCodexNativeHook(payload, { cwd });
+      await dispatchCodexNativeHook(
+        {
+          ...payload,
+          stop_hook_active: true,
+        },
+        { cwd },
+      );
+
+      const marker = JSON.parse(
+        await readFile(join(cwd, ".omx", "stop-hook-counter.json"), "utf-8"),
+      ) as { count: number };
+      assert.equal(marker.count, 1);
+    } finally {
+      if (typeof previousOmxSessionId === "string") process.env.OMX_SESSION_ID = previousOmxSessionId;
+      else delete process.env.OMX_SESSION_ID;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves per-turn native stop hook delivery even when stop_hook_active remains true", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-ralph-hook-refire-"));
+    const previousOmxSessionId = process.env.OMX_SESSION_ID;
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      await mkdir(join(stateDir, "sessions", "sess-stop-ralph-hook-refire"), { recursive: true });
+      await writeHookCounterPlugin(cwd);
+      await writeFile(
+        join(stateDir, "sessions", "sess-stop-ralph-hook-refire", "ralph-state.json"),
+        JSON.stringify({
+          active: true,
+          current_phase: "executing",
+          session_id: "sess-stop-ralph-hook-refire",
+        }),
+      );
+
+      process.env.OMX_SESSION_ID = "sess-stop-ralph-hook-refire";
+      const payload = {
+        hook_event_name: "Stop",
+        cwd,
+        session_id: "sess-stop-ralph-hook-refire",
+        thread_id: "thread-stop-ralph-hook-refire",
+        turn_id: "turn-stop-ralph-hook-refire-1",
+        last_assistant_message: "Continuing current task.",
+      };
+
+      await dispatchCodexNativeHook(payload, { cwd });
+      await dispatchCodexNativeHook(
+        {
+          ...payload,
+          turn_id: "turn-stop-ralph-hook-refire-2",
+          stop_hook_active: true,
+        },
+        { cwd },
+      );
+
+      await writeFile(
+        join(stateDir, "sessions", "sess-stop-ralph-hook-refire", "ralph-state.json"),
+        JSON.stringify({
+          active: true,
+          current_phase: "executing",
+          session_id: "sess-stop-ralph-hook-refire",
+        }),
+      );
+
+      await dispatchCodexNativeHook(
+        {
+          ...payload,
+          turn_id: "turn-stop-ralph-hook-refire-3",
+          stop_hook_active: true,
+        },
+        { cwd },
+      );
+
+      const marker = JSON.parse(
+        await readFile(join(cwd, ".omx", "stop-hook-counter.json"), "utf-8"),
+      ) as { count: number };
+      assert.equal(marker.count, 3);
+    } finally {
+      if (typeof previousOmxSessionId === "string") process.env.OMX_SESSION_ID = previousOmxSessionId;
+      else delete process.env.OMX_SESSION_ID;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
 
   it("returns Stop continuation output for native auto-nudge stall prompts", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-auto-nudge-"));
@@ -3789,6 +3924,69 @@ esac
         await readFile(join(stateDir, "native-stop-state.json"), "utf-8"),
       ) as { sessions?: Record<string, unknown> };
       assert.deepEqual(Object.keys(persisted.sessions ?? {}), ["omx-canonical"]);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("dedupes native stop hook replay across owner launch SessionStart reconciliation drift", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-dispatch-session-drift-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      await mkdir(join(stateDir, "sessions", "omx-canonical"), { recursive: true });
+      await writeHookCounterPlugin(cwd);
+      process.env.OMX_SESSION_ID = "omx-canonical";
+      await writeSessionStart(cwd, "omx-canonical");
+      await writeJson(join(stateDir, "sessions", "omx-canonical", "ralph-state.json"), {
+        active: true,
+        current_phase: "executing",
+        session_id: "omx-canonical",
+      });
+
+      await dispatchCodexNativeHook(
+        {
+          hook_event_name: "SessionStart",
+          cwd,
+          session_id: "codex-native-new",
+        },
+        { cwd, sessionOwnerPid: process.pid },
+      );
+
+      await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "codex-native-new",
+          thread_id: "thread-stop-hook-drift",
+          turn_id: "turn-stop-hook-drift-1",
+          last_assistant_message: "Keep going and finish the cleanup.",
+        },
+        { cwd },
+      );
+
+      await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "omx-canonical",
+          thread_id: "thread-stop-hook-drift",
+          turn_id: "turn-stop-hook-drift-1",
+          stop_hook_active: true,
+          last_assistant_message: "Keep going and finish the cleanup.",
+        },
+        { cwd },
+      );
+
+      const marker = JSON.parse(
+        await readFile(join(cwd, ".omx", "stop-hook-counter.json"), "utf-8"),
+      ) as { count: number };
+      assert.equal(marker.count, 1);
+
+      const sessionState = JSON.parse(
+        await readFile(join(stateDir, "session.json"), "utf-8"),
+      ) as { session_id?: string; native_session_id?: string };
+      assert.equal(sessionState.session_id, "omx-canonical");
+      assert.equal(sessionState.native_session_id, "codex-native-new");
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
