@@ -1,17 +1,20 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   isInstallVersionBump,
   isNewerVersion,
   maybeCheckAndPromptUpdate,
   readUserInstallStamp,
+  resolveInstalledCliEntry,
   runImmediateUpdate,
   shouldCheckForUpdates,
   writeUserInstallStamp,
 } from '../update.js';
+
+const PACKAGE_NAME = 'oh-my-codex';
 
 describe('isNewerVersion', () => {
   it('returns true when latest has higher major', () => {
@@ -166,7 +169,7 @@ describe('maybeCheckAndPromptUpdate', () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-update-'));
     const originalLog = console.log;
     const prompts: string[] = [];
-    const setupCalls: unknown[] = [];
+    const setupRefreshCalls: string[] = [];
     console.log = (...args: unknown[]) => {
       prompts.push(args.map((arg) => String(arg)).join(' '));
     };
@@ -178,13 +181,14 @@ describe('maybeCheckAndPromptUpdate', () => {
           fetchLatestVersion: async () => '0.9.0',
           askYesNo: async () => true,
           runGlobalUpdate: () => ({ ok: true, stderr: '' }),
-          setup: async (options) => {
-            setupCalls.push(options ?? {});
+          runSetupRefresh: async (refreshCwd) => {
+            setupRefreshCalls.push(refreshCwd);
+            return { ok: true, stderr: '' };
           },
         });
       });
 
-      assert.deepEqual(setupCalls, [{}]);
+      assert.deepEqual(setupRefreshCalls, [cwd]);
       assert.match(prompts.join('\n'), /Updated to v0\.9\.0/);
     } finally {
       console.log = originalLog;
@@ -194,7 +198,7 @@ describe('maybeCheckAndPromptUpdate', () => {
 
   it('preserves local config semantics by avoiding force setup during auto-update', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-update-'));
-    let receivedOptions: unknown;
+    const receivedCwds: string[] = [];
 
     try {
       await withInteractiveTty(async () => {
@@ -203,19 +207,14 @@ describe('maybeCheckAndPromptUpdate', () => {
           fetchLatestVersion: async () => '0.13.1',
           askYesNo: async () => true,
           runGlobalUpdate: () => ({ ok: true, stderr: '' }),
-          setup: async (options) => {
-            receivedOptions = options ?? {};
+          runSetupRefresh: async (refreshCwd) => {
+            receivedCwds.push(refreshCwd);
+            return { ok: true, stderr: '' };
           },
         });
       });
 
-      assert.deepEqual(receivedOptions, {});
-      assert.equal(
-        typeof receivedOptions === 'object' &&
-          receivedOptions !== null &&
-          'force' in receivedOptions,
-        false,
-      );
+      assert.deepEqual(receivedCwds, [cwd]);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
@@ -224,7 +223,7 @@ describe('maybeCheckAndPromptUpdate', () => {
   it('does not update or refresh setup when the prompt is declined', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-update-'));
     let updateAttempts = 0;
-    let setupCalls = 0;
+    let setupRefreshCalls = 0;
 
     try {
       await withInteractiveTty(async () => {
@@ -236,14 +235,15 @@ describe('maybeCheckAndPromptUpdate', () => {
             updateAttempts += 1;
             return { ok: true, stderr: '' };
           },
-          setup: async () => {
-            setupCalls += 1;
+          runSetupRefresh: async () => {
+            setupRefreshCalls += 1;
+            return { ok: true, stderr: '' };
           },
         });
       });
 
       assert.equal(updateAttempts, 0);
-      assert.equal(setupCalls, 0);
+      assert.equal(setupRefreshCalls, 0);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
@@ -253,7 +253,7 @@ describe('maybeCheckAndPromptUpdate', () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-update-'));
     const originalLog = console.log;
     const logs: string[] = [];
-    let setupCalls = 0;
+    let setupRefreshCalls = 0;
 
     console.log = (...args: unknown[]) => {
       logs.push(args.map((arg) => String(arg)).join(' '));
@@ -266,13 +266,14 @@ describe('maybeCheckAndPromptUpdate', () => {
           fetchLatestVersion: async () => '0.9.0',
           askYesNo: async () => true,
           runGlobalUpdate: () => ({ ok: false, stderr: 'npm exited 1' }),
-          setup: async () => {
-            setupCalls += 1;
+          runSetupRefresh: async () => {
+            setupRefreshCalls += 1;
+            return { ok: true, stderr: '' };
           },
         });
       });
 
-      assert.equal(setupCalls, 0);
+      assert.equal(setupRefreshCalls, 0);
       assert.match(logs.join('\n'), /Update failed\. Run manually: npm install -g oh-my-codex@latest/);
     } finally {
       console.log = originalLog;
@@ -298,8 +299,8 @@ describe('maybeCheckAndPromptUpdate', () => {
             updateAttempts += 1;
             return { ok: true, stderr: '' };
           },
-          setup: async () => {
-            throw new Error('setup should not run when already up to date');
+          runSetupRefresh: async () => {
+            throw new Error('setup refresh should not run when already up to date');
           },
         });
       });
@@ -349,6 +350,7 @@ describe('runImmediateUpdate', () => {
     const originalLog = console.log;
     const logs: string[] = [];
     let setupCalls = 0;
+    const refreshCwds: string[] = [];
     let updateCalls = 0;
     let latestCalls = 0;
 
@@ -375,9 +377,10 @@ describe('runImmediateUpdate', () => {
           updateCalls += 1;
           return { ok: true, stderr: '' };
         },
-        setup: async (options) => {
+        runSetupRefresh: async (refreshCwd) => {
           setupCalls += 1;
-          assert.deepEqual(options ?? {}, {});
+          refreshCwds.push(refreshCwd);
+          return { ok: true, stderr: '' };
         },
       });
 
@@ -385,6 +388,7 @@ describe('runImmediateUpdate', () => {
       assert.equal(latestCalls, 1);
       assert.equal(updateCalls, 1);
       assert.equal(setupCalls, 1);
+      assert.deepEqual(refreshCwds, [cwd]);
       assert.match(logs.join('\n'), /Running: npm install -g oh-my-codex@latest/);
       assert.match(logs.join('\n'), /Updated to v0\.14\.1/);
 
@@ -430,6 +434,94 @@ describe('runImmediateUpdate', () => {
       assert.match(logs.join('\n'), /already up to date \(v0\.14\.0\)/);
     } finally {
       console.log = originalLog;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('fails without writing the success stamp when the fresh setup handoff fails', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-update-now-'));
+    const stampPath = join(cwd, '.codex', '.omx', 'install-state.json');
+    const originalCodexHome = process.env.CODEX_HOME;
+    const originalLog = console.log;
+    const logs: string[] = [];
+    let refreshCalls = 0;
+
+    console.log = (...args: unknown[]) => {
+      logs.push(args.map((arg) => String(arg)).join(' '));
+    };
+
+    process.env.CODEX_HOME = join(cwd, '.codex');
+
+    try {
+      const result = await runImmediateUpdate(cwd, {
+        getCurrentVersion: async () => '0.14.0',
+        fetchLatestVersion: async () => '0.14.1',
+        runGlobalUpdate: () => ({ ok: true, stderr: '' }),
+        runSetupRefresh: async () => {
+          refreshCalls += 1;
+          return { ok: false, stderr: 'updated setup exited 17' };
+        },
+      });
+
+      assert.equal(result.status, 'failed');
+      assert.equal(refreshCalls, 1);
+      assert.match(logs.join('\n'), /Update installed, but the setup refresh failed/);
+      await assert.rejects(readFile(stampPath, 'utf-8'));
+    } finally {
+      console.log = originalLog;
+      if (typeof originalCodexHome === 'string') {
+        process.env.CODEX_HOME = originalCodexHome;
+      } else {
+        delete process.env.CODEX_HOME;
+      }
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('post-update setup refresh handoff', () => {
+  it('uses the installed package bin entry when resolving the refreshed CLI', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-update-bin-contract-'));
+    const globalRoot = join(cwd, 'global-root');
+    const packageRoot = join(globalRoot, PACKAGE_NAME);
+    const cliRelativePath = join('dist', 'custom', 'omx-entry.js');
+    const cliEntry = join(packageRoot, cliRelativePath);
+
+    try {
+      await mkdir(dirname(cliEntry), { recursive: true });
+      await writeFile(
+        join(packageRoot, 'package.json'),
+        JSON.stringify({ name: PACKAGE_NAME, version: '0.14.1', bin: { omx: cliRelativePath } }, null, 2),
+      );
+      await writeFile(cliEntry, '#!/usr/bin/env node\n');
+
+      assert.equal(await resolveInstalledCliEntry(globalRoot), cliEntry);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to the current published CLI layout when package metadata is unavailable', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-update-bin-fallback-'));
+    const globalRoot = join(cwd, 'global-root');
+    const cliEntry = join(globalRoot, PACKAGE_NAME, 'dist', 'cli', 'omx.js');
+
+    try {
+      await mkdir(dirname(cliEntry), { recursive: true });
+      await writeFile(cliEntry, '#!/usr/bin/env node\n');
+
+      assert.equal(await resolveInstalledCliEntry(globalRoot), cliEntry);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('returns null when neither package bin nor fallback CLI entry exists', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-update-bin-missing-'));
+
+    try {
+      assert.equal(await resolveInstalledCliEntry(join(cwd, 'global-root')), null);
+    } finally {
       await rm(cwd, { recursive: true, force: true });
     }
   });

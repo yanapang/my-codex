@@ -13,7 +13,6 @@ import { spawnSync } from 'child_process';
 import { createInterface } from 'readline/promises';
 import { getPackageRoot } from '../utils/package.js';
 import { omxUserInstallStampPath } from '../utils/paths.js';
-import { setup } from './setup.js';
 
 export interface UpdateState {
   last_checked_at: string;
@@ -30,6 +29,11 @@ interface LatestPackageInfo {
   version?: string;
 }
 
+interface PackageManifest {
+  bin?: string | Record<string, string>;
+  version?: string;
+}
+
 export interface UpdateExecutionResult {
   status: 'updated' | 'up-to-date' | 'declined' | 'failed' | 'unavailable';
   currentVersion: string | null;
@@ -37,6 +41,7 @@ export interface UpdateExecutionResult {
 }
 
 type RunGlobalUpdateResult = { ok: boolean; stderr: string };
+type RunSetupRefreshResult = { ok: boolean; stderr: string };
 
 const PACKAGE_NAME = 'oh-my-codex';
 const CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000; // 12h
@@ -148,7 +153,7 @@ interface UpdateDependencies {
   fetchLatestVersion: typeof fetchLatestVersion;
   getCurrentVersion: typeof getCurrentVersion;
   runGlobalUpdate: typeof runGlobalUpdate;
-  setup: typeof setup;
+  runSetupRefresh: (cwd: string) => Promise<RunSetupRefreshResult>;
 }
 
 const defaultUpdateDependencies: UpdateDependencies = {
@@ -156,7 +161,7 @@ const defaultUpdateDependencies: UpdateDependencies = {
   fetchLatestVersion,
   getCurrentVersion,
   runGlobalUpdate,
-  setup,
+  runSetupRefresh,
 };
 
 function stripLeadingV(version: string): string {
@@ -212,6 +217,87 @@ export function isInstallVersionBump(
   return stripLeadingV(currentVersion) !== stripLeadingV(stamp.installed_version);
 }
 
+function resolveGlobalInstallRoot(): string | null {
+  const result = spawnSync('npm', ['root', '-g'], {
+    encoding: 'utf-8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 15000,
+    windowsHide: true,
+  });
+
+  if (result.error || result.status !== 0) {
+    return null;
+  }
+
+  const root = (result.stdout || '').trim();
+  return root === '' ? null : root;
+}
+
+export async function resolveInstalledCliEntry(globalInstallRoot: string): Promise<string | null> {
+  const packageRoot = join(globalInstallRoot, PACKAGE_NAME);
+  const packageJsonPath = join(packageRoot, 'package.json');
+  let cliRelativePath = join('dist', 'cli', 'omx.js');
+
+  try {
+    const content = await readFile(packageJsonPath, 'utf-8');
+    const pkg = JSON.parse(content) as PackageManifest;
+    if (typeof pkg.bin === 'string' && pkg.bin.trim() !== '') {
+      cliRelativePath = pkg.bin;
+    } else if (
+      pkg.bin &&
+      typeof pkg.bin === 'object' &&
+      typeof pkg.bin.omx === 'string' &&
+      pkg.bin.omx.trim() !== ''
+    ) {
+      cliRelativePath = pkg.bin.omx;
+    }
+  } catch {
+    // Fall back to the published contract used in package.json today.
+  }
+
+  const cliEntry = join(packageRoot, cliRelativePath);
+  return existsSync(cliEntry) ? cliEntry : null;
+}
+
+async function runSetupRefresh(cwd: string): Promise<RunSetupRefreshResult> {
+  const globalInstallRoot = resolveGlobalInstallRoot();
+  if (!globalInstallRoot) {
+    return {
+      ok: false,
+      stderr: 'Unable to resolve the npm global install root after updating.',
+    };
+  }
+
+  const cliEntry = await resolveInstalledCliEntry(globalInstallRoot);
+  if (!cliEntry) {
+    return {
+      ok: false,
+      stderr: `Unable to find the updated OMX CLI entry under ${join(globalInstallRoot, PACKAGE_NAME)}.`,
+    };
+  }
+
+  const result = spawnSync(process.execPath, [cliEntry, 'setup'], {
+    cwd,
+    env: process.env,
+    stdio: 'inherit',
+    timeout: 120000,
+    windowsHide: true,
+  });
+
+  if (result.error) {
+    return { ok: false, stderr: result.error.message };
+  }
+
+  if (result.status !== 0) {
+    return {
+      ok: false,
+      stderr: `The updated setup refresh exited with status ${result.status}.`,
+    };
+  }
+
+  return { ok: true, stderr: '' };
+}
+
 async function executeUpdate(
   options: {
     cwd: string;
@@ -263,7 +349,14 @@ async function executeUpdate(
     return { status: 'failed', currentVersion: current, latestVersion: latest };
   }
 
-  await dependencies.setup();
+  const setupRefreshResult = await dependencies.runSetupRefresh(cwd);
+  if (!setupRefreshResult.ok) {
+    console.log(
+      `[omx] Update installed, but the setup refresh failed. Run \`omx setup\` with the new install. (${setupRefreshResult.stderr})`,
+    );
+    return { status: 'failed', currentVersion: current, latestVersion: latest };
+  }
+
   await writeSuccessfulInstallStamp(latest);
   console.log(`[omx] Updated to v${latest}. Restart to use new code.`);
   return { status: 'updated', currentVersion: current, latestVersion: latest };
