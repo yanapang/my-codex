@@ -645,12 +645,42 @@ describe('buildExploreHarnessArgs', () => {
       '--prompt-file',
       '/pkg/prompts/explore-harness.md',
       '--instructions-file',
-      '/pkg/prompts/explore-lightweight-AGENTS.md',
+      '/pkg/templates/model-instructions/explore-lightweight-AGENTS.md',
       '--model-spark',
       'spark-model',
       '--model-fallback',
       'gpt-5.4-mini',
     ]);
+  });
+
+  it('honors configured env overrides for fallback model and instructions file', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'omx-explore-config-env-'));
+    await writeFile(join(codexHome, '.omx-config.json'), JSON.stringify({
+      env: {
+        OMX_DEFAULT_STANDARD_MODEL: 'standard-local',
+        OMX_DEFAULT_SPARK_MODEL: 'spark-local',
+        OMX_EXPLORE_MODEL_INSTRUCTIONS_FILE: '/config/explore-instructions.md',
+      },
+    }));
+
+    try {
+      const wd = join(tmpdir(), 'omx-explore-arg-test');
+      const args = buildExploreHarnessArgs('find auth', wd, {
+        CODEX_HOME: codexHome,
+      } as NodeJS.ProcessEnv, '/pkg');
+      assert.deepEqual(args.slice(4), [
+        '--prompt-file',
+        '/pkg/prompts/explore-harness.md',
+        '--instructions-file',
+        '/config/explore-instructions.md',
+        '--model-spark',
+        'spark-local',
+        '--model-fallback',
+        'standard-local',
+      ]);
+    } finally {
+      await rm(codexHome, { recursive: true, force: true });
+    }
   });
 });
 

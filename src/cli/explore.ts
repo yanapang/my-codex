@@ -8,7 +8,15 @@ import {
   resolveSparkShellBinaryPathWithHydration,
   runSparkShellBinary,
 } from './sparkshell.js';
-import { getSparkDefaultModel, getStandardDefaultModel } from '../config/models.js';
+import {
+  DEFAULT_SPARK_MODEL,
+  DEFAULT_STANDARD_MODEL,
+  getEnvConfiguredSparkDefaultModel,
+  getEnvConfiguredStandardDefaultModel,
+  getSparkDefaultModel,
+  getStandardDefaultModel,
+  readConfiguredEnvOverrides,
+} from '../config/models.js';
 import {
   EXPLORE_BIN_ENV as EXPLORE_BIN_ENV_SHARED,
   hydrateNativeBinary,
@@ -400,9 +408,20 @@ export function buildExploreHarnessArgs(
   env: NodeJS.ProcessEnv = process.env,
   packageRoot = getPackageRoot(),
 ): string[] {
-  const sparkModel = env[EXPLORE_SPARK_MODEL_ENV]?.trim() || getSparkDefaultModel();
-  const instructionsFile = env[EXPLORE_INSTRUCTIONS_FILE_ENV]?.trim()
-    || join(packageRoot, 'prompts', 'explore-lightweight-AGENTS.md');
+  const configuredEnvOverrides = readConfiguredEnvOverrides(env.CODEX_HOME);
+  const mergedEnv = {
+    ...configuredEnvOverrides,
+    ...env,
+  };
+  const sparkModel = mergedEnv[EXPLORE_SPARK_MODEL_ENV]?.trim()
+    || getEnvConfiguredSparkDefaultModel(mergedEnv, mergedEnv.CODEX_HOME)
+    || getSparkDefaultModel(mergedEnv.CODEX_HOME)
+    || DEFAULT_SPARK_MODEL;
+  const instructionsFile = mergedEnv[EXPLORE_INSTRUCTIONS_FILE_ENV]?.trim()
+    || join(packageRoot, 'templates', 'model-instructions', 'explore-lightweight-AGENTS.md');
+  const fallbackModel = getEnvConfiguredStandardDefaultModel(mergedEnv, mergedEnv.CODEX_HOME)
+    || getStandardDefaultModel(mergedEnv.CODEX_HOME)
+    || DEFAULT_STANDARD_MODEL;
   const promptWithWikiContext = buildExplorePromptWithWikiContext(prompt, cwd);
   return [
     '--cwd', cwd,
@@ -410,7 +429,7 @@ export function buildExploreHarnessArgs(
     '--prompt-file', join(packageRoot, 'prompts', 'explore-harness.md'),
     '--instructions-file', instructionsFile,
     '--model-spark', sparkModel,
-    '--model-fallback', getStandardDefaultModel(),
+    '--model-fallback', fallbackModel,
   ];
 }
 

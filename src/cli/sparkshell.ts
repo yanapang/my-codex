@@ -190,13 +190,16 @@ export function runSparkShellBinary(
   } = options;
 
   const configEnvOverrides = readConfiguredEnvOverrides(env.CODEX_HOME);
-  const instructionsFile = env[OMX_SPARKSHELL_INSTRUCTIONS_FILE_ENV]?.trim()
-    || join(getPackageRoot(), 'prompts', 'sparkshell-lightweight-AGENTS.md');
+  const mergedEnv = {
+    ...configEnvOverrides,
+    ...env,
+  };
+  const instructionsFile = mergedEnv[OMX_SPARKSHELL_INSTRUCTIONS_FILE_ENV]?.trim()
+    || join(getPackageRoot(), 'templates', 'model-instructions', 'sparkshell-lightweight-AGENTS.md');
   const spawnOptions: SpawnSyncOptionsWithStringEncoding = {
     cwd,
     env: {
-      ...configEnvOverrides,
-      ...env,
+      ...mergedEnv,
       [OMX_SPARKSHELL_INSTRUCTIONS_FILE_ENV]: instructionsFile,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
