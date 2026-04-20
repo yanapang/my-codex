@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, it } from 'node:test';
-import { readdir } from 'node:fs/promises';
+import { markQuestionAnswered, readQuestionRecord } from '../../question/state.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, '..', '..', '..');
@@ -86,29 +86,22 @@ describe('omx question CLI', () => {
 
     assert.notEqual(recordFile, '', `expected question record file, stderr=${stderr}`);
     const recordPath = join(questionsDir, recordFile);
-    const record = JSON.parse(await readFile(recordPath, 'utf-8')) as { question_id: string };
-    await writeFile(recordPath, JSON.stringify({
-      kind: 'omx.question/v1',
-      question_id: record.question_id,
-      session_id: 'sess-q',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      status: 'answered',
-      question: 'Pick one',
-      options: [{ label: 'A', value: 'a' }, { label: 'B', value: 'b' }],
-      allow_other: true,
-      other_label: 'Other',
-      type: 'multi-answerable',
-      multi_select: true,
-      source: 'deep-interview',
-      answer: {
-        kind: 'other',
-        value: 'free text answer',
-        selected_labels: ['Other'],
-        selected_values: ['free text answer'],
-        other_text: 'free text answer',
-      },
-    }, null, 2));
+
+    let record = null;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      record = await readQuestionRecord(recordPath);
+      if (record?.status === 'prompting') break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    assert.equal(record?.status, 'prompting', `expected prompting question record, stderr=${stderr}`);
+    await markQuestionAnswered(recordPath, {
+      kind: 'other',
+      value: 'free text answer',
+      selected_labels: ['Other'],
+      selected_values: ['free text answer'],
+      other_text: 'free text answer',
+    });
 
     const exitCode = await new Promise<number | null>((resolve) => child.on('close', resolve));
     assert.equal(exitCode, 0, stderr || stdout);
