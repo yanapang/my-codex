@@ -97,8 +97,9 @@ describe('question answer injection', () => {
     );
   });
 
-  it('injects the answered text back into the requester pane and submits separately', () => {
+  it('injects the answered text back into the requester pane and submits with isolated double C-m', () => {
     const calls: string[][] = [];
+    const sleeps: number[] = [];
     const ok = injectQuestionAnswerToPane(
       '%11',
       {
@@ -111,14 +112,18 @@ describe('question answer injection', () => {
         calls.push(args);
         return '';
       },
+      (ms) => {
+        sleeps.push(ms);
+      },
     );
 
     assert.equal(ok, true);
     assert.deepEqual(calls, [
       ['send-keys', '-t', '%11', '-l', '--', '[omx question answered] proceed'],
-      ['send-keys', '-t', '%11', 'Enter'],
-      ['send-keys', '-t', '%11', 'Enter'],
-      ['send-keys', '-t', '%11', 'Enter'],
+      ['send-keys', '-t', '%11', 'C-m'],
+      ['send-keys', '-t', '%11', 'C-m'],
     ]);
+    assert.deepEqual(sleeps, [120, 100]);
+    assert.equal(calls.some((argv) => argv.includes('Enter')), false);
   });
 });
