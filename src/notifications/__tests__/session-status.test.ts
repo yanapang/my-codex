@@ -215,4 +215,68 @@ describe('session-status helper', () => {
       await rm(wd, { recursive: true, force: true });
     }
   });
+
+  it('filters root skill-active fallback to entries visible to the requested session', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-session-status-foreign-root-'));
+    try {
+      await writeJson(join(wd, '.omx', 'state', 'skill-active-state.json'), {
+        active: true,
+        skill: 'team',
+        phase: 'running',
+        updated_at: '2026-03-20T00:04:30.000Z',
+        active_skills: [
+          {
+            skill: 'ralph',
+            phase: 'executing',
+            active: true,
+            session_id: 'sess-foreign',
+            updated_at: '2026-03-20T00:04:30.000Z',
+          },
+          {
+            skill: 'team',
+            phase: 'running',
+            active: true,
+            updated_at: '2026-03-20T00:04:30.000Z',
+          },
+        ],
+      });
+
+      const status = await buildDiscordSessionStatusReply(createMapping(wd, 'sess-main'), {
+        now: '2026-03-20T00:05:00.000Z',
+      });
+
+      assert.match(status, /State: team\/running/);
+      assert.doesNotMatch(status, /ralph\/executing/);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores root skill-active fallback when all active entries belong to another session', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-session-status-root-only-foreign-'));
+    try {
+      await writeJson(join(wd, '.omx', 'state', 'skill-active-state.json'), {
+        active: true,
+        skill: 'ralph',
+        phase: 'executing',
+        updated_at: '2026-03-20T00:04:30.000Z',
+        active_skills: [{
+          skill: 'ralph',
+          phase: 'executing',
+          active: true,
+          session_id: 'sess-foreign',
+          updated_at: '2026-03-20T00:04:30.000Z',
+        }],
+      });
+
+      const status = await buildDiscordSessionStatusReply(createMapping(wd, 'sess-main'), {
+        now: '2026-03-20T00:05:00.000Z',
+      });
+
+      assert.equal(status, STATUS_DATA_UNAVAILABLE_MESSAGE);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
 });
