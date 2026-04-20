@@ -347,7 +347,7 @@ describe("codex native hook dispatch", () => {
     }
   });
 
-  it("appends .omx/ to repo-root .gitignore during SessionStart when missing", async () => {
+  it("adds .omx/ to git info/exclude during SessionStart instead of mutating repo .gitignore", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-session-gitignore-"));
     try {
       await writeFile(join(cwd, ".gitignore"), "node_modules/\n");
@@ -364,11 +364,68 @@ describe("codex native hook dispatch", () => {
 
       assert.equal(result.omxEventName, "session-start");
       const gitignore = await readFile(join(cwd, ".gitignore"), "utf-8");
-      assert.match(gitignore, /^node_modules\/\n\.omx\/\n$/);
+      assert.equal(gitignore, "node_modules/\n");
+      const exclude = await readFile(join(cwd, ".git", "info", "exclude"), "utf-8");
+      assert.match(exclude, /(?:^|\n)\.omx\/\n/);
       assert.match(
         JSON.stringify(result.outputJson),
-        /Added \.omx\/ to .*\.gitignore/,
+        /Added \.omx\/ to .*\.git[\/]info[\/]exclude/,
       );
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps SessionStart quiet when .omx/ is already ignored by repo-level gitignore", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-session-existing-ignore-"));
+    try {
+      await writeFile(join(cwd, ".gitignore"), "node_modules/\n.omx/\n");
+      execFileSync("git", ["init"], { cwd, stdio: "pipe" });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "SessionStart",
+          cwd,
+          session_id: "sess-gitignore-existing",
+        },
+        { cwd, sessionOwnerPid: 43210 },
+      );
+
+      assert.equal(result.omxEventName, "session-start");
+      const gitignore = await readFile(join(cwd, ".gitignore"), "utf-8");
+      assert.equal(gitignore, "node_modules/\n.omx/\n");
+      const exclude = await readFile(join(cwd, ".git", "info", "exclude"), "utf-8");
+      assert.doesNotMatch(exclude, /(?:^|\n)\.omx\/\n/);
+      assert.doesNotMatch(JSON.stringify(result.outputJson), /Added \.omx\//);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("respects existing Git ignore resolution before writing local excludes", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-session-global-ignore-"));
+    const excludesFile = join(cwd, "global-ignore");
+    try {
+      await writeFile(join(cwd, ".gitignore"), "node_modules/\n");
+      await writeFile(excludesFile, ".omx/\n");
+      execFileSync("git", ["init"], { cwd, stdio: "pipe" });
+      execFileSync("git", ["config", "core.excludesfile", excludesFile], { cwd, stdio: "pipe" });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "SessionStart",
+          cwd,
+          session_id: "sess-gitignore-global",
+        },
+        { cwd, sessionOwnerPid: 43210 },
+      );
+
+      assert.equal(result.omxEventName, "session-start");
+      const gitignore = await readFile(join(cwd, ".gitignore"), "utf-8");
+      assert.equal(gitignore, "node_modules/\n");
+      const exclude = await readFile(join(cwd, ".git", "info", "exclude"), "utf-8");
+      assert.doesNotMatch(exclude, /(?:^|\n)\.omx\/\n/);
+      assert.doesNotMatch(JSON.stringify(result.outputJson), /Added \.omx\//);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
