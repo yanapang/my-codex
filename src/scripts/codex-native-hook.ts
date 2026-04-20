@@ -403,32 +403,55 @@ function resolveSessionOwnerPid(payload: CodexHookPayload): number {
   return process.pid;
 }
 
-async function ensureOmxGitignoreEntry(cwd: string): Promise<{ changed: boolean; gitignorePath?: string }> {
-  let repoRoot = "";
+function tryReadGitValue(cwd: string, args: string[]): string | null {
   try {
-    repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+    const value = execFileSync("git", args, {
       cwd,
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
       windowsHide: true,
     }).trim();
+    return value || null;
   } catch {
+    return null;
+  }
+}
+
+function isPathIgnoredByGit(cwd: string, path: string): boolean {
+  try {
+    execFileSync("git", ["check-ignore", "-q", path], {
+      cwd,
+      stdio: ["ignore", "ignore", "ignore"],
+      windowsHide: true,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureOmxLocalIgnoreEntry(cwd: string): Promise<{ changed: boolean; excludePath?: string }> {
+  const repoRoot = tryReadGitValue(cwd, ["rev-parse", "--show-toplevel"]);
+  if (!repoRoot) return { changed: false };
+  if (isPathIgnoredByGit(repoRoot, ".omx/")) {
     return { changed: false };
   }
-  if (!repoRoot) return { changed: false };
 
-  const gitignorePath = join(repoRoot, ".gitignore");
-  const existing = existsSync(gitignorePath)
-    ? await readFile(gitignorePath, "utf-8")
+  const excludePathValue = tryReadGitValue(repoRoot, ["rev-parse", "--git-path", "info/exclude"]);
+  if (!excludePathValue) return { changed: false };
+  const excludePath = resolve(repoRoot, excludePathValue);
+
+  const existing = existsSync(excludePath)
+    ? await readFile(excludePath, "utf-8")
     : "";
   const lines = existing.split(/\r?\n/).map((line) => line.trim());
   if (lines.includes(".omx/")) {
-    return { changed: false, gitignorePath };
+    return { changed: false, excludePath };
   }
 
   const next = `${existing}${existing.endsWith("\n") || existing.length === 0 ? "" : "\n"}.omx/\n`;
-  await writeFile(gitignorePath, next);
-  return { changed: true, gitignorePath };
+  await writeFile(excludePath, next);
+  return { changed: true, excludePath };
 }
 
 async function buildSessionStartContext(
@@ -437,9 +460,9 @@ async function buildSessionStartContext(
 ): Promise<string | null> {
   const sections: string[] = [];
 
-  const gitignoreResult = await ensureOmxGitignoreEntry(cwd);
-  if (gitignoreResult.changed) {
-    sections.push(`Added .omx/ to ${gitignoreResult.gitignorePath} to keep local OMX state out of source control.`);
+  const localIgnoreResult = await ensureOmxLocalIgnoreEntry(cwd);
+  if (localIgnoreResult.changed) {
+    sections.push(`Added .omx/ to ${localIgnoreResult.excludePath} to keep local OMX state out of source control without mutating tracked repo ignores.`);
   }
 
   const modeSummaries: string[] = [];
