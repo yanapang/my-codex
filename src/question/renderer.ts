@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { basename } from 'node:path';
 import { parsePaneIdFromTmuxOutput } from '../hud/tmux.js';
+import { buildSendPaneArgvs } from '../notifications/tmux-detector.js';
 import { sleepSync } from '../utils/sleep.js';
 import { sanitizeReplyInput } from '../notifications/reply-listener.js';
 import { getCurrentTmuxPaneId } from '../notifications/tmux.js';
@@ -36,11 +37,12 @@ function isPaneId(value: string | null | undefined): value is string {
 
 export function resolveQuestionRendererStrategy(
   env: NodeJS.ProcessEnv = process.env,
-  tmuxBinary = resolveTmuxBinaryForPlatform(),
+  // Kept for callers/tests that used to pass detected tmux availability; default
+  // strategy selection now depends only on renderer visibility signals.
+  _tmuxBinary?: string | null,
 ): QuestionRendererStrategy {
   if (safeString(env.OMX_QUESTION_TEST_RENDERER).trim() === 'noop') return 'test-noop';
   if (safeString(env.TMUX).trim() !== '') return 'inside-tmux';
-  if (tmuxBinary) return 'detached-tmux';
   return 'unsupported';
 }
 
@@ -140,13 +142,13 @@ export function injectQuestionAnswerToPane(
   const text = formatQuestionAnswerForInjection(answer);
   if (!text) return false;
 
-  execTmux(['send-keys', '-t', paneId, '-l', '--', text]);
-  // Match the repo-standard Codex raw-mode submit sequence: let literal text
-  // settle, then send isolated C-m submits rather than Enter key names.
-  sleepImpl(QUESTION_TEXT_SETTLE_MS);
-  execTmux(['send-keys', '-t', paneId, 'C-m']);
-  sleepImpl(QUESTION_SUBMIT_REPEAT_DELAY_MS);
-  execTmux(['send-keys', '-t', paneId, 'C-m']);
+  const argvs = buildSendPaneArgvs(paneId, text, true);
+  for (const [index, argv] of argvs.entries()) {
+    execTmux(argv);
+    const hasNextArgv = index < argvs.length - 1;
+    if (!hasNextArgv) continue;
+    sleepImpl(index === 0 ? QUESTION_TEXT_SETTLE_MS : QUESTION_SUBMIT_REPEAT_DELAY_MS);
+  }
   return true;
 }
 
@@ -162,6 +164,13 @@ export function launchQuestionRenderer(
   const execTmux = deps.execTmux ?? defaultExecTmux;
   const sleepImpl = deps.sleepSync ?? sleepSync;
   const launchedAt = options.nowIso ?? new Date().toISOString();
+
+  if (strategy === 'unsupported') {
+    throw new Error(
+      'omx question cannot open a visible renderer because this process is not running inside an attached tmux pane. Run omx question from inside tmux.',
+    );
+  }
+
   const commandArgs = buildQuestionUiTmuxArgs(options.recordPath, {
     cwd: options.cwd,
     env: options.env,
@@ -231,5 +240,6 @@ export function launchQuestionRenderer(
     };
   }
 
-  throw new Error('omx question requires tmux for OMX-owned question UI rendering in this session.');
+  const exhaustiveStrategy: never = strategy;
+  throw new Error(`Unsupported omx question renderer strategy: ${exhaustiveStrategy}`);
 }
