@@ -566,16 +566,49 @@ async function buildSessionStartContext(
   return sections.length > 0 ? sections.join("\n\n") : null;
 }
 
-function buildDeepInterviewQuestionBridgeInstruction(cwd: string): string {
+function resolveQuestionLeaderPaneHint(cwd: string, payload?: CodexHookPayload): string {
+  const payloadSessionId = safeString(payload?.session_id).trim();
+  const envSessionId = safeString(process.env.OMX_SESSION_ID || process.env.CODEX_SESSION_ID || process.env.SESSION_ID).trim();
+  const sessionId = payloadSessionId || envSessionId;
+  const candidatePaths = [
+    ...(sessionId ? [getStatePath('deep-interview', cwd, sessionId), getStatePath('ralplan', cwd, sessionId), getStatePath('ralph', cwd, sessionId)] : []),
+    getStatePath('deep-interview', cwd),
+    getStatePath('ralplan', cwd),
+    getStatePath('ralph', cwd),
+  ];
+
+  for (const path of candidatePaths) {
+    try {
+      if (!existsSync(path)) continue;
+      const parsed = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
+      const pane = safeString(parsed?.tmux_pane_id).trim();
+      if (/^%\d+$/.test(pane)) return pane;
+    } catch {
+      // best effort only
+    }
+  }
+
+  const envPane = safeString(process.env.TMUX_PANE).trim();
+  return /^%\d+$/.test(envPane) ? envPane : '';
+}
+
+function buildDeepInterviewQuestionBridgeInstruction(cwd: string, payload?: CodexHookPayload): string {
   const omxBin = resolveOmxCliEntryPath({ cwd }) || process.argv[1] || "omx";
-  const bridgeCommand = `${shellEscapeSingle(process.execPath)} ${shellEscapeSingle(omxBin)} question`;
-  return `Deep-interview must ask each interview round via \`omx question\`; do not fall back to \`request_user_input\` or plain-text questioning. After starting \`omx question\` in a background terminal, wait for that terminal to finish and read the JSON answer before continuing the interview. If bare \`omx question\` is unavailable in this reused session, use the current-session CLI bridge command: \`${bridgeCommand}\`. Stop remains blocked while a deep-interview question obligation is pending.`;
+  const leaderPaneHint = resolveQuestionLeaderPaneHint(cwd, payload);
+  const bridgeCommand = leaderPaneHint
+    ? `OMX_QUESTION_RETURN_PANE=${shellEscapeSingle(leaderPaneHint)} ${shellEscapeSingle(process.execPath)} ${shellEscapeSingle(omxBin)} question`
+    : `${shellEscapeSingle(process.execPath)} ${shellEscapeSingle(omxBin)} question`;
+  const enforcementNote = leaderPaneHint
+    ? ` When using Bash/background-terminal tool paths, preserve the leader pane by exporting \`OMX_QUESTION_RETURN_PANE=${leaderPaneHint}\` (or equivalent) before invoking \`omx question\`.`
+    : '';
+  return `Deep-interview must ask each interview round via \`omx question\`; do not fall back to \`request_user_input\` or plain-text questioning. After starting \`omx question\` in a background terminal, wait for that terminal to finish and read the JSON answer before continuing the interview. If bare \`omx question\` is unavailable in this reused session, use the current-session CLI bridge command: \`${bridgeCommand}\`.${enforcementNote} Stop remains blocked while a deep-interview question obligation is pending.`;
 }
 
 function buildAdditionalContextMessage(
   prompt: string,
   skillState?: SkillActiveState | null,
   cwd: string = process.cwd(),
+  payload?: CodexHookPayload,
 ): string | null {
   if (!prompt) return null;
   const promptPriorityMessage = buildPromptPriorityMessage(prompt);
@@ -596,7 +629,7 @@ function buildAdditionalContextMessage(
     ? "Prompt-side `$ralph` activation seeds Ralph workflow state only; it does not invoke `omx ralph`. Use `omx ralph --prd ...` only when you explicitly want the PRD-gated CLI startup path."
     : null;
   const deepInterviewPromptActivationNote = skillState?.initialized_mode === "deep-interview"
-    ? buildDeepInterviewQuestionBridgeInstruction(cwd)
+    ? buildDeepInterviewQuestionBridgeInstruction(cwd, payload)
     : null;
   const combinedTransitionMessage = (() => {
     if (!skillState?.transition_message) return null;
@@ -1784,7 +1817,7 @@ export async function dispatchCodexNativeHook(
   if (hookEventName === "SessionStart" || hookEventName === "UserPromptSubmit") {
     const additionalContext = hookEventName === "SessionStart"
       ? await buildSessionStartContext(cwd, canonicalSessionId || nativeSessionId)
-      : (buildAdditionalContextMessage(readPromptText(payload), skillState, cwd) ?? triageAdditionalContext);
+      : (buildAdditionalContextMessage(readPromptText(payload), skillState, cwd, payload) ?? triageAdditionalContext);
     if (additionalContext) {
       outputJson = {
         hookSpecificOutput: {
