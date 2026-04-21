@@ -49,8 +49,6 @@ import {
   listModeStateFilesWithScopePreference,
 } from "../mcp/state-paths.js";
 import {
-  readPersistedSetupPreferences,
-  readPersistedSetupScope,
   resolveCodexConfigPathForLaunch,
   resolveCodexHomeForLaunch,
 } from "./codex-home.js";
