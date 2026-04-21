@@ -3262,6 +3262,62 @@ esac
     }
   });
 
+  it("blocks Stop when a same-session deep-interview question obligation is pending even after the mode marked itself inactive", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-deep-interview-question-inactive-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      await mkdir(join(stateDir, "sessions", "sess-stop-deep-interview-question-inactive"), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: "sess-stop-deep-interview-question-inactive" });
+      await writeJson(join(stateDir, "sessions", "sess-stop-deep-interview-question-inactive", "skill-active-state.json"), {
+        version: 1,
+        active: true,
+        skill: "deep-interview",
+        phase: "planning",
+        session_id: "sess-stop-deep-interview-question-inactive",
+        thread_id: "thread-stop-deep-interview-question-inactive",
+      });
+      await writeJson(join(stateDir, "sessions", "sess-stop-deep-interview-question-inactive", "deep-interview-state.json"), {
+        active: false,
+        mode: "deep-interview",
+        current_phase: "intent-first",
+        lifecycle_outcome: "askuserQuestion",
+        run_outcome: "blocked_on_user",
+        completed_at: "2026-04-19T03:20:30.000Z",
+        session_id: "sess-stop-deep-interview-question-inactive",
+        thread_id: "thread-stop-deep-interview-question-inactive",
+        question_enforcement: {
+          obligation_id: "obligation-inactive",
+          source: "omx-question",
+          status: "pending",
+          lifecycle_outcome: "askuserQuestion",
+          requested_at: "2026-04-19T03:20:00.000Z",
+        },
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-stop-deep-interview-question-inactive",
+          thread_id: "thread-stop-deep-interview-question-inactive",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.deepEqual(result.outputJson, {
+        decision: "block",
+        reason:
+          "Deep interview is still active (phase: intent-first) and has a pending structured question obligation; use `omx question` before stopping.",
+        stopReason: "deep_interview_question_required",
+        systemMessage:
+          "OMX deep-interview is still active (phase: intent-first) and requires a structured question via omx question before stopping.",
+      });
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("keeps blocking pending deep-interview question Stop replays until the obligation changes", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-deep-interview-question-replay-"));
     try {

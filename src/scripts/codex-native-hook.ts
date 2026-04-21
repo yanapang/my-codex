@@ -1038,7 +1038,11 @@ async function buildDeepInterviewQuestionStopOutput(
   threadId: string,
 ): Promise<{ output: Record<string, unknown>; obligationId: string } | null> {
   const modeState = await readStopSessionPinnedState("deep-interview-state.json", cwd, sessionId);
-  if (!modeState || modeState.active !== true) return null;
+  if (!modeState) return null;
+
+  const questionEnforcement = safeObject(modeState.question_enforcement);
+  const hasPendingQuestionObligation = isPendingDeepInterviewQuestionEnforcement(questionEnforcement);
+  if (modeState.active !== true && !hasPendingQuestionObligation) return null;
 
   const phase = formatPhase(modeState.current_phase, "planning");
   if (TERMINAL_MODE_PHASES.has(phase.toLowerCase()) || phase === "completing") {
@@ -1054,8 +1058,7 @@ async function buildDeepInterviewQuestionStopOutput(
     if (!blocker) return null;
   }
 
-  const questionEnforcement = safeObject(modeState.question_enforcement);
-  if (!isPendingDeepInterviewQuestionEnforcement(questionEnforcement)) {
+  if (!hasPendingQuestionObligation) {
     return null;
   }
 
