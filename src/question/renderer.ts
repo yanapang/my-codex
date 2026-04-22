@@ -149,6 +149,20 @@ function resolveReturnTarget(options: {
   return isPaneId(detectedPane) ? detectedPane : undefined;
 }
 
+function isCurrentTmuxSessionAttached(
+  execTmux: ExecTmuxSync = defaultExecTmux,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const paneTarget = safeString(env.TMUX_PANE).trim();
+  const targetArgs = isPaneId(paneTarget) ? ['-t', paneTarget] : [];
+  try {
+    const attached = execTmux(['display-message', '-p', ...targetArgs, '#{session_attached}']).trim();
+    return Number.parseInt(attached, 10) > 0;
+  } catch {
+    return false;
+  }
+}
+
 function isLaunchedQuestionPaneAlive(
   paneId: string,
   execTmux: ExecTmuxSync,
@@ -240,6 +254,12 @@ export function launchQuestionRenderer(
   });
 
   if (strategy === 'inside-tmux') {
+    if (!isCurrentTmuxSessionAttached(execTmux, options.env ?? process.env)) {
+      throw new Error(
+        'omx question cannot open a visible renderer because this tmux session has no attached client. Run omx question from an attached tmux pane.',
+      );
+    }
+
     const returnTarget = resolveReturnTarget({
       cwd: options.cwd,
       env: options.env ?? process.env,
