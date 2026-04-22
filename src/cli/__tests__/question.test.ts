@@ -130,11 +130,11 @@ case "$1" in
     printf '%%0\\t1\\n%%2\\t0\\n'
     ;;
   display-message)
-    if [ "$5" = "#{session_attached}" ]; then
+    if [ "$2" = "-p" ] && [ "$3" = "-t" ] && [ "$4" = "%0" ] && [ "$5" = "#{session_attached}" ]; then
       printf '1\n'
-    else
-      printf '%%0\n'
+      exit 0
     fi
+    printf '%%0\n'
     ;;
 esac
 `, { mode: 0o755 });
