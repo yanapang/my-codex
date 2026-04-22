@@ -43,4 +43,8 @@
 - Operators relying on project-local setup should benefit from the corrected `.codex` launch resolution automatically after setup/update refresh.
 - `omx question` continues to require an operator-visible tmux path for owned question UI rendering; when that path is unavailable it fails closed with actionable guidance.
 
+## Contributors
+
+Thanks to the contributors who made this release possible.
+
 **Full Changelog**: [`v0.14.2...v0.14.3`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.14.2...v0.14.3)
