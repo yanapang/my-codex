@@ -121,6 +121,8 @@ describe('launchQuestionRenderer', () => {
     ]);
     assert.ok(calls[1]?.includes('-e'));
     assert.ok(calls[1]?.includes('OMX_SESSION_ID=s1'));
+    assert.ok(calls[1]?.includes('OMX_QUESTION_RETURN_TARGET=%11'));
+    assert.ok(calls[1]?.includes('OMX_QUESTION_RETURN_TRANSPORT=tmux-send-keys'));
     assert.deepEqual(calls[2], ['list-panes', '-t', '%42', '-F', '#{pane_dead}\t#{pane_id}']);
   });
 

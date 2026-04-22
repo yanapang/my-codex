@@ -55,6 +55,7 @@ function buildQuestionUiTmuxArgs(
     cwd: string;
     env?: NodeJS.ProcessEnv;
     sessionId?: string;
+    returnTarget?: string;
   },
 ): string[] {
   const omxBin = resolveOmxCliEntryPath({
@@ -65,6 +66,12 @@ function buildQuestionUiTmuxArgs(
   if (!omxBin) throw new Error('Unable to resolve OMX CLI entry path for question UI launch.');
   return [
     ...(options.sessionId ? ['-e', `OMX_SESSION_ID=${options.sessionId}`] : []),
+    ...(options.returnTarget ? [
+      '-e',
+      `OMX_QUESTION_RETURN_TARGET=${options.returnTarget}`,
+      '-e',
+      'OMX_QUESTION_RETURN_TRANSPORT=tmux-send-keys',
+    ] : []),
     process.execPath,
     omxBin,
     'question',
@@ -240,6 +247,7 @@ export function launchQuestionRenderer(
   const execTmux = deps.execTmux ?? defaultExecTmux;
   const sleepImpl = deps.sleepSync ?? sleepSync;
   const launchedAt = options.nowIso ?? new Date().toISOString();
+  const env = options.env ?? process.env;
 
   if (strategy === 'unsupported') {
     throw new Error(
@@ -247,24 +255,25 @@ export function launchQuestionRenderer(
     );
   }
 
+  const returnTarget = resolveReturnTarget({
+    cwd: options.cwd,
+    env,
+    sessionId: options.sessionId,
+  });
   const commandArgs = buildQuestionUiTmuxArgs(options.recordPath, {
     cwd: options.cwd,
     env: options.env,
     sessionId: options.sessionId,
+    returnTarget,
   });
 
   if (strategy === 'inside-tmux') {
-    if (!isCurrentTmuxSessionAttached(execTmux, options.env ?? process.env)) {
+    if (!isCurrentTmuxSessionAttached(execTmux, env)) {
       throw new Error(
         'omx question cannot open a visible renderer because this tmux session has no attached client. Run omx question from an attached tmux pane.',
       );
     }
 
-    const returnTarget = resolveReturnTarget({
-      cwd: options.cwd,
-      env: options.env ?? process.env,
-      sessionId: options.sessionId,
-    });
     const rawPane = execTmux([
       'split-window',
       '-v',
