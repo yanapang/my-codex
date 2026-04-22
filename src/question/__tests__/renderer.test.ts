@@ -233,6 +233,7 @@ describe('launchQuestionRenderer', () => {
 
       assert.equal(result.return_target, '%91');
       assert.equal(result.return_transport, 'tmux-send-keys');
+      assert.deepEqual(calls[0], ['display-message', '-p', '#{session_attached}']);
       assert.equal(calls[1]?.[0], 'split-window');
     } finally {
       rmSync(cwd, { recursive: true, force: true });
