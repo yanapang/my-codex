@@ -510,12 +510,12 @@ function normalizeWorkflowKeyboardTypos(text: string): string {
 }
 
 function hasExplicitSkillLikeInvocation(text: string): boolean {
-  return /(?:^|[^\w])\$(?:omx:)?([a-z][a-z0-9-]*)\b/i.test(text);
+  return /(?:^|[^\w])\$([a-z][a-z0-9-]*)\b/i.test(text);
 }
 
 function extractExplicitSkillInvocations(text: string): KeywordMatch[] {
   const results: KeywordMatch[] = [];
-  const regex = /(?:^|[^\w])\$(?:omx:)?([a-z][a-z0-9-]*)\b/gi;
+  const regex = /(?:^|[^\w])\$([a-z][a-z0-9-]*)\b/gi;
   let match: RegExpExecArray | null;
   let captureStarted = false;
   let lastMatchEnd = -1;
@@ -535,14 +535,12 @@ function extractExplicitSkillInvocations(text: string): KeywordMatch[] {
     }
 
     captureStarted = true;
-    lastMatchEnd = regex.lastIndex;
+    lastMatchEnd = matchStart + token.length + 1;
 
     if (results.some((item) => item.skill === normalizedSkill)) continue;
 
-    const invocationPrefix = match[0].includes('$omx:') ? '$omx:' : '$';
-
     results.push({
-      keyword: `${invocationPrefix}${token}`,
+      keyword: `$${token}`,
       skill: normalizedSkill,
       priority: registryEntry.priority,
     });

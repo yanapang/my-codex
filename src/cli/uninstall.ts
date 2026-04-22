@@ -4,7 +4,7 @@
 
 import { readFile, writeFile, readdir, rm } from "fs/promises";
 import { existsSync } from "fs";
-import { join, basename, relative } from "path";
+import { join, basename } from "path";
 import {
   stripExistingOmxBlocks,
   stripOmxEnvSettings,
@@ -46,8 +46,6 @@ interface UninstallSummary {
   cacheDirectoryRemoved: boolean;
   legacySkillRootWarning: string | null;
 }
-
-const OMX_SKILL_NAMESPACE = "omx";
 
 const OMX_MCP_SERVERS = [
   "omx_state",
@@ -219,43 +217,17 @@ async function removeInstalledSkills(
 
   for (const entry of sourceEntries) {
     if (!entry.isDirectory()) continue;
-    const installed = join(skillsDir, OMX_SKILL_NAMESPACE, entry.name);
-    const legacyFlatInstalled = join(skillsDir, entry.name);
+    const installed = join(skillsDir, entry.name);
+    if (!existsSync(installed)) continue;
 
-    for (const candidate of [installed, legacyFlatInstalled]) {
-      if (!existsSync(candidate)) continue;
-
-      if (!options.dryRun) {
-        await rm(candidate, { recursive: true, force: true });
-      }
-      if (options.verbose)
-        console.log(
-          `  ${options.dryRun ? "Would remove" : "Removed"} skill: ${relative(skillsDir, candidate)}/`,
-        );
-      removed++;
+    if (!options.dryRun) {
+      await rm(installed, { recursive: true, force: true });
     }
-  }
-
-  const namespaceDir = join(skillsDir, OMX_SKILL_NAMESPACE);
-  if (existsSync(namespaceDir)) {
-    const manifestDir = join(namespaceDir, ".codex-plugin");
-    if (existsSync(manifestDir)) {
-      if (!options.dryRun) {
-        await rm(manifestDir, { recursive: true, force: true });
-      }
-      if (options.verbose) {
-        console.log(
-          `  ${options.dryRun ? "Would remove" : "Removed"} skill namespace manifest: ${relative(skillsDir, manifestDir)}/`,
-        );
-      }
-    }
-
-    const remaining = await readdir(namespaceDir).catch(() => []);
-    if (remaining.length === 0) {
-      if (!options.dryRun) {
-        await rm(namespaceDir, { recursive: true, force: true });
-      }
-    }
+    if (options.verbose)
+      console.log(
+        `  ${options.dryRun ? "Would remove" : "Removed"} skill: ${entry.name}/`,
+      );
+    removed++;
   }
 
   return removed;
