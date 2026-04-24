@@ -63,7 +63,7 @@ npm install -g @openai/codex oh-my-codex
 omx --madmax --high
 ```
 
-On a real `oh-my-codex` version bump, the global npm install now launches the interactive `omx setup` refresh automatically when a TTY is available. If npm scripts are skipped or the install is non-interactive, run `omx setup` manually or use `omx update` to force the same refresh path later.
+On a real `oh-my-codex` version bump, the global npm install now launches the interactive `omx setup` refresh automatically when a TTY is available. If npm scripts are skipped or the install is non-interactive, run `omx setup` manually or use `omx update` to force the same refresh path later. In user scope, setup now also asks whether OMX skills should continue to live in the resolved user skill root (`legacy`) or be supplied by Codex plugin discovery (`plugin`).
 
 **Codex plugin install note:** this repo also ships an official Codex plugin layout at `plugins/oh-my-codex` with marketplace metadata in `.agents/plugins/marketplace.json`. Plugin install/discovery exposes the packaged OMX skills/workflows, but it is **not** a replacement for `npm install -g oh-my-codex` plus `omx setup`. `omx setup` remains responsible for native agents, prompts/config/hooks/AGENTS.md/HUD/runtime wiring.
 
@@ -195,6 +195,9 @@ omx team shutdown <team-name>
 These are operator/support surfaces:
 - Codex plugin marketplace install/discovery can cache the plugin under `${CODEX_HOME:-~/.codex}/plugins/cache/$MARKETPLACE_NAME/oh-my-codex/$VERSION/` (local installs may use `local` as the version identifier), but that plugin surface is not the full OMX runtime setup
 - `omx setup` installs prompts, skills, AGENTS scaffolding, `.codex/config.toml`, and OMX-managed native Codex hooks in `.codex/hooks.json`
+  - in user scope, setup prompts for `legacy` vs `plugin` skill delivery when no prior choice is persisted
+  - `legacy` keeps updating the resolved user skill root as before
+  - `plugin` skips legacy user-scope skill installation and only removes matching OMX-managed legacy user skill directories after plugin cache readiness is proven under `${CODEX_HOME:-~/.codex}/plugins/cache/.../oh-my-codex/...`
   - setup refresh preserves non-OMX hook entries in `.codex/hooks.json` and only rewrites OMX-managed wrappers
   - `omx uninstall` removes OMX-managed wrappers from `.codex/hooks.json` but keeps the file when user hooks remain
 - `omx update` checks npm immediately, installs the newest global OMX build, then reruns the same interactive setup refresh path

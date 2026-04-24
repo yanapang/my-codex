@@ -155,6 +155,7 @@ Usage:
   omx           Launch Codex CLI (HUD auto-attaches only when already inside tmux)
   omx exec      Run codex exec non-interactively with OMX AGENTS/overlay injection
   omx setup     Install skills, prompts, MCP servers, and scope-specific AGENTS.md
+                (user scope prompts for legacy vs plugin skill delivery when needed)
   omx update    Check npm now, update the global install immediately, then refresh setup
   omx uninstall Remove OMX configuration and clean up installed artifacts
   omx doctor    Check installation health
@@ -223,9 +224,6 @@ Options:
   --verbose     Show detailed output
   --scope       Setup scope for "omx setup" only:
                 user | project
-  --skill-target
-                User-scope skills target for "omx setup" only:
-                codex-home
 `;
 
 const REASONING_KEY = "model_reasoning_effort";
