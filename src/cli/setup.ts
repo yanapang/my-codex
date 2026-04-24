@@ -679,7 +679,7 @@ async function ensureProjectGitignore(
 
   const nextContent = destinationExists
     ? `${normalized.content}${normalized.content.endsWith("\n") || normalized.content.length === 0 ? "" : "\n"}${missingEntries.join("\n")}${missingEntries.length > 0 ? "\n" : ""}`
-    : `${PROJECT_GITIGNORE_ENTRIES.join("\n")}\n`;
+    : `${missingEntries.join("\n")}\n`;
 
   if (
     await ensureBackup(gitignorePath, destinationExists, backupContext, options)
