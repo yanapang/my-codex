@@ -443,7 +443,7 @@ function tryReadGitValue(cwd: string, args: string[]): string | null {
 
 function isPathIgnoredByGit(cwd: string, path: string): boolean {
   try {
-    execFileSync("git", ["check-ignore", "-q", path], {
+    execFileSync("git", ["check-ignore", "--no-index", "-q", path], {
       cwd,
       stdio: ["ignore", "ignore", "ignore"],
       windowsHide: true,
