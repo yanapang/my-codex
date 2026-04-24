@@ -650,7 +650,7 @@ describe('buildExploreHarnessArgs', () => {
       '--model-spark',
       'spark-model',
       '--model-fallback',
-      'gpt-5.4-mini',
+      'gpt-5.5',
     ]);
   });
 
