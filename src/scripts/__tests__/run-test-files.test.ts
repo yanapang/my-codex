@@ -5,16 +5,15 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-function runCompiledRunner(root: string, timeoutMs: number) {
+function runCompiledRunner(root: string, envOverrides: Record<string, string> = {}, timeoutMs = 5_000) {
   return spawnSync(process.execPath, ['dist/scripts/run-test-files.js', root], {
     cwd: process.cwd(),
     encoding: 'utf-8',
     env: {
       ...process.env,
-      OMX_NODE_TEST_TIMEOUT_MS: String(timeoutMs),
-      OMX_NODE_TEST_RUNNER_TIMEOUT_MS: String(timeoutMs + 500),
+      ...envOverrides,
     },
-    timeout: timeoutMs + 5_000,
+    timeout: timeoutMs,
   });
 }
 
@@ -34,12 +33,38 @@ describe('run-test-files diagnostics', () => {
         ].join('\n'),
       );
 
-      const result = runCompiledRunner(wd, 250);
+      const result = runCompiledRunner(wd, {
+        OMX_NODE_TEST_TIMEOUT_MS: '250',
+        OMX_NODE_TEST_RUNNER_TIMEOUT_MS: '750',
+      });
 
       assert.notEqual(result.status, 0);
       assert.match(result.stderr, /per-test timeout 250ms/);
       assert.match(result.stderr, /node --test did not exit normally|runner timeout 750ms/);
       assert.match(`${result.stdout}\n${result.stderr}`, /hang\.test\.js|never resolves|cancelled/i);
+    } finally {
+      rmSync(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('logs that per-test timeout is disabled by default', () => {
+    const wd = mkdtempSync(join(tmpdir(), 'omx-run-test-files-'));
+    try {
+      const testsDir = join(wd, '__tests__');
+      mkdirSync(testsDir, { recursive: true });
+      writeFileSync(
+        join(testsDir, 'pass.test.js'),
+        [
+          "import { test } from 'node:test';",
+          "test('passes', () => {});",
+          '',
+        ].join('\n'),
+      );
+
+      const result = runCompiledRunner(wd);
+
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.match(result.stderr, /per-test timeout disabled/);
     } finally {
       rmSync(wd, { recursive: true, force: true });
     }
