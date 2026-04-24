@@ -54,7 +54,6 @@ import {
 import type { HookEventEnvelope } from "../hooks/extensibility/types.js";
 import { dispatchHookEvent } from "../hooks/extensibility/dispatcher.js";
 import { reconcileHudForPromptSubmit } from "../hud/reconcile.js";
-import { shellEscapeSingle } from "../hud/tmux.js";
 import { onSessionStart as buildWikiSessionStartContext } from "../wiki/lifecycle.js";
 import { readAutoresearchCompletionStatus, readAutoresearchModeState } from "../autoresearch/skill-validation.js";
 import { shouldContinueRun } from "../runtime/run-loop.js";
@@ -71,7 +70,6 @@ import {
   isPendingDeepInterviewQuestionEnforcement,
   reconcileDeepInterviewQuestionEnforcementFromAnsweredRecords,
 } from "../question/deep-interview.js";
-import { resolveOmxCliEntryPath } from "../utils/paths.js";
 import {
   buildDocumentRefreshAdvisoryOutput,
   evaluateFinalHandoffDocumentRefresh,
@@ -623,8 +621,8 @@ function resolveExecutionEnvironment(
   const executionSurface = resolveCodexExecutionSurface(cwd, options);
   const leaderPaneHint = resolveQuestionLeaderPaneHint(cwd, options.payload);
   const questionBridgeHint = leaderPaneHint
-    ? `bridge available via ${leaderPaneHint}; renderer/runtime still validates the target live at launch`
-    : "no visible renderer or tmux bridge detected; it will fail closed until you run inside attached tmux or preserve `OMX_QUESTION_RETURN_PANE`";
+    ? `tmux return bridge recorded at ${leaderPaneHint}, but this process is not attached to tmux; prefer native/user-input fallback unless running from an attached tmux pane`
+    : "not available from this outside-tmux surface; use native structured input when available or ask one concise plain-text question";
 
   if (executionSurface.transport === "attached-tmux") {
     return {
@@ -642,14 +640,6 @@ function resolveExecutionEnvironment(
   }
 
   if (leaderPaneHint) {
-    const omxBin = resolveOmxCliEntryPath({ cwd }) || process.argv[1] || "omx";
-    const isWindows = process.platform === "win32";
-    const bridgeCommand = isWindows
-      ? `$env:OMX_QUESTION_RETURN_PANE = ${quotePowerShellArg(leaderPaneHint)}; & ${quotePowerShellArg(process.execPath)} ${quotePowerShellArg(omxBin)} question`
-      : `OMX_QUESTION_RETURN_PANE=${shellEscapeSingle(leaderPaneHint)} ${shellEscapeSingle(process.execPath)} ${shellEscapeSingle(omxBin)} question`;
-    const bridgePreservationInstruction = isWindows
-      ? `When using PowerShell/background-terminal tool paths, preserve the leader pane by setting \`$env:OMX_QUESTION_RETURN_PANE = '${leaderPaneHint}'\` before invoking \`omx question\`.`
-      : `When using Bash/background-terminal tool paths, preserve the leader pane by exporting \`OMX_QUESTION_RETURN_PANE=${leaderPaneHint}\` (or equivalent) before invoking \`omx question\`.`;
     const isNativeOutsideTmux = executionSurface.launcher === "native";
     return {
       kind: "outside-tmux-with-bridge",
@@ -666,7 +656,7 @@ function resolveExecutionEnvironment(
       teamHelpInstruction: isNativeOutsideTmux
         ? "If you need runtime syntax, run `omx team --help` from an attached tmux OMX CLI shell."
         : "If you need runtime syntax, run `omx team --help` yourself from shell.",
-      deepInterviewInstruction: `Deep-interview must ask each interview round via \`omx question\`; do not fall back to \`request_user_input\` or plain-text questioning. This session is outside tmux but has a tmux return bridge, so invoke the current-session CLI bridge command: \`${bridgeCommand}\`. ${bridgePreservationInstruction} After starting \`omx question\` in a background terminal, wait for that terminal to finish and read the JSON answer before continuing the interview. Stop remains blocked while a deep-interview question obligation is pending.`,
+      deepInterviewInstruction: `Deep-interview is active, but this session is not attached to tmux. Do not invoke \`omx question\`, \`omx hud\`, or \`omx team\` from this surface. Ask each interview round through the native structured question tool when available; otherwise ask exactly one concise plain-text question and wait for the answer. A tmux return bridge (${leaderPaneHint}) is recorded for explicit attached-tmux recovery only, not for default Codex App/native fallback.`,
       leaderPaneHint,
     };
   }
@@ -681,15 +671,6 @@ function resolveExecutionEnvironment(
   const teamHelpInstruction = isNativeOutsideTmux
     ? "If you need runtime syntax, run `omx team --help` from an attached tmux OMX CLI shell rather than from Codex App/native outside-tmux context."
     : "If you need runtime syntax, run `omx team --help` yourself from shell.";
-  const omxBin = resolveOmxCliEntryPath({ cwd }) || process.argv[1] || "omx";
-  const isWindows = process.platform === "win32";
-  const fallbackBridgeCommand = isWindows
-    ? `if ($env:TMUX_PANE) { $env:OMX_QUESTION_RETURN_PANE = $env:TMUX_PANE }; & ${quotePowerShellArg(process.execPath)} ${quotePowerShellArg(omxBin)} question`
-    : `${shellEscapeSingle(process.execPath)} ${shellEscapeSingle(omxBin)} question`;
-  const fallbackBridgeInstruction = isWindows
-    ? " When a bridge exists, preserve it in PowerShell/background-terminal tool paths by setting `$env:OMX_QUESTION_RETURN_PANE = $env:TMUX_PANE` (or a concrete `%pane` value) before invoking `omx question`."
-    : "";
-
   return {
     kind: isNativeOutsideTmux ? "native-outside-tmux" : "direct-cli-outside-tmux",
     launcher: executionSurface.launcher,
@@ -699,7 +680,7 @@ function resolveExecutionEnvironment(
     questionGuidance: questionBridgeHint,
     teamRuntimeInstruction,
     teamHelpInstruction,
-    deepInterviewInstruction: `Deep-interview must ask each interview round via \`omx question\`; do not fall back to \`request_user_input\` or plain-text questioning. This session is outside tmux and no visible renderer/runtime bridge is available, so \`omx question\` will fail closed here until you move into an attached tmux OMX CLI session or preserve \`OMX_QUESTION_RETURN_PANE\` from one. If bare \`omx question\` is unavailable in this reused session, use the current-session CLI bridge command: \`${fallbackBridgeCommand}\`.${fallbackBridgeInstruction} After starting \`omx question\` in a background terminal, wait for that terminal to finish and read the JSON answer before continuing the interview. Stop remains blocked while a deep-interview question obligation is pending.`,
+    deepInterviewInstruction: "Deep-interview is active, but this session is not attached to tmux. Do not invoke `omx question`, `omx hud`, or `omx team` from this surface. Ask each interview round through the native structured question tool when available; otherwise ask exactly one concise plain-text question and wait for the answer. Stop gating still applies to the interview, but no tmux question obligation should be created outside tmux.",
     leaderPaneHint: "",
   };
 }
@@ -746,10 +727,6 @@ function resolveQuestionLeaderPaneHint(cwd: string, payload?: CodexHookPayload):
 
   const envPane = safeString(process.env.TMUX_PANE).trim();
   return /^%\d+$/.test(envPane) ? envPane : '';
-}
-
-function quotePowerShellArg(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
 }
 
 function buildDeepInterviewQuestionBridgeInstruction(cwd: string, payload?: CodexHookPayload): string {
