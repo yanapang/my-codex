@@ -665,6 +665,30 @@ function commandInvokesOmxTeam(command: string): boolean {
   return /\bomx\s+team\b/i.test(command) || /\bomx\.js['"]?\s+team\b/i.test(command);
 }
 
+function commandInvokesOmxHud(command: string): boolean {
+  const tokens = tokenizeShellCommand(command)?.map((token) => token.toLowerCase()) ?? [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const rawToken = tokens[index] || '';
+    const token = rawToken.replace(/\\/g, '/').split('/').pop() || '';
+    if ((token === 'omx' || token === 'omx.js') && tokens[index + 1] === 'hud') return true;
+    if ((token === 'node' || token === 'node.exe') && /(?:^|\/)omx\.js$/.test(tokens[index + 1] || '') && tokens[index + 2] === 'hud') return true;
+  }
+  return /\bomx\s+hud\b/i.test(command) || /\bomx\.js['"]?\s+hud\b/i.test(command);
+}
+
+function buildNativeOmxHudPreToolUseEnforcementOutput(
+  command: string,
+  payload: CodexHookPayload,
+): Record<string, unknown> | null {
+  if (!isNativeOutsideTmuxSurface(payload) || !commandInvokesOmxHud(command)) return null;
+
+  return {
+    decision: "block",
+    reason: "omx hud cannot be launched directly from Codex App/native outside-tmux Bash sessions.",
+    systemMessage: "omx hud is blocked from Bash in Codex App/native outside-tmux sessions; use SessionStart/HUD context instead, or launch OMX CLI from an attached tmux shell first for the tmux HUD runtime.",
+  };
+}
+
 function buildNativeOmxTeamPreToolUseEnforcementOutput(
   command: string,
   payload: CodexHookPayload,
@@ -674,16 +698,7 @@ function buildNativeOmxTeamPreToolUseEnforcementOutput(
   return {
     decision: "block",
     reason: "omx team cannot be launched directly from Codex App/native outside-tmux Bash sessions.",
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      additionalContext: [
-        "native/App omx team runtime enforcement triggered.",
-        "This session is outside tmux, so the durable tmux/worktree OMX team runtime is not directly available from Codex App/native Bash.",
-        "Launch OMX CLI from an attached tmux shell first, then run `omx team ...` there.",
-        `Original command: ${command}`,
-      ].join("\n"),
-    },
-    systemMessage: "omx team is blocked from Bash in Codex App/native outside-tmux sessions; launch OMX CLI from an attached tmux shell first.",
+    systemMessage: `omx team is blocked from Bash in Codex App/native outside-tmux sessions; launch OMX CLI from an attached tmux shell first. Original command: ${command}`,
   };
 }
 
@@ -692,37 +707,21 @@ function buildOmxQuestionPreToolUseEnforcementOutput(
   payload: CodexHookPayload,
 ): Record<string, unknown> | null {
   if (!commandInvokesOmxQuestion(command)) return null;
-  if (commandHasQuestionReturnPane(command)) return null;
 
   if (isNativeOutsideTmuxSurface(payload)) {
     return {
       decision: "block",
-      reason: "omx question cannot be launched directly from Codex App/native outside-tmux Bash sessions unless the command preserves a tmux return bridge.",
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        additionalContext: [
-          "native/App omx question bridge enforcement triggered.",
-          "This session is outside tmux, so `omx question` needs an attached tmux return bridge before Bash can launch it safely.",
-          "Prefix the Bash command with `OMX_QUESTION_RETURN_PANE=$TMUX_PANE` (or a concrete `%pane` value) from an attached tmux OMX CLI shell.",
-          `Original command: ${command}`,
-        ].join("\n"),
-      },
-      systemMessage: "omx question is blocked from Codex App/native outside-tmux Bash until the command preserves `OMX_QUESTION_RETURN_PANE=$TMUX_PANE` or an explicit `%pane` value.",
+      reason: "omx question cannot be launched directly from Codex App/native outside-tmux Bash sessions.",
+      systemMessage: `omx question is blocked from Codex App/native outside-tmux Bash because no attached tmux pane is available. Use the native structured question tool when available, or ask exactly one concise plain-text question. Original command: ${command}`,
     };
   }
+
+  if (commandHasQuestionReturnPane(command)) return null;
 
   return {
     decision: "block",
     reason: "omx question Bash invocations must preserve the leader pane return target.",
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      additionalContext: [
-        "omx question leader-pane enforcement triggered.",
-        "Prefix the Bash command with `OMX_QUESTION_RETURN_PANE=$TMUX_PANE` (or a concrete `%pane` value) so `[omx question answered]` returns to the leader pane even when the tool path drops/stales TMUX_PANE.",
-        `Original command: ${command}`,
-      ].join("\n"),
-    },
-    systemMessage: "omx question is blocked from Bash until the command preserves the leader pane with `OMX_QUESTION_RETURN_PANE=$TMUX_PANE` or an explicit `%pane` value.",
+    systemMessage: `omx question is blocked from Bash until the command preserves the leader pane with \`OMX_QUESTION_RETURN_PANE=$TMUX_PANE\` or an explicit \`%pane\` value. Original command: ${command}`,
   };
 }
 
@@ -733,6 +732,8 @@ export function buildNativePreToolUseOutput(
   if (!normalized.isBash) return null;
   const gitCommitEnforcement = buildGitCommitEnforcementOutput(normalized.normalizedCommand);
   if (gitCommitEnforcement) return gitCommitEnforcement;
+  const hudEnforcement = buildNativeOmxHudPreToolUseEnforcementOutput(normalized.normalizedCommand, payload);
+  if (hudEnforcement) return hudEnforcement;
   const teamEnforcement = buildNativeOmxTeamPreToolUseEnforcementOutput(normalized.normalizedCommand, payload);
   if (teamEnforcement) return teamEnforcement;
   const questionEnforcement = buildOmxQuestionPreToolUseEnforcementOutput(normalized.normalizedCommand, payload);
