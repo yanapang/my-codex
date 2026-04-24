@@ -4,7 +4,7 @@
       "command": "omx",
       "args": [
         "mcp-serve",
-        "state-server.js"
+        "state"
       ],
       "enabled": true
     },
@@ -12,7 +12,7 @@
       "command": "omx",
       "args": [
         "mcp-serve",
-        "memory-server.js"
+        "memory"
       ],
       "enabled": true
     },
@@ -20,7 +20,7 @@
       "command": "omx",
       "args": [
         "mcp-serve",
-        "code-intel-server.js"
+        "code-intel"
       ],
       "enabled": true
     },
@@ -28,7 +28,7 @@
       "command": "omx",
       "args": [
         "mcp-serve",
-        "trace-server.js"
+        "trace"
       ],
       "enabled": true
     },
@@ -36,7 +36,7 @@
       "command": "omx",
       "args": [
         "mcp-serve",
-        "wiki-server.js"
+        "wiki"
       ],
       "enabled": true
     }

@@ -187,7 +187,7 @@ Usage:
   omx code-intel
                 CLI parity for OMX code-intel MCP tools
   omx wiki      CLI parity for OMX wiki MCP tools
-  omx mcp-serve Launch an OMX stdio MCP server entrypoint (plugin/runtime use)
+  omx mcp-serve Launch an OMX stdio MCP server target (plugin/runtime use)
   omx sparkshell <command> [args...]
   omx sparkshell --tmux-pane <pane-id> [--tail-lines <100-1000>]
                 Run native sparkshell sidecar for direct command execution or explicit tmux-pane summarization

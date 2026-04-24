@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { chmod, cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, delimiter, join, relative, sep } from 'node:path';
+import { delimiter, join, relative, sep } from 'node:path';
 import { buildMergedConfig } from '../../config/generator.js';
 import {
   buildOmxPluginMcpManifest,
   OMX_FIRST_PARTY_MCP_ENTRYPOINTS,
+  OMX_FIRST_PARTY_MCP_PLUGIN_TARGETS,
   OMX_FIRST_PARTY_MCP_SERVER_NAMES,
   OMX_PLUGIN_MCP_COMMAND,
   OMX_PLUGIN_MCP_SERVE_SUBCOMMAND,
@@ -171,12 +172,13 @@ describe('official Codex plugin layout', () => {
     for (const [serverName, server] of Object.entries(mcpManifest.mcpServers ?? {})) {
       assert.equal(server.command, OMX_PLUGIN_MCP_COMMAND, `${serverName} should run via omx`);
       assert.equal(server.enabled, true, `${serverName} should be enabled`);
-      assert.equal(server.args?.length, 2, `${serverName} should have serve subcommand + entrypoint args`);
+      assert.equal(server.args?.length, 2, `${serverName} should have serve subcommand + public target args`);
       assert.equal(server.args?.[0], OMX_PLUGIN_MCP_SERVE_SUBCOMMAND, `${serverName} should launch through omx mcp-serve`);
-      const entrypoint = server.args?.[1];
-      assert.ok(entrypoint, `${serverName} should declare an entrypoint`);
-      assert.equal(entrypoint?.includes('..'), false, `${serverName} should not depend on path traversal outside the plugin root`);
-      assert.equal(OMX_FIRST_PARTY_MCP_ENTRYPOINTS.includes(entrypoint ?? ''), true, `${serverName} should use a canonical OMX MCP entrypoint`);
+      const target = server.args?.[1];
+      assert.ok(target, `${serverName} should declare a public target`);
+      assert.equal(target?.includes('..'), false, `${serverName} should not depend on path traversal outside the plugin root`);
+      assert.equal(OMX_FIRST_PARTY_MCP_PLUGIN_TARGETS.includes(target ?? ''), true, `${serverName} should use a stable public OMX MCP target`);
+      assert.equal(target?.endsWith('-server.js'), false, `${serverName} should not expose internal dist filenames in plugin metadata`);
     }
   });
 
@@ -194,9 +196,14 @@ describe('official Codex plugin layout', () => {
     );
     assert.deepEqual(setupManagedServers, Object.keys(mcpManifest.mcpServers ?? {}).sort());
 
+    const targetToEntrypoint = new Map(
+      OMX_FIRST_PARTY_MCP_PLUGIN_TARGETS.map((target, index) => [target, OMX_FIRST_PARTY_MCP_ENTRYPOINTS[index]]),
+    );
+
     for (const [serverName, server] of Object.entries(mcpManifest.mcpServers ?? {})) {
-      const entrypoint = basename(server.args?.[1] ?? '');
-      assert.ok(entrypoint, `${serverName} should expose an entrypoint basename`);
+      const target = server.args?.[1] ?? '';
+      const entrypoint = targetToEntrypoint.get(target);
+      assert.ok(entrypoint, `${serverName} should expose a canonical public target`);
       assert.match(
         mergedConfig,
         new RegExp(`\\[mcp_servers\\.${escapeRegex(serverName)}\\][\\s\\S]*?${escapeRegex(entrypoint)}`),
@@ -205,9 +212,9 @@ describe('official Codex plugin layout', () => {
     }
   });
 
-  it('launches plugin MCP entrypoints from a cache-style plugin root via the installed omx CLI', async () => {
-    for (const entrypoint of OMX_FIRST_PARTY_MCP_ENTRYPOINTS) {
-      await assertPluginCacheLaunchable(entrypoint);
+  it('launches plugin MCP public targets from a cache-style plugin root via the installed omx CLI', async () => {
+    for (const target of OMX_FIRST_PARTY_MCP_PLUGIN_TARGETS) {
+      await assertPluginCacheLaunchable(target);
     }
   });
 
