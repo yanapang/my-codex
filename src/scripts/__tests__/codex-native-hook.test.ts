@@ -1739,6 +1739,35 @@ esac
     }
   });
 
+  it("allows PowerShell env bridge forms for omx question return panes", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-question-powershell-allow-"));
+    try {
+      const commands = [
+        `$env:OMX_QUESTION_RETURN_PANE=$env:TMUX_PANE; omx question --json --input '{"question":"Q?","options":["A"],"allow_other":true}'`,
+        `$env:OMX_QUESTION_RETURN_PANE='%42'; node ./dist/cli/omx.js question --json --input '{"question":"Q?","options":["A"],"allow_other":true}'`,
+        `$env:OMX_LEADER_PANE_ID="%43"; omx question --json --input '{"question":"Q?","options":["A"],"allow_other":true}'`,
+      ];
+
+      for (const [index, command] of commands.entries()) {
+        const result = await dispatchCodexNativeHook(
+          {
+            hook_event_name: "PreToolUse",
+            cwd,
+            tool_name: "Bash",
+            tool_use_id: `tool-question-powershell-allow-${index}`,
+            tool_input: { command },
+          },
+          { cwd },
+        );
+
+        assert.equal(result.omxEventName, "pre-tool-use");
+        assert.equal(result.outputJson, null);
+      }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("allows Bash omx question when a valid inherited OMX_QUESTION_RETURN_PANE bridge is already exported", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-question-env-allow-"));
     const originalReturnPane = process.env.OMX_QUESTION_RETURN_PANE;

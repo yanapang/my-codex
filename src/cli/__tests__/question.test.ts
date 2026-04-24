@@ -183,6 +183,116 @@ esac
     assert.match(record.error?.message || '', /pane %5 disappeared immediately after launch/i);
   });
 
+  it('fails instead of hanging when a renderer pane dies after prompting starts', async () => {
+    const cwd = await makeRepo();
+    const fakeBinDir = join(cwd, 'fake-bin');
+    const tmuxLogPath = join(cwd, 'tmux.log');
+    const countPath = join(cwd, 'list-panes-count');
+    await mkdir(fakeBinDir, { recursive: true });
+    await writeFile(join(fakeBinDir, 'tmux'), `#!/bin/sh
+printf '%s\n' "$*" >> "${tmuxLogPath}"
+case "$1" in
+  display-message)
+    printf '1\n'
+    ;;
+  split-window)
+    printf '%%45\n'
+    ;;
+  list-panes)
+    count=0
+    if [ -f "${countPath}" ]; then count=$(cat "${countPath}"); fi
+    count=$((count + 1))
+    printf '%s' "$count" > "${countPath}"
+    if [ "$count" = "1" ]; then
+      printf '0\t%%45\n'
+      exit 0
+    fi
+    echo "can't find pane: %45" >&2
+    exit 1
+    ;;
+esac
+`, { mode: 0o755 });
+
+    const input = JSON.stringify({
+      question: 'Pick one',
+      options: [{ label: 'A', value: 'a' }],
+      allow_other: true,
+      session_id: 'sess-q',
+    });
+
+    const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
+      const child = spawn(process.execPath, [omxBin, 'question', '--input', input, '--json'], {
+        cwd,
+        env: {
+          ...process.env,
+          PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
+          TMUX: '/tmp/fake',
+          TMUX_PANE: '%0',
+          OMX_AUTO_UPDATE: '0',
+          OMX_NOTIFY_FALLBACK: '0',
+          OMX_HOOK_DERIVED_SIGNALS: '0',
+          OMX_QUESTION_WAIT_TIMEOUT_MS: '5000',
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk) => { stdout += String(chunk); });
+      child.stderr.on('data', (chunk) => { stderr += String(chunk); });
+      child.on('close', (code) => resolve({ code, stdout, stderr }));
+    });
+
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.error.code, 'question_runtime_failed');
+    assert.match(payload.error.message, /renderer tmux-pane %45 exited before answering/i);
+
+    const entries = await readdir(join(cwd, '.omx', 'state', 'sessions', 'sess-q', 'questions'));
+    assert.equal(entries.length, 1);
+    const recordPath = join(cwd, '.omx', 'state', 'sessions', 'sess-q', 'questions', entries[0]!);
+    const record = JSON.parse(await readFile(recordPath, 'utf-8')) as { status: string; error?: { code?: string; message?: string } };
+    assert.equal(record.status, 'error');
+    assert.equal(record.error?.code, 'question_runtime_failed');
+    assert.match(record.error?.message || '', /exited before answering/i);
+  });
+
+  it('times out unanswered test renderers instead of waiting forever', async () => {
+    const cwd = await makeRepo();
+    const input = JSON.stringify({
+      question: 'Pick one',
+      options: [{ label: 'A', value: 'a' }],
+      allow_other: true,
+      session_id: 'sess-q',
+    });
+
+    const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
+      const child = spawn(process.execPath, [omxBin, 'question', '--input', input, '--json'], {
+        cwd,
+        env: {
+          ...process.env,
+          OMX_AUTO_UPDATE: '0',
+          OMX_NOTIFY_FALLBACK: '0',
+          OMX_HOOK_DERIVED_SIGNALS: '0',
+          OMX_QUESTION_TEST_RENDERER: 'noop',
+          OMX_QUESTION_WAIT_TIMEOUT_MS: '50',
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk) => { stdout += String(chunk); });
+      child.stderr.on('data', (chunk) => { stderr += String(chunk); });
+      child.on('close', (code) => resolve({ code, stdout, stderr }));
+    });
+
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.error.code, 'question_runtime_failed');
+    assert.match(payload.error.message, /Timed out waiting for question answer after 50ms/i);
+  });
+
   it('fails closed outside an attached tmux pane without creating a detached session', async () => {
     const cwd = await makeRepo();
     const fakeBinDir = join(cwd, 'fake-bin');
