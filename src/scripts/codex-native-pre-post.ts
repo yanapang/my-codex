@@ -649,8 +649,14 @@ function hasInheritedQuestionReturnPaneBridge(): boolean {
   return /^%\d+$/.test(explicitPane);
 }
 
+function commandHasPowerShellQuestionReturnPane(command: string): boolean {
+  return /\$env:(?:OMX_QUESTION_RETURN_PANE|OMX_LEADER_PANE_ID)\s*=\s*(?:['"]?%\d+['"]?|\$env:TMUX_PANE)\b/i.test(command)
+    || /\$env:TMUX_PANE\s*=\s*['"]?%\d+['"]?/i.test(command);
+}
+
 function commandHasQuestionReturnPane(command: string): boolean {
   if (hasInheritedQuestionReturnPaneBridge()) return true;
+  if (commandHasPowerShellQuestionReturnPane(command)) return true;
   return (tokenizeShellCommand(command) ?? []).some(isQuestionReturnPaneAssignment);
 }
 
