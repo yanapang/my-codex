@@ -165,6 +165,157 @@ exit 0
     }
   });
 
+  it('falls back directly when tmux is installed but the server socket is unusable', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-launch-tmux-stale-socket-'));
+    try {
+      const home = join(wd, 'home');
+      const fakeBin = join(wd, 'bin');
+      const fakeCodexPath = join(fakeBin, 'codex');
+      const fakePsPath = join(fakeBin, 'ps');
+      const fakeTmuxPath = join(fakeBin, 'tmux');
+      const tmuxLogPath = join(wd, 'tmux.log');
+
+      await mkdir(home, { recursive: true });
+      await mkdir(fakeBin, { recursive: true });
+      await writeFile(
+        fakeCodexPath,
+        '#!/bin/sh\nprintf \'fake-codex:%s\\n\' "$*"\n',
+      );
+      await chmod(fakeCodexPath, 0o755);
+      await writeFile(fakePsPath, '#!/bin/sh\nexit 0\n');
+      await chmod(fakePsPath, 0o755);
+      await writeFile(
+        fakeTmuxPath,
+        `#!/bin/sh
+printf 'tmux:%s\n' "$*" >> "${tmuxLogPath}"
+case "$1" in
+  -V)
+    printf 'tmux 3.6a\n'
+    exit 0
+    ;;
+  list-sessions)
+    printf 'error connecting to /tmp/tmux-1000/default (Operation not permitted)\n' >&2
+    exit 1
+    ;;
+esac
+printf 'unexpected tmux command: %s\n' "$*" >&2
+exit 1
+`,
+      );
+      await chmod(fakeTmuxPath, 0o755);
+
+      const result = runOmx(
+        wd,
+        ['--madmax', '--tmux'],
+        {
+          HOME: home,
+          PATH: `${fakeBin}:/usr/bin:/bin`,
+          OMX_AUTO_UPDATE: '0',
+          OMX_NOTIFY_FALLBACK: '0',
+          OMX_HOOK_DERIVED_SIGNALS: '0',
+          TMUX: '',
+          TMUX_PANE: '',
+        },
+      );
+
+      if (shouldSkipForSpawnPermissions(result.error)) return;
+
+      const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
+      assert.equal(result.status, 0, result.error || result.stderr || result.stdout);
+      assert.match(result.stdout, /fake-codex:.*--dangerously-bypass-approvals-and-sandbox/);
+      assert.match(result.stderr, /server\/socket is unusable/);
+      assert.doesNotMatch(tmuxLog, /new-session|attach-session/);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('rolls back and falls back directly when attaching the detached tmux session fails', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-launch-tmux-attach-fail-'));
+    try {
+      const home = join(wd, 'home');
+      const fakeBin = join(wd, 'bin');
+      const fakeCodexPath = join(fakeBin, 'codex');
+      const fakePsPath = join(fakeBin, 'ps');
+      const fakeTmuxPath = join(fakeBin, 'tmux');
+      const tmuxLogPath = join(wd, 'tmux.log');
+
+      await mkdir(home, { recursive: true });
+      await mkdir(fakeBin, { recursive: true });
+      await writeFile(
+        fakeCodexPath,
+        '#!/bin/sh\nprintf \'fake-codex:%s\\n\' "$*"\n',
+      );
+      await chmod(fakeCodexPath, 0o755);
+      await writeFile(fakePsPath, '#!/bin/sh\nexit 0\n');
+      await chmod(fakePsPath, 0o755);
+      await writeFile(
+        fakeTmuxPath,
+        `#!/bin/sh
+printf 'tmux:%s\n' "$*" >> "${tmuxLogPath}"
+case "$1" in
+  -V|list-sessions)
+    exit 0
+    ;;
+  new-session)
+    printf 'leader-pane\n'
+    exit 0
+    ;;
+  split-window)
+    printf 'hud-pane\n'
+    exit 0
+    ;;
+  display-message)
+    if [ "$2" = '-p' ] && [ "$3" = '#{socket_path}' ]; then
+      printf '/tmp/tmux-test.sock\n'
+    else
+      printf '0\n'
+    fi
+    exit 0
+    ;;
+  show-options)
+    printf 'off\n'
+    exit 0
+    ;;
+  attach-session)
+    printf 'error connecting to /tmp/tmux-1000/default (Operation not permitted)\n' >&2
+    exit 1
+    ;;
+  set-option|set-hook|kill-session|run-shell|resize-pane|select-pane)
+    exit 0
+    ;;
+esac
+exit 0
+`,
+      );
+      await chmod(fakeTmuxPath, 0o755);
+
+      const result = runOmx(
+        wd,
+        ['--madmax', '--tmux'],
+        {
+          HOME: home,
+          PATH: `${fakeBin}:/usr/bin:/bin`,
+          OMX_AUTO_UPDATE: '0',
+          OMX_NOTIFY_FALLBACK: '0',
+          OMX_HOOK_DERIVED_SIGNALS: '0',
+          TMUX: '',
+          TMUX_PANE: '',
+        },
+      );
+
+      if (shouldSkipForSpawnPermissions(result.error)) return;
+
+      const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
+      assert.equal(result.status, 0, result.error || result.stderr || result.stdout);
+      assert.match(result.stdout, /fake-codex:.*--dangerously-bypass-approvals-and-sandbox/);
+      assert.match(tmuxLog, /tmux:attach-session -t /);
+      assert.match(tmuxLog, /tmux:kill-session -t /);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it('preserves the requested cwd through detached tmux launch when an unsupported SHELL value falls back away from rc-driven cwd drift', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-launch-tmux-cwd-'));
     try {

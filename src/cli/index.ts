@@ -484,6 +484,82 @@ function hasErrnoCode(error: unknown, code: string): boolean {
   );
 }
 
+function tmuxFailureMessage(error: unknown): string {
+  if (!error || typeof error !== "object") return String(error);
+  const err = error as ExecFileSyncFailure & {
+    stdout?: Buffer | string;
+    stderr?: Buffer | string;
+  };
+  const stderr =
+    typeof err.stderr === "string" ? err.stderr : err.stderr?.toString();
+  const stdout =
+    typeof err.stdout === "string" ? err.stdout : err.stdout?.toString();
+  const detail = (stderr || stdout || err.message || String(error)).trim();
+  return detail.replace(/\s+/g, " ");
+}
+
+function isBenignMissingTmuxServerMessage(message: string): boolean {
+  return /no server running/i.test(message);
+}
+
+export interface TmuxLaunchHealth {
+  usable: boolean;
+  reason?: string;
+}
+
+export function checkDetachedTmuxLaunchHealth(): TmuxLaunchHealth {
+  try {
+    execTmuxFileSync(["list-sessions"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf-8",
+    });
+    return { usable: true };
+  } catch (err) {
+    const reason = tmuxFailureMessage(err);
+    if (isBenignMissingTmuxServerMessage(reason)) {
+      return { usable: true };
+    }
+    return { usable: false, reason };
+  }
+}
+
+function warnDetachedTmuxFallback(reason?: string): void {
+  const suffix = reason ? ` (${reason})` : "";
+  console.warn(
+    `[omx] warning: tmux is installed but its server/socket is unusable${suffix}. Falling back to direct Codex launch.`,
+  );
+}
+
+function resolveTmuxAwareLaunchPolicy(
+  explicitLaunchPolicy: CodexLaunchPolicy | undefined,
+  nativeWindows: boolean,
+): {
+  launchPolicy: CodexLaunchPolicy;
+  effectiveExplicitLaunchPolicy: CodexLaunchPolicy | undefined;
+} {
+  const launchPolicy = resolveCodexLaunchPolicy(
+    process.env,
+    process.platform,
+    undefined,
+    nativeWindows,
+    undefined,
+    undefined,
+    explicitLaunchPolicy,
+  );
+
+  if (launchPolicy !== "detached-tmux") {
+    return { launchPolicy, effectiveExplicitLaunchPolicy: explicitLaunchPolicy };
+  }
+
+  const tmuxHealth = checkDetachedTmuxLaunchHealth();
+  if (tmuxHealth.usable) {
+    return { launchPolicy, effectiveExplicitLaunchPolicy: explicitLaunchPolicy };
+  }
+
+  warnDetachedTmuxFallback(tmuxHealth.reason);
+  return { launchPolicy: "direct", effectiveExplicitLaunchPolicy: "direct" };
+}
+
 export interface CodexExecFailureClassification {
   kind: "exit" | "launch-error";
   code?: string;
@@ -911,15 +987,8 @@ export async function launchWithHud(args: string[]): Promise<void> {
     notifyTempResult.passthroughArgs,
   );
   const codexHomeOverride = resolveCodexHomeForLaunch(launchCwd, process.env);
-  const launchPolicy = resolveCodexLaunchPolicy(
-    process.env,
-    process.platform,
-    undefined,
-    isNativeWindows(),
-    undefined,
-    undefined,
-    explicitLaunchPolicy,
-  );
+  const { launchPolicy, effectiveExplicitLaunchPolicy } =
+    resolveTmuxAwareLaunchPolicy(explicitLaunchPolicy, isNativeWindows());
   const enableNotifyFallbackAuthority = launchPolicy === "direct";
   const workerSparkModel = resolveWorkerSparkModel(
     notifyTempResult.passthroughArgs,
@@ -1008,7 +1077,7 @@ export async function launchWithHud(args: string[]): Promise<void> {
       workerSparkModel,
       codexHomeOverride,
       notifyTempContractRaw,
-      explicitLaunchPolicy,
+      effectiveExplicitLaunchPolicy,
     );
   } finally {
     // ── Phase 3: postLaunch ─────────────────────────────────────────────
@@ -2428,14 +2497,9 @@ function runCodex(
     ? { ...codexEnv, [OMX_NOTIFY_TEMP_CONTRACT_ENV]: notifyTempContractRaw }
     : codexEnv;
 
-  const launchPolicy = resolveCodexLaunchPolicy(
-    process.env,
-    process.platform,
-    undefined,
-    nativeWindows,
-    undefined,
-    undefined,
+  const { launchPolicy } = resolveTmuxAwareLaunchPolicy(
     explicitLaunchPolicy,
+    nativeWindows,
   );
 
   if (isCodexVersionRequest(launchArgs)) {
