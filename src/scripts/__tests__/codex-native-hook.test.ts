@@ -445,6 +445,38 @@ describe("codex native hook dispatch", () => {
     }
   });
 
+  it("respects global Git ignore resolution for indexed .omx paths during SessionStart", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-session-global-indexed-ignore-"));
+    const excludesFile = join(cwd, "global-ignore");
+    try {
+      await writeFile(join(cwd, ".gitignore"), "node_modules\n");
+      await mkdir(join(cwd, ".omx"), { recursive: true });
+      await writeFile(join(cwd, ".omx", "state.json"), "{}\n");
+      await writeFile(excludesFile, ".omx/\n");
+      execFileSync("git", ["init"], { cwd, stdio: "pipe" });
+      execFileSync("git", ["add", ".omx/state.json"], { cwd, stdio: "pipe" });
+      execFileSync("git", ["config", "core.excludesfile", excludesFile], { cwd, stdio: "pipe" });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "SessionStart",
+          cwd,
+          session_id: "sess-gitignore-global-indexed",
+        },
+        { cwd, sessionOwnerPid: 43210 },
+      );
+
+      assert.equal(result.omxEventName, "session-start");
+      const gitignore = await readFile(join(cwd, ".gitignore"), "utf-8");
+      assert.equal(gitignore, "node_modules\n");
+      const exclude = await readFile(join(cwd, ".git", "info", "exclude"), "utf-8");
+      assert.doesNotMatch(exclude, /(?:^|\n)\.omx\/\n/);
+      assert.doesNotMatch(JSON.stringify(result.outputJson), /Added \.omx\//);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("includes persisted project-memory summary in SessionStart context", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-session-memory-"));
     try {
