@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setup } from "../setup.js";
 
+const packageRoot = process.cwd();
+
 async function withTempCwd(wd: string, fn: () => Promise<void>): Promise<void> {
   const previousCwd = process.cwd();
   process.chdir(wd);
