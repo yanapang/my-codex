@@ -1558,6 +1558,7 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
       );
       summary.skills.removed += cleanup.removedSkillNames.length;
       summary.skills.skipped += cleanup.skippedSkillNames.length;
+      summary.skills.backedUp += cleanup.backedUpSkillNames.length;
       for (const warning of cleanup.warnings) {
         console.log(`  warning: ${warning}`);
       }
@@ -2605,6 +2606,7 @@ async function removeDirectoryCopyAware(
 interface LegacySkillCleanupResult {
   removedSkillNames: string[];
   skippedSkillNames: string[];
+  backedUpSkillNames: string[];
   warnings: string[];
 }
 
@@ -2617,6 +2619,7 @@ async function cleanupLegacyManagedSkills(
   const result: LegacySkillCleanupResult = {
     removedSkillNames: [],
     skippedSkillNames: [],
+    backedUpSkillNames: [],
     warnings: [],
   };
   if (!existsSync(dstDir) || !existsSync(srcDir)) {
@@ -2656,6 +2659,7 @@ async function cleanupLegacyManagedSkills(
     );
     if (removed) {
       result.removedSkillNames.push(skillName);
+      result.backedUpSkillNames.push(skillName);
     }
   }
 
