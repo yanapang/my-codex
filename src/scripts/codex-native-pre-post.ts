@@ -788,6 +788,7 @@ export function buildNativePostToolUseOutput(
   if (!normalized.isBash) return null;
 
   const combined = `${normalized.stderrText}\n${normalized.stdoutText}`.trim();
+  if (normalized.exitCode === 0) return null;
   if (containsHardFailure(combined)) {
     return {
       decision: "block",
