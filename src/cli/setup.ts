@@ -1391,7 +1391,6 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
     installModePrompt,
   );
   const scopeDirs = resolveScopeDirectories(resolvedScope.scope, projectRoot);
-  const persistedPreferences = await readPersistedSetupPreferences(projectRoot);
   const scopeSourceMessage =
     resolvedScope.source === "persisted" ? " (from .omx/setup-scope.json)" : "";
   const backupContext = getBackupContext(resolvedScope.scope, projectRoot);

@@ -203,8 +203,14 @@ describe("omx setup install mode behavior", () => {
             await readFile(join(wd, ".omx", "setup-scope.json"), "utf-8"),
           ) as { scope: string; installMode?: string };
           assert.deepEqual(repeatedPersisted, { scope: "project" });
-          const hooks = await readFile(join(wd, ".codex", "hooks.json"), "utf-8");
-          assert.doesNotMatch(hooks, /codex-native-hook\.js/);
+          assert.equal(
+            existsSync(join(wd, ".codex", "agents", "planner.toml")),
+            true,
+          );
+          assert.equal(
+            existsSync(join(wd, ".codex", "prompts", "executor.md")),
+            true,
+          );
         });
       });
     } finally {
@@ -229,8 +235,14 @@ describe("omx setup install mode behavior", () => {
             existsSync(join(codexHomeDir, "skills", "help", "SKILL.md")),
             true,
           );
-          const hooks = await readFile(join(codexHomeDir, "hooks.json"), "utf-8");
-          assert.doesNotMatch(hooks, /codex-native-hook\.js/);
+          assert.equal(
+            existsSync(join(codexHomeDir, "agents", "planner.toml")),
+            true,
+          );
+          assert.equal(
+            existsSync(join(codexHomeDir, "prompts", "executor.md")),
+            true,
+          );
         });
       });
     } finally {
