@@ -179,6 +179,65 @@ describe("omx setup install mode behavior", () => {
     }
   });
 
+  it("does not reuse stale user install mode for project-scoped setup", async () => {
+    const wd = await mkdtemp(join(tmpdir(), "omx-setup-install-mode-"));
+    try {
+      await withIsolatedUserHome(wd, async () => {
+        await withTempCwd(wd, async () => {
+          await setup({ scope: "user", installMode: "plugin" });
+
+          await setup({ scope: "project" });
+
+          const persisted = JSON.parse(
+            await readFile(join(wd, ".omx", "setup-scope.json"), "utf-8"),
+          ) as { scope: string; installMode?: string };
+          assert.deepEqual(persisted, { scope: "project" });
+          assert.equal(
+            existsSync(join(wd, ".codex", "skills", "help", "SKILL.md")),
+            true,
+          );
+
+          await setup({ scope: "project" });
+
+          const repeatedPersisted = JSON.parse(
+            await readFile(join(wd, ".omx", "setup-scope.json"), "utf-8"),
+          ) as { scope: string; installMode?: string };
+          assert.deepEqual(repeatedPersisted, { scope: "project" });
+          const hooks = await readFile(join(wd, ".codex", "hooks.json"), "utf-8");
+          assert.doesNotMatch(hooks, /codex-native-hook\.js/);
+        });
+      });
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it("does not reuse stale project install mode for user-scoped setup", async () => {
+    const wd = await mkdtemp(join(tmpdir(), "omx-setup-install-mode-"));
+    try {
+      await withIsolatedUserHome(wd, async (codexHomeDir) => {
+        await withTempCwd(wd, async () => {
+          await setup({ scope: "project", installMode: "plugin" });
+
+          await setup({ scope: "user" });
+
+          const persisted = JSON.parse(
+            await readFile(join(wd, ".omx", "setup-scope.json"), "utf-8"),
+          ) as { scope: string; installMode?: string };
+          assert.deepEqual(persisted, { scope: "user", installMode: "legacy" });
+          assert.equal(
+            existsSync(join(codexHomeDir, "skills", "help", "SKILL.md")),
+            true,
+          );
+          const hooks = await readFile(join(codexHomeDir, "hooks.json"), "utf-8");
+          assert.doesNotMatch(hooks, /codex-native-hook\.js/);
+        });
+      });
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it("installs user-scoped native hooks when plugin mode is selected", async () => {
     const wd = await mkdtemp(join(tmpdir(), "omx-setup-install-mode-"));
     try {
@@ -438,19 +497,41 @@ describe("omx setup install mode behavior", () => {
     }
   });
 
-  it("prints plugin-mode next steps without native-agent TOML claims", async () => {
+  it("prints plugin-mode next steps without legacy-only claims", async () => {
     const wd = await mkdtemp(join(tmpdir(), "omx-setup-install-mode-"));
     try {
       await withIsolatedUserHome(wd, async () => {
         await withTempCwd(wd, async () => {
           const pluginOutput = await captureConsoleOutput(async () => {
-            await setup({ scope: "user", installMode: "plugin" });
+            await setup({ scope: "project", installMode: "plugin" });
           });
+          assert.match(pluginOutput, /Using setup install mode: plugin/);
+          assert.doesNotMatch(pluginOutput, /user-scope skill delivery mode/);
           assert.doesNotMatch(
             pluginOutput,
             /Native agent defaults configured.*TOML files written to \.codex\/agents\//,
           );
-          assert.match(pluginOutput, /Codex plugin discovery supplies OMX surfaces/);
+          assert.doesNotMatch(
+            pluginOutput,
+            /Use role\/workflow keywords like \$architect, \$executor, and \$plan/,
+          );
+          assert.doesNotMatch(
+            pluginOutput,
+            /AGENTS keyword routing can also activate them implicitly/,
+          );
+          assert.doesNotMatch(
+            pluginOutput,
+            /The AGENTS\.md orchestration brain is loaded automatically/,
+          );
+          assert.match(
+            pluginOutput,
+            /Codex plugin discovery supplies OMX skills and workflow surfaces/,
+          );
+          assert.match(pluginOutput, /Browse plugin-provided skills with \/skills/);
+          assert.match(
+            pluginOutput,
+            /Optional AGENTS\.md and developer_instructions defaults are only installed when selected/,
+          );
 
           const legacyWd = join(wd, "legacy");
           await mkdir(legacyWd, { recursive: true });
@@ -461,6 +542,18 @@ describe("omx setup install mode behavior", () => {
             assert.match(
               legacyOutput,
               /Native agent defaults configured.*TOML files written to \.codex\/agents\//,
+            );
+            assert.match(
+              legacyOutput,
+              /Use role\/workflow keywords like \$architect, \$executor, and \$plan/,
+            );
+            assert.match(
+              legacyOutput,
+              /AGENTS keyword routing can also activate them implicitly/,
+            );
+            assert.match(
+              legacyOutput,
+              /The AGENTS\.md orchestration brain is loaded automatically/,
             );
           });
         });
