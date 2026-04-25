@@ -8,7 +8,7 @@ Task: verify release preparation did not create a tag or publish npm/GitHub rele
 
 | Check | Command | Result |
 | --- | --- | --- |
-| Candidate commit | `git rev-parse HEAD` | `b5b6d13134eb86ecda2d9021cc83c0995f943ebe` |
+| Observed pre-evidence commit | `git rev-parse HEAD` | `b5b6d13134eb86ecda2d9021cc83c0995f943ebe` |
 | No release tag on candidate commit | `git tag --points-at HEAD` | PASS: no tags printed |
 | No local `v0.15.0` tag | `git tag -l 'v0.15.0'` | PASS: no tags printed |
 | Release workflow remains tag-triggered | `grep -RIn "npm publish\|softprops/action-gh-release\|on:\|tags:" .github/workflows/release.yml` | PASS: publish/release steps remain inside the tag-triggered release workflow; no workflow was invoked locally |
@@ -22,7 +22,7 @@ Task: verify release preparation did not create a tag or publish npm/GitHub rele
 | Type check | `npm run check:no-unused` | PASS |
 | Build | `npm run build` | PASS |
 | Release workflow targeted test | `node --test dist/verification/__tests__/explore-harness-release-workflow.test.js` | PASS: 3 tests passed |
-| Full test suite | `npm test` | RUNNING/FAILURES OBSERVED: unrelated environment-sensitive failures surfaced in `omx ask`, explore harness hydration/routing, detached tmux, cross-rebase, and mailbox bridge tests before completion; worker-4 did not change those areas. |
+| Full test suite | `npm test` | FAIL/INCOMPLETE: unrelated environment-sensitive failures surfaced in `omx ask`, explore harness hydration/routing, detached tmux, cross-rebase, and mailbox bridge tests before tool output was lost; worker-4 did not change those areas. |
 
 ## Verdict
 
