@@ -42,7 +42,6 @@ async function withIsolatedUserHome<T>(
   }
 }
 
-
 async function captureConsoleOutput(fn: () => Promise<void>): Promise<string> {
   const originalLog = console.log;
   const originalWarn = console.warn;
@@ -442,7 +441,7 @@ describe("omx setup install mode behavior", () => {
   it("prints plugin-mode next steps without native-agent TOML claims", async () => {
     const wd = await mkdtemp(join(tmpdir(), "omx-setup-install-mode-"));
     try {
-      await withIsolatedUserHome(wd, async (codexHomeDir) => {
+      await withIsolatedUserHome(wd, async () => {
         await withTempCwd(wd, async () => {
           const pluginOutput = await captureConsoleOutput(async () => {
             await setup({ scope: "user", installMode: "plugin" });
