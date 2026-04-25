@@ -1557,6 +1557,7 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
         backupContext,
         { dryRun, verbose },
       );
+      summary.skills.backedUp += cleanup.backedUp;
       summary.skills.removed += cleanup.removedSkillNames.length;
       summary.skills.skipped += cleanup.skippedSkillNames.length;
       for (const warning of cleanup.warnings) {
@@ -2021,9 +2022,15 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
     "  3. Browse skills with /skills; AGENTS keyword routing can also activate them implicitly",
   );
   console.log("  4. The AGENTS.md orchestration brain is loaded automatically");
-  console.log(
-    "  5. Native agent defaults configured in config.toml [agents] and TOML files written to .codex/agents/",
-  );
+  if (isPluginInstallMode) {
+    console.log(
+      "  5. Codex plugin discovery supplies OMX surfaces; setup kept legacy native-agent TOML defaults uninstalled",
+    );
+  } else {
+    console.log(
+      "  5. Native agent defaults configured in config.toml [agents] and TOML files written to .codex/agents/",
+    );
+  }
   console.log(
     '  6. "omx explore" and "omx sparkshell" can hydrate native release binaries on first use; source installs still allow repo-local fallbacks and OMX_EXPLORE_BIN / OMX_SPARKSHELL_BIN overrides',
   );
@@ -2598,6 +2605,7 @@ async function removeDirectoryCopyAware(
 }
 
 interface LegacySkillCleanupResult {
+  backedUp: number;
   removedSkillNames: string[];
   skippedSkillNames: string[];
   warnings: string[];
@@ -2610,6 +2618,7 @@ async function cleanupLegacyManagedSkills(
   options: Pick<SetupOptions, "dryRun" | "verbose">,
 ): Promise<LegacySkillCleanupResult> {
   const result: LegacySkillCleanupResult = {
+    backedUp: 0,
     removedSkillNames: [],
     skippedSkillNames: [],
     warnings: [],
@@ -2650,6 +2659,7 @@ async function cleanupLegacyManagedSkills(
       options,
     );
     if (removed) {
+      result.backedUp += 1;
       result.removedSkillNames.push(skillName);
     }
   }

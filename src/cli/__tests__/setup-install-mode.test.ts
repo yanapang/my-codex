@@ -42,6 +42,26 @@ async function withIsolatedUserHome<T>(
   }
 }
 
+
+async function captureConsoleOutput(fn: () => Promise<void>): Promise<string> {
+  const originalLog = console.log;
+  const originalWarn = console.warn;
+  const lines: string[] = [];
+  console.log = (...args: unknown[]) => {
+    lines.push(args.map(String).join(" "));
+  };
+  console.warn = (...args: unknown[]) => {
+    lines.push(args.map(String).join(" "));
+  };
+  try {
+    await fn();
+  } finally {
+    console.log = originalLog;
+    console.warn = originalWarn;
+  }
+  return lines.join("\n");
+}
+
 async function seedPluginCacheFromInstalledSkills(
   codexHomeDir: string,
 ): Promise<void> {
@@ -419,6 +439,38 @@ describe("omx setup install mode behavior", () => {
     }
   });
 
+  it("prints plugin-mode next steps without native-agent TOML claims", async () => {
+    const wd = await mkdtemp(join(tmpdir(), "omx-setup-install-mode-"));
+    try {
+      await withIsolatedUserHome(wd, async (codexHomeDir) => {
+        await withTempCwd(wd, async () => {
+          const pluginOutput = await captureConsoleOutput(async () => {
+            await setup({ scope: "user", installMode: "plugin" });
+          });
+          assert.doesNotMatch(
+            pluginOutput,
+            /Native agent defaults configured.*TOML files written to \.codex\/agents\//,
+          );
+          assert.match(pluginOutput, /Codex plugin discovery supplies OMX surfaces/);
+
+          const legacyWd = join(wd, "legacy");
+          await mkdir(legacyWd, { recursive: true });
+          await withTempCwd(legacyWd, async () => {
+            const legacyOutput = await captureConsoleOutput(async () => {
+              await setup({ scope: "user", installMode: "legacy" });
+            });
+            assert.match(
+              legacyOutput,
+              /Native agent defaults configured.*TOML files written to \.codex\/agents\//,
+            );
+          });
+        });
+      });
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it("removes legacy user components when plugin mode is selected", async () => {
     const wd = await mkdtemp(join(tmpdir(), "omx-setup-install-mode-"));
     try {
@@ -459,6 +511,33 @@ describe("omx setup install mode behavior", () => {
             config,
             /oh-my-codex|mcp_servers|notify|developer_instructions/,
           );
+        });
+      });
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it("counts plugin cleanup skill directory backups in the setup summary", async () => {
+    const wd = await mkdtemp(join(tmpdir(), "omx-setup-install-mode-"));
+    try {
+      await withIsolatedUserHome(wd, async (codexHomeDir) => {
+        await withTempCwd(wd, async () => {
+          await setup({ scope: "user", installMode: "legacy" });
+          await seedPluginCacheFromInstalledSkills(codexHomeDir);
+
+          const output = await captureConsoleOutput(async () => {
+            await setup({ scope: "user", installMode: "plugin" });
+          });
+
+          const skillsSummary = output.match(
+            /skills: updated=0, unchanged=0, backed_up=(\d+), skipped=0, removed=(\d+)/,
+          );
+          assert.notEqual(skillsSummary, null);
+          const backedUp = Number(skillsSummary?.[1]);
+          const removed = Number(skillsSummary?.[2]);
+          assert.ok(backedUp > 0);
+          assert.equal(backedUp, removed);
         });
       });
     } finally {
