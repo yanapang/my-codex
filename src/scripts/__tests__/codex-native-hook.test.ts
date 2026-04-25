@@ -2907,6 +2907,85 @@ esac
     }
   });
 
+  it("stays silent when successful search output contains old Bash failure text", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-posttool-successful-search-"));
+    try {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PostToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-search-log",
+          tool_input: { command: "rg 'command not found' .omx/logs" },
+          tool_response: JSON.stringify({
+            exit_code: 0,
+            stdout: "old-session.log: bash: foo: command not found",
+            stderr: "",
+          }),
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "post-tool-use");
+      assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("stays silent for rc-zero build logs that mention missing grep paths", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-posttool-build-log-"));
+    try {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PostToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-build-log",
+          tool_input: { command: "npm run build" },
+          tool_response: JSON.stringify({
+            exit_code: 0,
+            stdout: "build passed\nnote: grep fixture says no such file or directory",
+            stderr: "",
+          }),
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "post-tool-use");
+      assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("stays silent when successful output includes prior hook context text", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-posttool-recursive-context-"));
+    try {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PostToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-hook-context",
+          tool_input: { command: "cat transcript.txt" },
+          tool_response: JSON.stringify({
+            exit_code: 0,
+            stdout:
+              "Bash reported `command not found`, `permission denied`, or a missing file/path. Verify the command, dependency installation, PATH, file permissions, and referenced paths before retrying.",
+            stderr: "",
+          }),
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "post-tool-use");
+      assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("returns PostToolUse MCP transport fallback guidance for clear MCP transport death", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-posttool-mcp-transport-"));
     try {
