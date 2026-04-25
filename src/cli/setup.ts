@@ -851,10 +851,7 @@ async function resolveSetupInstallMode(
   }
 
   const persisted = await readPersistedSetupPreferences(projectRoot);
-  if (
-    persisted?.installMode &&
-    (!persisted.scope || persisted.scope === scope)
-  ) {
+  if (persisted?.installMode && persisted.scope === scope) {
     return { installMode: persisted.installMode, source: "persisted" };
   }
 
@@ -1426,7 +1423,7 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
         ? " (from .omx/setup-scope.json)"
         : "";
     console.log(
-      `Using ${resolvedScope.scope}-scope skill delivery mode: ${resolvedInstallMode.installMode}${installModeSourceMessage}\n`,
+      `Using setup install mode: ${resolvedInstallMode.installMode}${installModeSourceMessage}\n`,
     );
   }
 
@@ -1461,7 +1458,9 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
           scope: resolvedScope.scope,
           installMode: resolvedInstallMode.installMode,
         }
-      : { scope: resolvedScope.scope },
+      : {
+          scope: resolvedScope.scope,
+        },
     {
       dryRun,
       verbose,
@@ -1556,9 +1555,9 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
         backupContext,
         { dryRun, verbose },
       );
+      summary.skills.backedUp += cleanup.backedUp;
       summary.skills.removed += cleanup.removedSkillNames.length;
       summary.skills.skipped += cleanup.skippedSkillNames.length;
-      summary.skills.backedUp += cleanup.backedUpSkillNames.length;
       for (const warning of cleanup.warnings) {
         console.log(`  warning: ${warning}`);
       }
@@ -2014,18 +2013,25 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
   console.log('Setup complete! Run "omx doctor" to verify installation.');
   console.log("\nNext steps:");
   console.log("  1. Start Codex CLI in your project directory");
-  console.log(
-    "  2. Use role/workflow keywords like $architect, $executor, and $plan in Codex",
-  );
-  console.log(
-    "  3. Browse skills with /skills; AGENTS keyword routing can also activate them implicitly",
-  );
-  console.log("  4. The AGENTS.md orchestration brain is loaded automatically");
   if (isPluginInstallMode) {
     console.log(
-      "  5. Plugin mode uses Codex plugin discovery for skills/prompts/agents; setup refreshed native hooks and did not write native agent TOML files.",
+      "  2. Codex plugin discovery supplies OMX skills and workflow surfaces",
+    );
+    console.log("  3. Browse plugin-provided skills with /skills");
+    console.log(
+      "  4. Optional AGENTS.md and developer_instructions defaults are only installed when selected during plugin-mode setup",
+    );
+    console.log(
+      "  5. Legacy native-agent TOML defaults remain uninstalled in plugin mode",
     );
   } else {
+    console.log(
+      "  2. Use role/workflow keywords like $architect, $executor, and $plan in Codex",
+    );
+    console.log(
+      "  3. Browse skills with /skills; AGENTS keyword routing can also activate them implicitly",
+    );
+    console.log("  4. The AGENTS.md orchestration brain is loaded automatically");
     console.log(
       "  5. Native agent defaults configured in config.toml [agents] and TOML files written to .codex/agents/",
     );
@@ -2604,9 +2610,9 @@ async function removeDirectoryCopyAware(
 }
 
 interface LegacySkillCleanupResult {
+  backedUp: number;
   removedSkillNames: string[];
   skippedSkillNames: string[];
-  backedUpSkillNames: string[];
   warnings: string[];
 }
 
@@ -2617,9 +2623,9 @@ async function cleanupLegacyManagedSkills(
   options: Pick<SetupOptions, "dryRun" | "verbose">,
 ): Promise<LegacySkillCleanupResult> {
   const result: LegacySkillCleanupResult = {
+    backedUp: 0,
     removedSkillNames: [],
     skippedSkillNames: [],
-    backedUpSkillNames: [],
     warnings: [],
   };
   if (!existsSync(dstDir) || !existsSync(srcDir)) {
@@ -2658,8 +2664,8 @@ async function cleanupLegacyManagedSkills(
       options,
     );
     if (removed) {
+      result.backedUp += 1;
       result.removedSkillNames.push(skillName);
-      result.backedUpSkillNames.push(skillName);
     }
   }
 
