@@ -1626,9 +1626,9 @@ export function waitForWorkerReady(
   return false;
 }
 
-// Async counterpart to waitForWorkerReady(). It keeps the same readiness
-// predicates and trust-prompt handling but yields between polls so one slow
-// worker cannot block later startup attempts in startTeam().
+// Async twin of waitForWorkerReady for team startup fan-out. Keep the readiness
+// semantics mirrored with the synchronous helper above, but yield between polls
+// so one slow worker pane cannot block later workers' startup attempts.
 export async function waitForWorkerReadyAsync(
   sessionName: string,
   workerIndex: number,
@@ -1643,14 +1643,16 @@ export async function waitForWorkerReadyAsync(
 
   const sendRobustEnter = async (): Promise<void> => {
     const target = paneTarget(sessionName, workerIndex, workerPaneId);
-    runTmux(['send-keys', '-t', target, 'C-m']);
+    // Trust + follow-up splash can require two submits in Codex TUI.
+    // Use C-m (carriage return) for raw-mode compatibility.
+    await runTmuxAsync(['send-keys', '-t', target, 'C-m']);
     await sleep(120);
-    runTmux(['send-keys', '-t', target, 'C-m']);
+    await runTmuxAsync(['send-keys', '-t', target, 'C-m']);
   };
 
   const check = async (): Promise<boolean> => {
     const target = paneTarget(sessionName, workerIndex, workerPaneId);
-    const result = runTmux(sharedBuildVisibleCapturePaneArgv(target));
+    const result = await runTmuxAsync(sharedBuildVisibleCapturePaneArgv(target));
     if (!result.ok) return false;
     if (dismissClaudeBypassPermissionsPromptIfPresent(target, result.stdout)) {
       promptDismissed = true;
@@ -1660,6 +1662,8 @@ export async function waitForWorkerReadyAsync(
       return false;
     }
     if (paneHasTrustPrompt(result.stdout)) {
+      // Default-on for team workers: they are spawned explicitly by the leader in the same cwd.
+      // Opt-out by setting OMX_TEAM_AUTO_TRUST=0.
       if (process.env.OMX_TEAM_AUTO_TRUST !== '0') {
         await sendRobustEnter();
         promptDismissed = true;
@@ -1669,9 +1673,12 @@ export async function waitForWorkerReadyAsync(
       return false;
     }
     if (paneLooksReady(result.stdout)) return true;
+    // Keep startup safety checks anchored to the visible pane. Only if the
+    // visible slice already proves a live Codex viewport do we consult recent
+    // scrollback for the prompt/helper text that may have slipped below the fold.
     if (!sharedPaneShowsCodexViewport(result.stdout)) return false;
 
-    const scrollbackResult = runTmux(sharedBuildCapturePaneArgv(target, 80));
+    const scrollbackResult = await runTmuxAsync(sharedBuildCapturePaneArgv(target, 80));
     if (!scrollbackResult.ok) return false;
     return paneLooksReady(scrollbackResult.stdout);
   };
@@ -1680,6 +1687,8 @@ export async function waitForWorkerReadyAsync(
   while (Date.now() - startedAt < timeoutMs) {
     if (await check()) return true;
     if (blockedByTrustPrompt) return false;
+    // After dismissing a trust prompt, reset backoff so we re-check quickly
+    // instead of sleeping 2s/4s/8s while the worker is starting up.
     if (promptDismissed) {
       delayMs = initialBackoffMs;
       promptDismissed = false;
