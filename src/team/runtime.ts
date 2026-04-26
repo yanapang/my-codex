@@ -2382,11 +2382,73 @@ export async function startTeam(
           console.log(`[omx:team] ${workerName}: mixed task roles [${[...new Set(workerTasks.map(t => t.role).filter(Boolean))].join(', ')}], falling back to ${agentType}`);
         }
 
-      if (workerLaunchMode === 'interactive' && !skipWorkerReadyWait && !initialPrompt) {
-        const ready = await waitForWorkerReadyAsync(sessionName, i, workerReadyTimeoutMs, paneId);
-        if (!ready) {
-          const workerAlive = isWorkerPaneOpen(sessionName, i, paneId);
-          if (workerAlive) {
+        if (workerLaunchMode === 'interactive' && !skipWorkerReadyWait && !initialPrompt) {
+          const ready = await waitForWorkerReadyAsync(sessionName, workerIndex, workerReadyTimeoutMs, paneId);
+          if (!ready) {
+            const workerAlive = isWorkerPaneOpen(sessionName, workerIndex, paneId);
+            if (workerAlive) {
+              await recordRecoverableStartupIssue({
+                teamName: sanitized,
+                workerName,
+                taskIds: workerTasks.map((task) => task.id),
+                reason: 'ready_prompt_timeout',
+                cwd: leaderCwd,
+              });
+              return { ok: true, workerIndex, workerName };
+            }
+            return {
+              ok: false,
+              workerIndex,
+              workerName,
+              error: new Error(`Worker ${workerName} did not become ready in tmux session ${sessionName}`),
+            };
+          }
+        }
+
+        let dispatchOutcome: DispatchOutcome = initialPrompt
+          ? { ok: true, transport: 'none', reason: 'startup_prompt_delivered_at_launch' }
+          : { ok: false, transport: 'none', reason: 'not_attempted' };
+        if (!initialPrompt) {
+          for (let attempt = 1; attempt <= startupDispatchRetries; attempt++) {
+            dispatchOutcome = await dispatchCriticalInboxInstruction({
+              teamName: sanitized,
+              config: config!,
+              workerName,
+              workerIndex,
+              paneId,
+              workerCli: workerCliPlan[workerIndex - 1],
+              inbox,
+              triggerMessage: trigger,
+              intent: triggerIntent,
+              cwd: leaderCwd,
+              dispatchPolicy,
+              inboxCorrelationKey: `startup:${workerName}`,
+              requireWorkerStartupEvidence: true,
+              startupEvidenceTimeoutMs: workerStartupEvidenceTimeoutMs,
+            });
+            if (dispatchOutcome.ok) break;
+            if (attempt < startupDispatchRetries) {
+              if (workerLaunchMode === 'interactive') {
+                if (dismissTrustPromptIfPresent(sessionName, workerIndex, paneId)) {
+                  await waitForWorkerReadyAsync(sessionName, workerIndex, workerReadyTimeoutMs, paneId);
+                } else {
+                  await new Promise((resolve) => setTimeout(resolve, Math.max(0, startupRetryDelayS * 1000)));
+                }
+              } else {
+                await new Promise((resolve) => setTimeout(resolve, Math.max(0, startupRetryDelayS * 1000)));
+              }
+            }
+          }
+        }
+        if (!dispatchOutcome.ok) {
+          const workerAlive = workerLaunchMode === 'prompt'
+            ? isPromptWorkerAlive(config!, config!.workers[workerIndex - 1]!)
+            : isWorkerPaneOpen(sessionName, workerIndex, paneId);
+          if (
+            workerLaunchMode === 'interactive'
+            && workerAlive
+            && isRecoverableInteractiveStartupReason(dispatchOutcome.reason)
+          ) {
             await recordRecoverableStartupIssue({
               teamName: sanitized,
               workerName,
