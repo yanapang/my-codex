@@ -14,6 +14,30 @@ export type TeamOperationalCommitKind =
   | 'shutdown_checkpoint'
   | 'shutdown_merge'
 
+export type TeamOperationalCommitStatus =
+  | 'applied'
+  | 'noop'
+  | 'conflict'
+  | 'skipped'
+
+export const TEAM_OPERATIONAL_COMMIT_KINDS = [
+  'auto_checkpoint',
+  'integration_merge',
+  'integration_cherry_pick',
+  'cross_rebase',
+  'worker_clean_rebase',
+  'leader_integration_attempt',
+  'shutdown_checkpoint',
+  'shutdown_merge',
+] as const satisfies readonly TeamOperationalCommitKind[]
+
+export const TEAM_OPERATIONAL_COMMIT_STATUSES = [
+  'applied',
+  'noop',
+  'conflict',
+  'skipped',
+] as const satisfies readonly TeamOperationalCommitStatus[]
+
 export interface TeamOperationalCommitEntry {
   recorded_at: string;
   operation: TeamOperationalCommitKind;
