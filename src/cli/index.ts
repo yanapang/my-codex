@@ -1578,9 +1578,18 @@ function escapeShellDoubleQuotedValue(value: string): string {
   return value.replace(/["\\$`]/g, "\\$&");
 }
 
+interface TmuxExtendedKeysLeaseHolderRecord {
+  id: string;
+  pid: number;
+  platform?: NodeJS.Platform;
+  linuxStartTicks?: number;
+}
+
+type TmuxExtendedKeysLeaseHolder = string | TmuxExtendedKeysLeaseHolderRecord;
+
 interface TmuxExtendedKeysLeaseState {
   originalMode: string;
-  holders: string[];
+  holders: TmuxExtendedKeysLeaseHolder[];
 }
 
 function sanitizeTmuxLeaseKey(value: string): string {
@@ -1621,6 +1630,27 @@ function tmuxExtendedKeysLeasePath(cwd: string, socketPath: string): string {
   );
 }
 
+function isTmuxExtendedKeysLeaseHolderRecord(
+  holder: unknown,
+): holder is TmuxExtendedKeysLeaseHolderRecord {
+  if (!holder || typeof holder !== "object") return false;
+  const record = holder as Record<string, unknown>;
+  if (typeof record.id !== "string" || !record.id.trim()) return false;
+  if (!Number.isSafeInteger(record.pid) || Number(record.pid) <= 0) return false;
+  if (record.platform !== undefined && typeof record.platform !== "string") return false;
+  if (
+    record.linuxStartTicks !== undefined &&
+    !Number.isSafeInteger(record.linuxStartTicks)
+  ) return false;
+  return true;
+}
+
+function isTmuxExtendedKeysLeaseHolder(
+  holder: unknown,
+): holder is TmuxExtendedKeysLeaseHolder {
+  return typeof holder === "string" || isTmuxExtendedKeysLeaseHolderRecord(holder);
+}
+
 function readTmuxExtendedKeysLeaseState(
   leasePath: string,
 ): TmuxExtendedKeysLeaseState | null {
@@ -1633,7 +1663,7 @@ function readTmuxExtendedKeysLeaseState(
     if (
       typeof parsed.originalMode !== "string" ||
       !Array.isArray(parsed.holders) ||
-      !parsed.holders.every((holder) => typeof holder === "string")
+      !parsed.holders.every(isTmuxExtendedKeysLeaseHolder)
     ) {
       return null;
     }
@@ -1661,6 +1691,50 @@ function parseTmuxExtendedKeysLeaseHolderPid(holder: string): number | null {
   return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
 }
 
+function getTmuxExtendedKeysLeaseHolderId(holder: TmuxExtendedKeysLeaseHolder): string {
+  return typeof holder === "string" ? holder : holder.id;
+}
+
+function getTmuxExtendedKeysLeaseHolderPid(holder: TmuxExtendedKeysLeaseHolder): number | null {
+  if (typeof holder === "string") return parseTmuxExtendedKeysLeaseHolderPid(holder);
+  return Number.isSafeInteger(holder.pid) && holder.pid > 0 ? holder.pid : null;
+}
+
+function parseLinuxProcStartTicks(statContent: string): number | null {
+  const commandEnd = statContent.lastIndexOf(")");
+  if (commandEnd === -1) return null;
+
+  const remainder = statContent.slice(commandEnd + 1).trim();
+  const fields = remainder.split(/\s+/);
+  if (fields.length <= 19) return null;
+
+  const startTicks = Number(fields[19]);
+  return Number.isSafeInteger(startTicks) ? startTicks : null;
+}
+
+function readLinuxProcessStartTicks(pid: number): number | null {
+  try {
+    return parseLinuxProcStartTicks(readFileSync(`/proc/${pid}/stat`, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+function createTmuxExtendedKeysLeaseHolder(
+  id: string,
+  pid: number,
+): TmuxExtendedKeysLeaseHolderRecord {
+  const linuxStartTicks = process.platform === "linux"
+    ? readLinuxProcessStartTicks(pid) ?? undefined
+    : undefined;
+  return {
+    id,
+    pid,
+    platform: process.platform,
+    ...(linuxStartTicks !== undefined ? { linuxStartTicks } : {}),
+  };
+}
+
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -1674,15 +1748,25 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+function isTmuxExtendedKeysLeaseHolderAlive(
+  holder: TmuxExtendedKeysLeaseHolder,
+): boolean {
+  const pid = getTmuxExtendedKeysLeaseHolderPid(holder);
+  if (pid === null || !isProcessAlive(pid)) return false;
+
+  if (typeof holder === "string") return true;
+  if (holder.platform !== "linux" || process.platform !== "linux") return true;
+  if (holder.linuxStartTicks === undefined) return true;
+
+  return readLinuxProcessStartTicks(pid) === holder.linuxStartTicks;
+}
+
 function reapDeadTmuxExtendedKeysLeaseHolders(
   state: TmuxExtendedKeysLeaseState,
 ): TmuxExtendedKeysLeaseState {
   return {
     originalMode: state.originalMode,
-    holders: state.holders.filter((holder) => {
-      const pid = parseTmuxExtendedKeysLeaseHolderPid(holder);
-      return pid !== null && isProcessAlive(pid);
-    }),
+    holders: state.holders.filter(isTmuxExtendedKeysLeaseHolderAlive),
   };
 }
 
@@ -1814,12 +1898,12 @@ export function acquireTmuxExtendedKeysLease(
         );
         writeTmuxExtendedKeysLeaseState(leasePath, {
           originalMode: previousMode,
-          holders: [leaseId],
+          holders: [createTmuxExtendedKeysLeaseHolder(leaseId, holderPid)],
         });
         return;
       }
 
-      state.holders.push(leaseId);
+      state.holders.push(createTmuxExtendedKeysLeaseHolder(leaseId, holderPid));
       writeTmuxExtendedKeysLeaseState(leasePath, state);
     });
     return `${socketPath}\t${leaseId}`;
@@ -1859,7 +1943,9 @@ export function releaseTmuxExtendedKeysLease(
         return;
       }
 
-      const holders = state.holders.filter((holder) => holder !== leaseId);
+      const holders = state.holders.filter(
+        (holder) => getTmuxExtendedKeysLeaseHolderId(holder) !== leaseId,
+      );
       if (holders.length > 0) {
         writeTmuxExtendedKeysLeaseState(leasePath, {
           originalMode: state.originalMode,
