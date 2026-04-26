@@ -10,6 +10,7 @@ import {
   initTeamState,
   createTask,
   writeWorkerIdentity,
+  writeWorkerInbox,
   readTeamConfig,
   saveTeamConfig,
   listMailboxMessages,
@@ -994,8 +995,6 @@ sleep 5
       else delete process.env.OMX_TEAM_LEADER_CWD;
       if (typeof prevLaunchMode === 'string') process.env.OMX_TEAM_WORKER_LAUNCH_MODE = prevLaunchMode;
       else delete process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
-      if (typeof prevWorkerCli === 'string') process.env.OMX_TEAM_WORKER_CLI = prevWorkerCli;
-      else delete process.env.OMX_TEAM_WORKER_CLI;
       await rm(cwd, { recursive: true, force: true });
     }
   });
@@ -1015,6 +1014,7 @@ sleep 5
     } finally {
       if (typeof prevLaunchMode === 'string') process.env.OMX_TEAM_WORKER_LAUNCH_MODE = prevLaunchMode;
       else delete process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
+      delete process.env.OMX_TEAM_WORKER_CLI;
       await rm(cwd, { recursive: true, force: true });
     }
   });
@@ -5164,6 +5164,77 @@ esac
         () => assignTask('team-approval', 'worker-1', task.id, cwd),
         /plan_approval_required/,
       );
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+
+
+  it('startTeam persists synthesized delegation plans for broad tasks', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-'));
+    const binDir = join(cwd, 'bin');
+    const fakeCodexPath = join(binDir, 'codex');
+    await mkdir(binDir, { recursive: true });
+    await writeFakePromptWorkerBinary(
+      fakeCodexPath,
+      `setTimeout(() => {}, 5000);`,
+    );
+
+    let runtime: TeamRuntime | null = null;
+    try {
+      runtime = await withPromptModeCodexEnv(binDir, {}, () =>
+        withoutTeamWorkerEnv(() =>
+          startTeam(
+            'team-delegation-persist',
+            'delegation persistence test',
+            'executor',
+            1,
+            [{ subject: 'Investigate runtime assignment', description: 'Search runtime and debug assignTask behavior' }],
+            cwd,
+          ),
+        ),
+      );
+
+      const task = await readTask('team-delegation-persist', '1', cwd);
+      assert.equal(task?.delegation?.mode, 'auto');
+      assert.equal(task?.delegation?.child_model, 'gpt-5.4-mini');
+      assert.equal(task?.delegation?.required_parallel_probe, true);
+    } finally {
+      if (runtime) {
+        await shutdownTeam(runtime.teamName, cwd, { force: true }).catch(() => {});
+      }
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('assignTask synthesizes delegation before follow-up dispatch rollback', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-'));
+    try {
+      await initTeamState('team-assign-delegation', 'assignment delegation test', 'executor', 1, cwd);
+      const config = await readTeamConfig('team-assign-delegation', cwd);
+      assert.ok(config);
+      config.worker_launch_mode = 'prompt';
+      await saveTeamConfig(config, cwd);
+      const task = await createTask(
+        'team-assign-delegation',
+        { subject: 'Investigate follow-up assignment', description: 'Search repo and debug follow-up assignment behavior', status: 'pending' },
+        cwd,
+      );
+
+      await writeWorkerInbox('team-assign-delegation', 'worker-1', 'existing inbox', cwd);
+      await assert.rejects(
+        () => assignTask('team-assign-delegation', 'worker-1', task.id, cwd),
+        /worker_notify_failed/,
+      );
+
+      const reread = await readTask('team-assign-delegation', task.id, cwd);
+      assert.equal(reread?.delegation?.mode, 'auto');
+      assert.equal(reread?.delegation?.child_model, 'gpt-5.4-mini');
+
+      const inbox = await readFile(join(cwd, '.omx', 'state', 'team', 'team-assign-delegation', 'workers', 'worker-1', 'inbox.md'), 'utf-8');
+      assert.match(inbox, /Assignment Cancelled/);
+      assert.match(inbox, /worker_notify_failed/);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
