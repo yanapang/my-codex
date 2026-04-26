@@ -9,6 +9,8 @@ export type TeamOperationalCommitKind =
   | 'integration_merge'
   | 'integration_cherry_pick'
   | 'cross_rebase'
+  | 'worker_clean_rebase'
+  | 'leader_integration_attempt'
   | 'shutdown_checkpoint'
   | 'shutdown_merge'
 
@@ -189,7 +191,7 @@ function buildLeaderFinalizationPrompt(teamName: string, taskSummary: TeamCommit
 
   return [
     `Team "${teamName}" is ready for commit finalization.`,
-    'Treat runtime-originated commits (auto-checkpoints, merge/cherry-picks, cross-rebases, shutdown checkpoints) as temporary scaffolding rather than final history.',
+    'Treat runtime-originated commits (auto-checkpoints, merge/cherry-picks, cross-rebases, worker clean rebase scaffolds, leader integration signals, shutdown checkpoints) as temporary scaffolding rather than final history.',
     'Do not reuse operational commit subjects verbatim.',
     `${scopeHint}`,
     'Rewrite or squash the operational history into clean Lore-format final commit(s) with intent-first subjects and relevant trailers.',
