@@ -1,9 +1,10 @@
 import { execFile } from 'child_process';
 import { existsSync } from 'fs';
-import { appendFile, mkdir, readFile, writeFile } from 'fs/promises';
+import { mkdir, readFile, writeFile } from 'fs/promises';
 import { join, resolve } from 'path';
 import { promisify } from 'util';
 import { appendTeamCommitHygieneEntries, type TeamOperationalCommitEntry, type TeamOperationalCommitKind } from '../../team/commit-hygiene.js';
+import { appendTeamEvent } from '../../team/state.js';
 import { resolveWorkerTeamStateRoot } from '../../team/state-root.js';
 
 const execFileAsync = promisify(execFile);
@@ -45,6 +46,7 @@ interface DedupeMarker {
 const PROTECTED_PATH_PREFIXES = [
   '.omx/state/',
   '.omx/logs/',
+  '.omx/reports/',
 ];
 const PROTECTED_PATH_SUFFIXES = [
   '.pid',
@@ -163,8 +165,21 @@ function isProtectedCheckpointPath(path: string): boolean {
   return false;
 }
 
-async function readLeaderHeadObserved(stateRoot: string, teamName: string): Promise<string | null> {
-  const config = await readJsonIfExists(join(stateRoot, 'team', teamName, 'config.json'));
+async function readTeamConfig(stateRoot: string, teamName: string): Promise<JsonRecord | null> {
+  return readJsonIfExists(join(stateRoot, 'team', teamName, 'config.json'));
+}
+
+function readLeaderArtifactCwd(config: JsonRecord | null, fallbackCwd: string): string {
+  const leaderCwd = safeString(config?.leader_cwd ?? config?.leaderCwd).trim();
+  return leaderCwd ? resolve(fallbackCwd, leaderCwd) : fallbackCwd;
+}
+
+async function readLeaderHeadObserved(config: JsonRecord | null, fallbackCwd: string): Promise<string | null> {
+  const leaderCwd = safeString(config?.leader_cwd ?? config?.leaderCwd).trim();
+  if (leaderCwd) {
+    const head = await gitMaybe(resolve(fallbackCwd, leaderCwd), ['rev-parse', '--verify', 'HEAD']);
+    if (head.ok && head.stdout) return head.stdout;
+  }
   const value = safeString(config?.leader_head ?? config?.leaderHead ?? config?.leader_head_observed).trim();
   return value || null;
 }
@@ -199,27 +214,18 @@ async function readDedupeMarker(path: string): Promise<DedupeMarker> {
 function buildDedupeKey(params: {
   teamName: string;
   workerName: string;
-  workerHeadBefore: string | null;
   workerHeadAfter: string | null;
-  checkpointCommit: string | null;
-  leaderHeadObserved: string | null;
   operationKind: PostToolUseOperationKind;
-  outcomeStatus: PostToolUseStatus;
 }): string {
   return [
     params.teamName,
     params.workerName,
-    params.workerHeadBefore ?? '',
     params.workerHeadAfter ?? '',
-    params.checkpointCommit ?? '',
-    params.leaderHeadObserved ?? '',
     params.operationKind,
-    params.outcomeStatus,
   ].join('|');
 }
 
 async function appendLeaderSignal(params: {
-  stateRoot: string;
   teamName: string;
   workerName: string;
   workerHeadBefore: string | null;
@@ -229,34 +235,32 @@ async function appendLeaderSignal(params: {
   outcomeStatus: PostToolUseStatus;
   toolUseId?: string;
   dedupeKey: string;
-  createdAt: string;
   worktreePath: string;
+  leaderArtifactCwd: string;
 }): Promise<void> {
-  const eventsDir = join(params.stateRoot, 'team', params.teamName, 'events');
-  await mkdir(eventsDir, { recursive: true });
-  const event = {
+  await appendTeamEvent(params.teamName, {
     type: 'worker_integration_attempt_requested',
-    team_name: params.teamName,
-    worker_name: params.workerName,
-    worker_head_before: params.workerHeadBefore,
-    worker_head_after: params.workerHeadAfter,
-    checkpoint_commit: params.checkpointCommit,
-    leader_head_observed: params.leaderHeadObserved,
-    operation_kind: 'leader_integration_attempt',
-    outcome_status: params.outcomeStatus,
-    tool_use_id: params.toolUseId,
-    dedupe_key: params.dedupeKey,
-    created_at: params.createdAt,
-    worktree_path: params.worktreePath,
-    source: 'posttooluse',
-  };
-  await appendFile(join(eventsDir, 'events.ndjson'), `${JSON.stringify(event)}\n`, 'utf-8');
+    worker: params.workerName,
+    metadata: {
+      worker_head_before: params.workerHeadBefore,
+      worker_head_after: params.workerHeadAfter,
+      checkpoint_commit: params.checkpointCommit,
+      leader_head_observed: params.leaderHeadObserved,
+      operation_kind: 'leader_integration_attempt',
+      outcome_status: params.outcomeStatus,
+      tool_use_id: params.toolUseId,
+      dedupe_key: params.dedupeKey,
+      worktree_path: params.worktreePath,
+      source: 'posttooluse',
+    },
+  }, params.leaderArtifactCwd);
 }
 
 async function appendLedger(params: {
   teamName: string;
   workerName: string;
   cwd: string;
+  leaderArtifactCwd: string;
   operation: TeamOperationalCommitKind;
   status: PostToolUseStatus;
   workerHeadBefore: string | null;
@@ -280,7 +284,7 @@ async function appendLedger(params: {
     worktree_path: params.cwd,
     detail: params.detail,
   };
-  await appendTeamCommitHygieneEntries(params.teamName, [entry], params.cwd);
+  await appendTeamCommitHygieneEntries(params.teamName, [entry], params.leaderArtifactCwd);
 }
 
 async function writeDedupeMarker(path: string, params: {
@@ -310,7 +314,6 @@ async function writeDedupeMarker(path: string, params: {
   }, null, 2));
 }
 
-
 async function classifyCleanScaffolding(cwd: string, leaderHeadObserved: string | null, workerHeadAfter: string | null): Promise<{ status: PostToolUseStatus; reason: string }> {
   if (!leaderHeadObserved) return { status: 'skipped', reason: 'no_leader_head_observed' };
   if (!workerHeadAfter) return { status: 'skipped', reason: 'no_worker_head' };
@@ -323,6 +326,13 @@ async function classifyCleanScaffolding(cwd: string, leaderHeadObserved: string 
   if (workerAncestor.ok) return { status: 'skipped', reason: 'worker_behind_leader_defer_to_leader_integration' };
 
   return { status: 'skipped', reason: 'non_fast_forward_defer_to_leader_integration' };
+}
+
+async function unstageCheckpointablePaths(cwd: string, paths: string[]): Promise<void> {
+  if (paths.length === 0) return;
+  const restore = await gitMaybe(cwd, ['restore', '--staged', '--', ...paths]);
+  if (restore.ok) return;
+  await gitMaybe(cwd, ['reset', '-q', '--', ...paths]);
 }
 
 async function checkpointIfEligible(cwd: string, workerName: string): Promise<{
@@ -341,6 +351,11 @@ async function checkpointIfEligible(cwd: string, workerName: string): Promise<{
     return { status: 'conflict', reason: 'unmerged_paths', checkpointCommit: null, workerHeadAfter: await gitHead(cwd) };
   }
 
+  const staged = await git(cwd, ['diff', '--name-only', '--cached']);
+  if (staged.trim()) {
+    return { status: 'skipped', reason: 'index_not_clean', checkpointCommit: null, workerHeadAfter: await gitHead(cwd) };
+  }
+
   const status = await git(cwd, ['status', '--porcelain=v1', '-uall']);
   const paths = parsePorcelainPaths(status);
   if (paths.length === 0) {
@@ -349,17 +364,24 @@ async function checkpointIfEligible(cwd: string, workerName: string): Promise<{
 
   const checkpointable = paths.filter((path) => !isProtectedCheckpointPath(path));
   if (checkpointable.length === 0) {
-    const onlyHookState = paths.every((path) => path.replace(/\\/g, '/').startsWith('.omx/state/'));
-    return onlyHookState
+    const onlyRuntimeArtifacts = paths.every((path) => {
+      const normalized = path.replace(/\\/g, '/');
+      return normalized.startsWith('.omx/state/') || normalized.startsWith('.omx/logs/') || normalized.startsWith('.omx/reports/');
+    });
+    return onlyRuntimeArtifacts
       ? { status: 'noop', checkpointCommit: null, workerHeadAfter: await gitHead(cwd) }
       : { status: 'skipped', reason: 'only_protected_paths_changed', checkpointCommit: null, workerHeadAfter: await gitHead(cwd) };
   }
 
   const addResult = await gitMaybe(cwd, ['add', '--', ...checkpointable]);
-  if (!addResult.ok) return { status: 'skipped', reason: `git_add_failed:${addResult.stderr.slice(0, 120)}`, checkpointCommit: null, workerHeadAfter: await gitHead(cwd) };
+  if (!addResult.ok) {
+    await unstageCheckpointablePaths(cwd, checkpointable);
+    return { status: 'skipped', reason: `git_add_failed:${addResult.stderr.slice(0, 120)}`, checkpointCommit: null, workerHeadAfter: await gitHead(cwd) };
+  }
 
   const commitResult = await gitMaybe(cwd, ['commit', '--no-verify', '-m', `omx(team): auto-checkpoint ${workerName}`]);
   if (!commitResult.ok) {
+    await unstageCheckpointablePaths(cwd, checkpointable);
     const reason = commitResult.stderr.includes('conflict') ? 'git_commit_conflict' : `git_commit_failed:${commitResult.stderr.slice(0, 120)}`;
     return { status: reason.includes('conflict') ? 'conflict' : 'skipped', reason, checkpointCommit: null, workerHeadAfter: await gitHead(cwd) };
   }
@@ -403,8 +425,10 @@ export async function handleTeamWorkerPostToolUseSuccess(
     const nowIso = new Date().toISOString();
     await writeHeartbeat(stateRoot, teamName, workerName, nowIso);
 
+    const config = await readTeamConfig(stateRoot, teamName);
+    const leaderArtifactCwd = readLeaderArtifactCwd(config, cwd);
     const workerHeadBefore = await gitHead(cwd);
-    const leaderHeadObserved = await readLeaderHeadObserved(stateRoot, teamName);
+    const leaderHeadObserved = await readLeaderHeadObserved(config, cwd);
     const checkpoint = await checkpointIfEligible(cwd, workerName);
     const workerHeadAfter = checkpoint.workerHeadAfter;
     const operationKinds: PostToolUseOperationKind[] = ['auto_checkpoint'];
@@ -412,6 +436,7 @@ export async function handleTeamWorkerPostToolUseSuccess(
       teamName,
       workerName,
       cwd,
+      leaderArtifactCwd,
       operation: 'auto_checkpoint',
       status: checkpoint.status,
       workerHeadBefore,
@@ -428,6 +453,7 @@ export async function handleTeamWorkerPostToolUseSuccess(
       teamName,
       workerName,
       cwd,
+      leaderArtifactCwd,
       operation: 'worker_clean_rebase',
       status: cleanScaffolding.status,
       workerHeadBefore,
@@ -441,19 +467,14 @@ export async function handleTeamWorkerPostToolUseSuccess(
     const dedupeKey = buildDedupeKey({
       teamName,
       workerName,
-      workerHeadBefore,
       workerHeadAfter,
-      checkpointCommit: checkpoint.checkpointCommit,
-      leaderHeadObserved,
       operationKind: 'leader_integration_attempt',
-      outcomeStatus: checkpoint.status,
     });
     const dedupePath = join(stateRoot, 'team', teamName, 'workers', workerName, 'posttooluse-dedupe.json');
     const marker = await readDedupeMarker(dedupePath);
 
     if (workerHeadAfter && !marker.keys.includes(dedupeKey)) {
       await appendLeaderSignal({
-        stateRoot,
         teamName,
         workerName,
         workerHeadBefore,
@@ -463,13 +484,14 @@ export async function handleTeamWorkerPostToolUseSuccess(
         outcomeStatus: checkpoint.status,
         toolUseId: readToolUseId(payload),
         dedupeKey,
-        createdAt: nowIso,
         worktreePath,
+        leaderArtifactCwd,
       });
       await appendLedger({
         teamName,
         workerName,
         cwd,
+        leaderArtifactCwd,
         operation: 'leader_integration_attempt',
         status: checkpoint.status,
         workerHeadBefore,
