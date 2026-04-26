@@ -21,7 +21,29 @@ import { DEFAULT_MARKER } from '../tmux-hook-engine.js';
 const LEADER_PANE_SHELL_NO_INJECTION_REASON = 'leader_pane_shell_no_injection';
 
 export async function resolveTeamStateDirForWorker(cwd, parsedTeamWorker) {
-  return resolveWorkerTeamStateRootPath(cwd, parsedTeamWorker, process.env);
+  const resolved = await resolveWorkerTeamStateRootPath(cwd, parsedTeamWorker, process.env);
+  if (resolved) return resolved;
+
+  const localStateRoot = join(cwd, '.omx', 'state');
+  const teamDir = join(localStateRoot, 'team', parsedTeamWorker.teamName);
+  const workerDir = join(teamDir, 'workers', parsedTeamWorker.workerName);
+  const identityPath = join(workerDir, 'identity.json');
+  if (!existsSync(join(teamDir, 'manifest.v2.json')) && !existsSync(join(teamDir, 'config.json'))) return null;
+  if (!existsSync(workerDir)) return null;
+
+  try {
+    if (!existsSync(identityPath)) {
+      await mkdir(workerDir, { recursive: true });
+      await writeFile(identityPath, JSON.stringify({
+        name: parsedTeamWorker.workerName,
+        worktree_path: cwd,
+        team_state_root: localStateRoot,
+      }, null, 2));
+    }
+    return await resolveWorkerTeamStateRootPath(cwd, parsedTeamWorker, process.env);
+  } catch {
+    return null;
+  }
 }
 
 
