@@ -430,6 +430,13 @@ describe("omx setup install mode behavior", () => {
             agentsMd,
             /oh-my-codex - Intelligent Multi-Agent Orchestration/,
           );
+          assert.match(agentsMd, /<!-- omx:generated:agents-md -->/);
+          assert.match(agentsMd, /<!-- OMX:MODELS:START -->/);
+          assert.match(agentsMd, /<!-- OMX:MODELS:END -->/);
+          assert.match(agentsMd, /<guidance_schema_contract>/);
+          assert.match(agentsMd, /<execution_protocols>/);
+          assert.match(agentsMd, /AGENTS\.md is the top-level operating contract/);
+          assert.match(agentsMd, /Treat installed prompts as narrower execution surfaces under AGENTS\.md authority|Role prompts under `prompts\/\*\.md` are narrower execution surfaces/);
         });
       });
     } finally {
