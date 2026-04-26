@@ -12,7 +12,7 @@ import {
   readSubagentSessionSummary,
   recordSubagentTurnForSession,
 } from "../subagents/tracker.js";
-import { resolveCanonicalTeamStateRoot } from "../team/state-root.js";
+import { resolveCanonicalTeamStateRoot, resolveWorkerTeamStateRootPath } from "../team/state-root.js";
 import {
   appendToLog,
   isSessionStateUsable,
@@ -48,6 +48,7 @@ import {
   buildNativePreToolUseOutput,
   detectMcpTransportFailure,
 } from "./codex-native-pre-post.js";
+import { handleTeamWorkerPostToolUseSuccess } from "./notify-hook/team-worker-posttooluse.js";
 import {
   resolveCodexExecutionSurface,
   type CodexLauncherKind,
@@ -1076,47 +1077,13 @@ function parseTeamWorkerEnv(rawValue: string): { teamName: string; workerName: s
   };
 }
 
-async function readTeamStateRootFromJson(path: string): Promise<string | null> {
-  const parsed = await readJsonIfExists(path);
-  const value = safeString(parsed?.team_state_root).trim();
-  return value || null;
-}
-
 async function resolveTeamStateDirForWorkerContext(
   cwd: string,
   workerContext: { teamName: string; workerName: string },
-): Promise<string> {
-  const explicitStateRoot = safeString(process.env.OMX_TEAM_STATE_ROOT).trim();
-  if (explicitStateRoot) {
-    return resolve(cwd, explicitStateRoot);
-  }
-
-  const leaderCwd = safeString(process.env.OMX_TEAM_LEADER_CWD).trim();
-  const candidateStateDirs = [
-    ...(leaderCwd ? [join(resolve(leaderCwd), ".omx", "state")] : []),
-    join(cwd, ".omx", "state"),
-  ];
-
-  for (const candidateStateDir of candidateStateDirs) {
-    const teamRoot = join(candidateStateDir, "team", workerContext.teamName);
-    if (!existsSync(teamRoot)) continue;
-
-    const identityRoot = await readTeamStateRootFromJson(
-      join(teamRoot, "workers", workerContext.workerName, "identity.json"),
-    );
-    if (identityRoot) return resolve(cwd, identityRoot);
-
-    const manifestRoot = await readTeamStateRootFromJson(join(teamRoot, "manifest.v2.json"));
-    if (manifestRoot) return resolve(cwd, manifestRoot);
-
-    const configRoot = await readTeamStateRootFromJson(join(teamRoot, "config.json"));
-    if (configRoot) return resolve(cwd, configRoot);
-
-    return candidateStateDir;
-  }
-
-  return join(cwd, ".omx", "state");
+): Promise<string | null> {
+  return resolveWorkerTeamStateRootPath(cwd, workerContext, process.env);
 }
+
 
 async function buildTeamWorkerStopOutput(
   cwd: string,
@@ -1125,6 +1092,7 @@ async function buildTeamWorkerStopOutput(
   if (!workerContext) return null;
 
   const stateDir = await resolveTeamStateDirForWorkerContext(cwd, workerContext);
+  if (!stateDir) return null;
   const workerRoot = join(stateDir, "team", workerContext.teamName, "workers", workerContext.workerName);
   const [identity, status] = await Promise.all([
     readJsonIfExists(join(workerRoot, "identity.json")),
@@ -2281,6 +2249,7 @@ export async function dispatchCodexNativeHook(
       await markTeamTransportFailure(cwd, payload);
     }
     outputJson = buildNativePostToolUseOutput(payload);
+    await handleTeamWorkerPostToolUseSuccess(payload, cwd);
   } else if (hookEventName === "Stop") {
     outputJson = await buildStopHookOutput(payload, cwd, stateDir);
   }
