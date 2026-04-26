@@ -1169,7 +1169,7 @@ esac
           delete process.env.WSL_INTEROP;
           Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
 
-          runtime = await withoutTeamWorkerEnv(() =>
+          const runtime = await withoutTeamWorkerEnv(() =>
             startTeam(
               'team-win32-no-env',
               'native windows current-client detection',
@@ -1190,7 +1190,6 @@ esac
           if (teamNameForCleanup) {
             await shutdownTeam(teamNameForCleanup, cwd, { force: true });
           }
-          runtime = null;
         },
       );
     } finally {
@@ -1517,7 +1516,7 @@ esac
     const previousWorkerCli = process.env.OMX_TEAM_WORKER_CLI;
     const previousReadyTimeout = process.env.OMX_TEAM_READY_TIMEOUT_MS;
     const previousStartupEvidenceTimeout = process.env.OMX_TEAM_STARTUP_EVIDENCE_TIMEOUT_MS;
-    let runtime: TeamRuntime | null = null;
+    let runtimeTeamName: string | null = null;
 
     try {
       await withMockTmuxFixture(
@@ -1598,7 +1597,7 @@ esac
           process.env.OMX_TEAM_READY_TIMEOUT_MS = '2000';
           process.env.OMX_TEAM_STARTUP_EVIDENCE_TIMEOUT_MS = '50';
 
-          runtime = await withoutTeamWorkerEnv(() =>
+          const runtime = await withoutTeamWorkerEnv(() =>
             startTeam(
               'team-parallel-ready',
               'worker-2 readiness should not wait for worker-1 readiness settle',
@@ -1610,6 +1609,7 @@ esac
               ],
               cwd,
             ));
+          runtimeTeamName = runtime.teamName;
 
           const order = (await readFile(join(cwd, 'ready-order.log'), 'utf-8')).trim().split('\n');
           assert.ok(order.includes('w1-ready-start'));
@@ -1623,7 +1623,7 @@ esac
         },
       );
     } finally {
-      if (runtime) await shutdownTeam(runtime.teamName, cwd, { force: true }).catch(() => {});
+      if (runtimeTeamName) await shutdownTeam(runtimeTeamName, cwd, { force: true }).catch(() => {});
       if (typeof previousTmux === 'string') process.env.TMUX = previousTmux;
       else delete process.env.TMUX;
       if (typeof previousTmuxPane === 'string') process.env.TMUX_PANE = previousTmuxPane;
