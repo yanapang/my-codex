@@ -1626,6 +1626,73 @@ export function waitForWorkerReady(
   return false;
 }
 
+// Async counterpart to waitForWorkerReady(). It keeps the same readiness
+// predicates and trust-prompt handling but yields between polls so one slow
+// worker cannot block later startup attempts in startTeam().
+export async function waitForWorkerReadyAsync(
+  sessionName: string,
+  workerIndex: number,
+  timeoutMs: number = 30_000,
+  workerPaneId?: string,
+): Promise<boolean> {
+  const initialBackoffMs = 150;
+  const maxBackoffMs = 8000;
+  const startedAt = Date.now();
+  let blockedByTrustPrompt = false;
+  let promptDismissed = false;
+
+  const sendRobustEnter = async (): Promise<void> => {
+    const target = paneTarget(sessionName, workerIndex, workerPaneId);
+    runTmux(['send-keys', '-t', target, 'C-m']);
+    await sleep(120);
+    runTmux(['send-keys', '-t', target, 'C-m']);
+  };
+
+  const check = async (): Promise<boolean> => {
+    const target = paneTarget(sessionName, workerIndex, workerPaneId);
+    const result = runTmux(sharedBuildVisibleCapturePaneArgv(target));
+    if (!result.ok) return false;
+    if (dismissClaudeBypassPermissionsPromptIfPresent(target, result.stdout)) {
+      promptDismissed = true;
+      return false;
+    }
+    if (paneHasClaudeBypassPermissionsPrompt(result.stdout)) {
+      return false;
+    }
+    if (paneHasTrustPrompt(result.stdout)) {
+      if (process.env.OMX_TEAM_AUTO_TRUST !== '0') {
+        await sendRobustEnter();
+        promptDismissed = true;
+        return false;
+      }
+      blockedByTrustPrompt = true;
+      return false;
+    }
+    if (paneLooksReady(result.stdout)) return true;
+    if (!sharedPaneShowsCodexViewport(result.stdout)) return false;
+
+    const scrollbackResult = runTmux(sharedBuildCapturePaneArgv(target, 80));
+    if (!scrollbackResult.ok) return false;
+    return paneLooksReady(scrollbackResult.stdout);
+  };
+
+  let delayMs = initialBackoffMs;
+  while (Date.now() - startedAt < timeoutMs) {
+    if (await check()) return true;
+    if (blockedByTrustPrompt) return false;
+    if (promptDismissed) {
+      delayMs = initialBackoffMs;
+      promptDismissed = false;
+    }
+    const remaining = timeoutMs - (Date.now() - startedAt);
+    if (remaining <= 0) break;
+    await sleep(Math.max(0, Math.min(delayMs, remaining)));
+    delayMs = Math.min(maxBackoffMs, delayMs * 2);
+  }
+
+  return false;
+}
+
 /**
  * Detect and auto-dismiss a Codex "Trust this directory?" prompt in a worker pane.
  * Returns true if a trust prompt was found and dismissed, false otherwise.
