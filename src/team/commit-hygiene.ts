@@ -4,15 +4,26 @@ import { join, resolve } from 'path'
 import type { TeamTask } from './state.js'
 import { writeAtomic } from './state.js'
 
-export type TeamOperationalCommitKind =
-  | 'auto_checkpoint'
-  | 'integration_merge'
-  | 'integration_cherry_pick'
-  | 'cross_rebase'
-  | 'worker_clean_rebase'
-  | 'leader_integration_attempt'
-  | 'shutdown_checkpoint'
-  | 'shutdown_merge'
+export const TEAM_OPERATIONAL_COMMIT_KINDS = [
+  'auto_checkpoint',
+  'integration_merge',
+  'integration_cherry_pick',
+  'cross_rebase',
+  'worker_clean_rebase',
+  'leader_integration_attempt',
+  'shutdown_checkpoint',
+  'shutdown_merge',
+] as const
+
+export const TEAM_OPERATIONAL_COMMIT_STATUSES = [
+  'applied',
+  'noop',
+  'conflict',
+  'skipped',
+] as const
+
+export type TeamOperationalCommitKind = typeof TEAM_OPERATIONAL_COMMIT_KINDS[number]
+export type TeamOperationalCommitStatus = typeof TEAM_OPERATIONAL_COMMIT_STATUSES[number]
 
 export interface TeamOperationalCommitEntry {
   recorded_at: string;
@@ -179,7 +190,6 @@ export async function appendTeamCommitHygieneEntries(
   return updated
 }
 
-
 const TEAM_COMMIT_HYGIENE_VOCABULARY: TeamCommitHygieneVocabulary = {
   operational_commit_kinds: [
     {
@@ -201,6 +211,16 @@ const TEAM_COMMIT_HYGIENE_VOCABULARY: TeamCommitHygieneVocabulary = {
       value: 'cross_rebase',
       label: 'cross-rebase',
       description: 'A runtime rebase operation that moves worker work across the current leader branch baseline.',
+    },
+    {
+      value: 'worker_clean_rebase',
+      label: 'worker clean rebase',
+      description: 'A runtime rebase that refreshes a clean worker branch onto the current leader branch baseline.',
+    },
+    {
+      value: 'leader_integration_attempt',
+      label: 'leader integration attempt',
+      description: 'A leader-side integration attempt recorded for auditability even when it does not create a final semantic commit.',
     },
     {
       value: 'shutdown_checkpoint',
@@ -294,7 +314,6 @@ export function buildTeamCommitHygieneContext(params: {
     leader_finalization_prompt: buildLeaderFinalizationPrompt(params.teamName, taskSummary),
   }
 }
-
 
 function renderVocabularyTermsMarkdown(title: string, terms: TeamCommitHygieneVocabularyTerm[]): string {
   const lines = [`### ${title}`, '']
