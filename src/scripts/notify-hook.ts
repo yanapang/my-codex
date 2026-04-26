@@ -20,7 +20,7 @@
 
 import { writeFile, appendFile, mkdir, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { dirname, join } from 'path';
+import { dirname, join, resolve } from 'path';
 
 import { safeString, asNumber } from './notify-hook/utils.js';
 import {
@@ -281,6 +281,21 @@ async function main() {
       team_worker: teamWorkerEnv || null,
       reason: 'skip_team_worker_state_mutations',
     }).catch(() => {});
+
+    // Keep the fail-closed worker state-root behavior for normal team-worker
+    // mutations, but allow the narrow auto-nudge path to use an explicitly
+    // supplied, already-existing worker state root. Auto-nudge only needs the
+    // worker-scoped state files/pane anchor and should not fall back to creating
+    // local `.omx/state` when identity resolution failed.
+    const explicitWorkerStateRoot = safeString(process.env.OMX_TEAM_STATE_ROOT || '').trim();
+    const autoNudgeStateDir = explicitWorkerStateRoot ? resolve(cwd, explicitWorkerStateRoot) : '';
+    if (autoNudgeStateDir && existsSync(autoNudgeStateDir)) {
+      try {
+        await maybeAutoNudge({ cwd, stateDir: autoNudgeStateDir, logsDir, payload });
+      } catch {
+        // Non-critical
+      }
+    }
     return;
   }
 
