@@ -35,7 +35,7 @@ Most non-trivial software tasks require coordinated phases: understanding requir
 - If a deep-interview spec exists, use it as high-clarity phase input instead of re-expanding from scratch
 - If input is too vague for reliable expansion, offer/trigger `$deep-interview` first
 - Do not enter expansion/planning/execution-heavy phases until pre-context grounding exists; if fast execution is forced, proceed only with explicit risk notes
-- Apply the shared workflow guidance pattern: concise evidence reporting, scoped task-update overrides, persistent inspection/verification while the workflow depends on it, and automatic continuation for safe reversible steps. Ask only for material, destructive, or preference-dependent branches.
+- Apply the shared workflow guidance pattern: concise, evidence-dense progress and completion reporting, local overrides for the active workflow branch, persistent inspection/verification while the workflow depends on it, and automatic continuation for safe reversible steps. Ask only for material, destructive, or preference-dependent branches.
 </Execution_Policy>
 
 <Steps>

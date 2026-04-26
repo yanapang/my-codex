@@ -273,7 +273,7 @@ Command routing:
 - When `USE_OMX_EXPLORE_CMD` enables advisory routing, strongly prefer `omx explore` as the default surface for simple read-only repository lookup tasks (files, symbols, patterns, relationships).
 - For simple file/symbol lookups, use `omx explore` FIRST before attempting full code analysis.
 
-Use `omx explore --prompt ...` for simple read-only lookups. Use `omx sparkshell` for noisy read-only shell commands, bounded verification, repo-wide listing/search, or explicit `--tmux-pane` summaries. Keep ambiguous, implementation-heavy, edit-heavy, diagnostics, tests, MCP/web, and complex shell work on the normal path; if `omx explore` or `omx sparkshell` is incomplete, retry narrower or fall back.
+Use `omx explore --prompt ...` for simple read-only lookups through the shell-only, allowlisted, read-only path. Use `omx sparkshell` for noisy read-only shell commands, bounded verification, repo-wide listing/search, or explicit `omx sparkshell --tmux-pane` summaries. Treat sparkshell as explicit opt-in. When to use what: keep ambiguous, implementation-heavy, edit-heavy, diagnostics, tests, MCP/web, and complex shell work on the normal path; if `omx explore` or `omx sparkshell` is incomplete, retry narrower or gracefully fall back to the normal path.
 
 Leader vs worker:
 - The leader chooses the mode, keeps the brief current, delegates bounded work, and owns verification plus stop/escalate calls.
@@ -295,9 +295,11 @@ Parallelization: run independent tasks in parallel, dependent tasks sequentially
 
 Anti-slop workflow:
 - Cleanup/refactor/deslop work still follows the same `$deep-interview` -> `$ralplan` -> `$team`/`$ralph` path; use `$ai-slop-cleaner` as a bounded helper inside the chosen execution lane, not as a competing top-level workflow.
-- Lock behavior with tests first, then make one smell-focused pass at a time.
-- Prefer deletion, reuse, and boundary repair over new layers.
-- Keep writer/reviewer pass separation for cleanup plans and approvals.
+- Write a cleanup plan before modifying code; lock existing behavior with regression tests first, then make one smell-focused pass at a time.
+- Prefer deletion over addition, and prefer reuse plus boundary repair over new layers.
+- No new dependencies without explicit request.
+- Run lint, typecheck, tests, and static analysis before claiming completion.
+- Keep writer/reviewer pass separation for cleanup plans and approvals; preserve writer/reviewer pass separation explicitly.
 
 Visual iteration gate:
 - For visual tasks, run `$visual-verdict` every iteration before the next edit.

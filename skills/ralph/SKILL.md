@@ -35,7 +35,7 @@ Complex tasks often fail silently: partial implementations get declared "done", 
 - Always pass the `model` parameter explicitly when delegating to agents
 - Read `docs/shared/agent-tiers.md` before first delegation to select correct agent tiers
 - Deliver the full implementation: no scope reduction, no partial completion, no deleting tests to make them pass
-- Apply the shared workflow guidance pattern: concise evidence reporting, scoped task-update overrides, persistent inspection/verification while the execution loop depends on it, and automatic continuation for safe reversible steps. Ask only for material, destructive, or preference-dependent branches.
+- Apply the shared workflow guidance pattern: concise, evidence-dense progress and completion reporting, local overrides for the active workflow branch, persistent inspection/verification while the execution loop depends on it, and automatic continuation for safe reversible steps. Ask only for material, destructive, or preference-dependent branches.
 </Execution_Policy>
 
 <Steps>

@@ -19,7 +19,7 @@ This skill is operationally sensitive. Treat it as an operator workflow, not a g
 
 ## GPT-5.4 Guidance Alignment
 
-Use the shared workflow guidance pattern: concise evidence reporting, scoped task-update overrides, persistent inspection/verification while correctness depends on it, and automatic continuation for safe reversible steps. Ask only for material, destructive, or preference-dependent branches.
+Use the shared workflow guidance pattern: concise, evidence-dense progress and completion reporting, local overrides for the active workflow branch, persistent inspection/verification while correctness depends on it, and automatic continuation for safe reversible steps. Ask only for material, destructive, or preference-dependent branches.
 
 When user triggers `$team`, the agent must:
 

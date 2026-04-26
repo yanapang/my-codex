@@ -28,7 +28,7 @@ $ralplan --interactive "task description"
 
 ## GPT-5.4 Guidance Alignment
 
-Use the shared workflow guidance pattern: concise evidence reporting, scoped task-update overrides, persistent inspection/verification while consensus planning depends on it, right-sized implementation/PRD shape, and automatic continuation for safe reversible steps. Ask only for material, destructive, or preference-dependent branches.
+Use the shared workflow guidance pattern: concise, evidence-dense progress and completion reporting, local overrides for the active workflow branch, persistent inspection/verification while consensus planning depends on it, right-sized implementation/PRD shape, and automatic continuation for safe reversible steps. Ask only for material, destructive, or preference-dependent branches.
 
 This skill invokes the Plan skill in consensus mode:
 

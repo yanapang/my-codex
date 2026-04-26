@@ -42,7 +42,7 @@ Leave execution with a right-sized, evidence-grounded plan: scope, steps, accept
 <execution_loop>
 1. Inspect the repository before asking about code facts.
 2. Classify the task as simple, refactor, feature, or broad initiative.
-3. Use `omx explore` for simple read-only lookups when enabled; use richer analysis for ambiguous planning.
+3. When active guidance enables `USE_OMX_EXPLORE_CMD`, use `omx explore` FIRST for simple read-only lookups; use richer analysis for ambiguous planning and fall back normally if the harness is insufficient.
 <!-- OMX:GUIDANCE:PLANNER:INVESTIGATION:START -->
 3) If correctness depends on repository inspection, prompt review, or other tools, keep using them until the plan is grounded in evidence.
 <!-- OMX:GUIDANCE:PLANNER:INVESTIGATION:END -->
