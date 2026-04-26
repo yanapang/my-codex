@@ -5173,18 +5173,27 @@ esac
 
   it('startTeam persists synthesized delegation plans for broad tasks', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-'));
-    const prevLaunchMode = process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
-    const prevWorkerCli = process.env.OMX_TEAM_WORKER_CLI;
+    const binDir = join(cwd, 'bin');
+    const fakeCodexPath = join(binDir, 'codex');
+    await mkdir(binDir, { recursive: true });
+    await writeFakePromptWorkerBinary(
+      fakeCodexPath,
+      `setTimeout(() => {}, 5000);`,
+    );
+
+    let runtime: TeamRuntime | null = null;
     try {
-      process.env.OMX_TEAM_WORKER_LAUNCH_MODE = 'prompt';
-      process.env.OMX_TEAM_WORKER_CLI = 'gemini';
-      await startTeam(
-        'team-delegation-persist',
-        'delegation persistence test',
-        'executor',
-        1,
-        [{ subject: 'Investigate runtime assignment', description: 'Search runtime and debug assignTask behavior', owner: 'worker-1' }],
-        cwd,
+      runtime = await withPromptModeCodexEnv(binDir, {}, () =>
+        withoutTeamWorkerEnv(() =>
+          startTeam(
+            'team-delegation-persist',
+            'delegation persistence test',
+            'executor',
+            1,
+            [{ subject: 'Investigate runtime assignment', description: 'Search runtime and debug assignTask behavior' }],
+            cwd,
+          ),
+        ),
       );
 
       const task = await readTask('team-delegation-persist', '1', cwd);
@@ -5192,8 +5201,9 @@ esac
       assert.equal(task?.delegation?.child_model, 'gpt-5.4-mini');
       assert.equal(task?.delegation?.required_parallel_probe, true);
     } finally {
-      if (typeof prevLaunchMode === 'string') process.env.OMX_TEAM_WORKER_LAUNCH_MODE = prevLaunchMode;
-      else delete process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
+      if (runtime) {
+        await shutdownTeam(runtime.teamName, cwd, { force: true }).catch(() => {});
+      }
       await rm(cwd, { recursive: true, force: true });
     }
   });
