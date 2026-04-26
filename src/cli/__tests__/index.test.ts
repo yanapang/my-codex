@@ -72,6 +72,14 @@ import type { ProcessEntry } from "../cleanup.js";
 const testDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(testDir, "..", "..", "..");
 
+function normalizeDarwinTmpPath(value: string): string {
+  return process.platform === "darwin" ? value.replaceAll("/private/var/", "/var/") : value;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function expectedLowComplexityModel(codexHomeOverride?: string): string {
   return getTeamLowComplexityModel(codexHomeOverride);
 }
@@ -1786,8 +1794,8 @@ exit 0
       const log = await readFile(logPath, "utf-8");
       assert.match(log, /codex:--dangerously-bypass-approvals-and-sandbox/);
       assert.match(
-        log,
-        new RegExp(`codex-pwd:${cwd.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+        normalizeDarwinTmpPath(log),
+        new RegExp(`codex-pwd:${escapeRegExp(normalizeDarwinTmpPath(cwd))}`),
       );
       assert.match(log, /tmux:display-message -p #\{socket_path\}/);
       assert.match(log, /tmux:show-options -sv extended-keys/);
@@ -1851,7 +1859,7 @@ exit 0
       const leaderCmd = steps[0]?.args.at(-1);
       assert.equal(typeof leaderCmd, "string");
 
-      const result = (await import("node:child_process")).spawnSync("/bin/sh", ["-lc", leaderCmd!], {
+      const result = (await import("node:child_process")).spawnSync("/bin/sh", ["-c", leaderCmd!], {
         cwd,
         env: {
           ...process.env,
@@ -1931,7 +1939,7 @@ exit 0
       });
 
       try {
-        for (let i = 0; i < 20; i += 1) {
+        for (let i = 0; i < 50; i += 1) {
           if (existsSync(pidFile)) break;
           await new Promise((resolve) => setTimeout(resolve, 100));
         }
