@@ -28,11 +28,7 @@ $ralplan --interactive "task description"
 
 ## GPT-5.4 Guidance Alignment
 
-- Default to concise, evidence-dense progress and completion reporting unless the user or risk level requires more detail.
-- Treat newer user task updates as local overrides for the active workflow branch while preserving earlier non-conflicting constraints.
-- If correctness depends on additional inspection, retrieval, execution, or verification, keep using the relevant tools until the consensus-planning flow is grounded.
-- Right-size implementation steps and PRD story counts to the actual scope; do not default to exactly five steps when the task is clearly smaller or larger.
-- Continue through clear, low-risk, reversible next steps automatically; ask only when the next step is materially branching, destructive, or preference-dependent.
+Use the shared workflow guidance pattern: concise evidence reporting, scoped task-update overrides, persistent inspection/verification while consensus planning depends on it, right-sized implementation/PRD shape, and automatic continuation for safe reversible steps. Ask only for material, destructive, or preference-dependent branches.
 
 This skill invokes the Plan skill in consensus mode:
 
