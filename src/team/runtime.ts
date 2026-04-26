@@ -18,7 +18,6 @@ import {
   waitForWorkerReady,
   waitForWorkerReadyAsync,
   dismissTrustPromptIfPresent,
-  sleepFractionalSeconds,
   sendToWorker,
   sendToWorkerStdin,
   isWorkerAlive,
@@ -1988,6 +1987,31 @@ function resolveEffectiveWorkerCliForStartupLog(
 /**
  * Start a new team: init state, create tmux session, bootstrap workers.
  */
+
+export type StartupAttemptResult =
+  | { ok: true; workerIndex: number; workerName: string }
+  | { ok: false; workerIndex: number; workerName: string; error: Error };
+
+export interface StartupAttemptDescriptor {
+  workerIndex: number;
+  workerName: string;
+  attempt: Promise<StartupAttemptResult>;
+}
+
+export async function settleStartupAttemptResults(
+  attempts: readonly StartupAttemptDescriptor[],
+): Promise<StartupAttemptResult[]> {
+  const settled = await Promise.allSettled(attempts.map((attempt) => attempt.attempt));
+  return settled.map((result, index) => {
+    if (result.status === 'fulfilled') return result.value;
+    const descriptor = attempts[index];
+    const workerIndex = descriptor?.workerIndex ?? index + 1;
+    const workerName = descriptor?.workerName ?? `worker-${workerIndex}`;
+    const error = result.reason instanceof Error ? result.reason : new Error(String(result.reason));
+    return { ok: false, workerIndex, workerName, error };
+  });
+}
+
 export async function startTeam(
   teamName: string,
   task: string,
@@ -2358,113 +2382,56 @@ export async function startTeam(
     // block later workers from receiving their own startup attempts.
     const manifest = await readTeamManifestV2(sanitized, leaderCwd);
     const dispatchPolicy = resolveDispatchPolicy(manifest?.policy, workerLaunchMode);
-    type StartupAttemptResult =
-      | { ok: true; workerIndex: number; workerName: string }
-      | { ok: false; workerIndex: number; workerName: string; error: Error };
-
-    const runWorkerStartupAttempt = async (i: number): Promise<StartupAttemptResult> => {
-      const bootstrapPlan = workerBootstrapPlans[i - 1];
+    const runWorkerStartupAttempt = async (workerIndex: number): Promise<StartupAttemptResult> => {
+      const bootstrapPlan = workerBootstrapPlans[workerIndex - 1];
       if (!bootstrapPlan) {
-        return { ok: false, workerIndex: i, workerName: `worker-${i}`, error: new Error(`missing bootstrap plan for worker-${i}`) };
+        return {
+          ok: false,
+          workerIndex,
+          workerName: `worker-${workerIndex}`,
+          error: new Error(`missing bootstrap plan for worker-${workerIndex}`),
+        };
       }
-      const { workerName, paneId, workerTasks, inbox, trigger, triggerIntent, initialPrompt } = {
-        workerName: bootstrapPlan.workerName,
-        paneId: workerPaneIds[workerIndex - 1],
-        workerTasks: bootstrapPlan.workerTasks,
-        inbox: bootstrapPlan.inbox,
-        trigger: bootstrapPlan.trigger,
-        triggerIntent: bootstrapPlan.triggerIntent,
-        initialPrompt: bootstrapPlan.initialPrompt,
-      };
 
-      try {
-        if (workerTasks.map(t => t.role).filter(Boolean).length > 0 && new Set(workerTasks.map(t => t.role).filter(Boolean)).size > 1) {
-          console.log(`[omx:team] ${workerName}: mixed task roles [${[...new Set(workerTasks.map(t => t.role).filter(Boolean))].join(', ')}], falling back to ${agentType}`);
-        }
+      const workerName = bootstrapPlan.workerName;
+      const paneId = workerPaneIds[workerIndex - 1];
+      const workerTasks = bootstrapPlan.workerTasks;
+      const inbox = bootstrapPlan.inbox;
+      const trigger = bootstrapPlan.trigger;
+      const triggerIntent = bootstrapPlan.triggerIntent;
+      const initialPrompt = bootstrapPlan.initialPrompt;
 
-        if (workerLaunchMode === 'interactive' && !skipWorkerReadyWait && !initialPrompt) {
-          const ready = await waitForWorkerReadyAsync(sessionName, workerIndex, workerReadyTimeoutMs, paneId);
-          if (!ready) {
-            const workerAlive = isWorkerPaneOpen(sessionName, workerIndex, paneId);
-            if (workerAlive) {
-              await recordRecoverableStartupIssue({
-                teamName: sanitized,
-                workerName,
-                taskIds: workerTasks.map((task) => task.id),
-                reason: 'ready_prompt_timeout',
-                cwd: leaderCwd,
-              });
-              return { ok: true, workerIndex, workerName };
-            }
-            return {
-              ok: false,
-              workerIndex,
-              workerName,
-              error: new Error(`Worker ${workerName} did not become ready in tmux session ${sessionName}`),
-            };
-          }
-        }
+      const taskRoles = workerTasks
+        .map((task) => task.role)
+        .filter((role): role is string => Boolean(role));
+      const uniqueTaskRoles = [...new Set(taskRoles)];
+      if (uniqueTaskRoles.length > 1) {
+        console.log(`[omx:team] ${workerName}: mixed task roles [${uniqueTaskRoles.join(', ')}], falling back to ${agentType}`);
+      }
 
-        let dispatchOutcome: DispatchOutcome = initialPrompt
-          ? { ok: true, transport: 'none', reason: 'startup_prompt_delivered_at_launch' }
-          : { ok: false, transport: 'none', reason: 'not_attempted' };
-        if (!initialPrompt) {
-          for (let attempt = 1; attempt <= startupDispatchRetries; attempt++) {
-            dispatchOutcome = await dispatchCriticalInboxInstruction({
-              teamName: sanitized,
-              config: config!,
-              workerName,
-              workerIndex,
-              paneId,
-              workerCli: workerCliPlan[workerIndex - 1],
-              inbox,
-              triggerMessage: trigger,
-              intent: triggerIntent,
-              cwd: leaderCwd,
-              dispatchPolicy,
-              inboxCorrelationKey: `startup:${workerName}`,
-              requireWorkerStartupEvidence: true,
-              startupEvidenceTimeoutMs: workerStartupEvidenceTimeoutMs,
-            });
-            if (dispatchOutcome.ok) break;
-            if (attempt < startupDispatchRetries) {
-              if (workerLaunchMode === 'interactive') {
-                if (dismissTrustPromptIfPresent(sessionName, workerIndex, paneId)) {
-                  await waitForWorkerReadyAsync(sessionName, workerIndex, workerReadyTimeoutMs, paneId);
-                } else {
-                  await new Promise((resolve) => setTimeout(resolve, Math.max(0, startupRetryDelayS * 1000)));
-                }
-              } else {
-                await new Promise((resolve) => setTimeout(resolve, Math.max(0, startupRetryDelayS * 1000)));
-              }
-            }
-          }
-        }
-        if (!dispatchOutcome.ok) {
-          const workerAlive = workerLaunchMode === 'prompt'
-            ? isPromptWorkerAlive(config!, config!.workers[workerIndex - 1]!)
-            : isWorkerPaneOpen(sessionName, workerIndex, paneId);
-          if (
-            workerLaunchMode === 'interactive'
-            && workerAlive
-            && isRecoverableInteractiveStartupReason(dispatchOutcome.reason)
-          ) {
+
+      if (workerLaunchMode === 'interactive' && !skipWorkerReadyWait && !initialPrompt) {
+        const ready = await waitForWorkerReadyAsync(sessionName, workerIndex, workerReadyTimeoutMs, paneId);
+        if (!ready) {
+          const workerAlive = isWorkerPaneOpen(sessionName, workerIndex, paneId);
+          if (workerAlive) {
             await recordRecoverableStartupIssue({
               teamName: sanitized,
               workerName,
               taskIds: workerTasks.map((task) => task.id),
-              reason: dispatchOutcome.reason,
+              reason: 'ready_prompt_timeout',
               cwd: leaderCwd,
             });
-            return { ok: true, workerIndex: i, workerName };
+            return { ok: true, workerIndex, workerName };
           }
           return {
             ok: false,
-            workerIndex: i,
+            workerIndex,
             workerName,
             error: new Error(`Worker ${workerName} did not become ready in tmux session ${sessionName}`),
           };
         }
+      }
 
       let dispatchOutcome: DispatchOutcome = initialPrompt
         ? { ok: true, transport: 'none', reason: 'startup_prompt_delivered_at_launch' }
@@ -2475,9 +2442,9 @@ export async function startTeam(
             teamName: sanitized,
             config: config!,
             workerName,
-            workerIndex: i,
+            workerIndex,
             paneId,
-            workerCli: workerCliPlan[i - 1],
+            workerCli: workerCliPlan[workerIndex - 1],
             inbox,
             triggerMessage: trigger,
             intent: triggerIntent,
@@ -2490,8 +2457,8 @@ export async function startTeam(
           if (dispatchOutcome.ok) break;
           if (attempt < startupDispatchRetries) {
             if (workerLaunchMode === 'interactive') {
-              if (dismissTrustPromptIfPresent(sessionName, i, paneId)) {
-                await waitForWorkerReadyAsync(sessionName, i, workerReadyTimeoutMs, paneId);
+              if (dismissTrustPromptIfPresent(sessionName, workerIndex, paneId)) {
+                await waitForWorkerReadyAsync(sessionName, workerIndex, workerReadyTimeoutMs, paneId);
               } else {
                 await new Promise((resolve) => setTimeout(resolve, Math.max(0, startupRetryDelayS * 1000)));
               }
@@ -2501,10 +2468,11 @@ export async function startTeam(
           }
         }
       }
+
       if (!dispatchOutcome.ok) {
         const workerAlive = workerLaunchMode === 'prompt'
-          ? isPromptWorkerAlive(config, config.workers[i - 1]!)
-          : isWorkerPaneOpen(sessionName, i, paneId);
+          ? isPromptWorkerAlive(config!, config!.workers[workerIndex - 1]!)
+          : isWorkerPaneOpen(sessionName, workerIndex, paneId);
         if (
           workerLaunchMode === 'interactive'
           && workerAlive
@@ -2517,21 +2485,30 @@ export async function startTeam(
             reason: dispatchOutcome.reason,
             cwd: leaderCwd,
           });
-          return { ok: true, workerIndex: i, workerName };
+          return { ok: true, workerIndex, workerName };
         }
         return {
           ok: false,
-          workerIndex: i,
+          workerIndex,
           workerName,
           error: new Error(`worker_notify_failed:${workerName}:${dispatchOutcome.reason}`),
         };
       }
 
-      return { ok: true, workerIndex: i, workerName };
+      return { ok: true, workerIndex, workerName };
     };
 
-    const startupAttemptResults = await Promise.all(
-      Array.from({ length: workerCount }, (_, index) => runWorkerStartupAttempt(index + 1)),
+    const startupAttemptResults = await settleStartupAttemptResults(
+      Array.from({ length: workerCount }, (_, index) => {
+        const workerIndex = index + 1;
+        const bootstrapPlan = workerBootstrapPlans[index];
+        const workerName = bootstrapPlan?.workerName ?? `worker-${workerIndex}`;
+        return {
+          workerIndex,
+          workerName,
+          attempt: runWorkerStartupAttempt(workerIndex),
+        };
+      }),
     );
     const firstStartupError = startupAttemptResults
       .filter((result): result is Extract<StartupAttemptResult, { ok: false }> => !result.ok)

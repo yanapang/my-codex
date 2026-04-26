@@ -37,6 +37,7 @@ import {
   waitForWorkerStartupEvidence,
   waitForClaudeStartupEvidence,
   cleanupTeamWorkerLaunchOrphanedMcpProcesses,
+  settleStartupAttemptResults,
   TEAM_LOW_COMPLEXITY_DEFAULT_MODEL,
   type TeamRuntime,
 } from '../runtime.js';
@@ -93,6 +94,42 @@ async function readTeamDeliveryLog(cwd: string): Promise<Array<Record<string, un
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+async function markPendingInboxDispatchesDelivered(
+  teamName: string,
+  cwd: string,
+  opts: {
+    toWorker?: string;
+    lastReason?: string;
+    beforeDeliver?: () => Promise<void>;
+    afterDeliver?: () => Promise<void>;
+  } = {},
+): Promise<void> {
+  const requests = await listDispatchRequests(teamName, cwd, { kind: 'inbox' }).catch(() => []);
+  for (const request of requests) {
+    if (request.status !== 'pending') continue;
+    if (opts.toWorker && request.to_worker !== opts.toWorker) continue;
+    await opts.beforeDeliver?.();
+    const notified = await transitionDispatchRequest(
+      teamName,
+      request.request_id,
+      'pending',
+      'notified',
+      { last_reason: opts.lastReason ?? 'test_delivered_receipt' },
+      cwd,
+    ).catch(() => null);
+    if (!notified) continue;
+    await transitionDispatchRequest(
+      teamName,
+      request.request_id,
+      'notified',
+      'delivered',
+      { last_reason: opts.lastReason ?? 'test_delivered_receipt' },
+      cwd,
+    ).catch(() => {});
+    await opts.afterDeliver?.();
+  }
 }
 
 function withEmptyPath<T>(fn: () => T): T {
@@ -1517,7 +1554,7 @@ esac
     const previousReadyTimeout = process.env.OMX_TEAM_READY_TIMEOUT_MS;
     const previousStartupEvidenceTimeout = process.env.OMX_TEAM_STARTUP_EVIDENCE_TIMEOUT_MS;
     const previousStartupDispatchRetries = process.env.OMX_TEAM_STARTUP_DISPATCH_RETRIES;
-    let receiptFailer: NodeJS.Timeout | null = null;
+    let receiptDeliverer: NodeJS.Timeout | null = null;
     let runtimeTeamName: string | null = null;
 
     try {
@@ -1600,20 +1637,9 @@ esac
           process.env.OMX_TEAM_STARTUP_EVIDENCE_TIMEOUT_MS = '50';
           process.env.OMX_TEAM_STARTUP_DISPATCH_RETRIES = '1';
 
-          receiptFailer = setInterval(() => {
+          receiptDeliverer = setInterval(() => {
             void (async () => {
-              const requests = await listDispatchRequests('team-parallel-ready', cwd, { kind: 'inbox' }).catch(() => []);
-              for (const request of requests) {
-                if (request.status !== 'pending') continue;
-                await transitionDispatchRequest(
-                  'team-parallel-ready',
-                  request.request_id,
-                  'pending',
-                  'failed',
-                  { last_reason: 'test_failed_receipt' },
-                  cwd,
-                ).catch(() => {});
-              }
+              await markPendingInboxDispatchesDelivered('team-parallel-ready', cwd);
             })();
           }, 20);
 
@@ -1643,7 +1669,7 @@ esac
         },
       );
     } finally {
-      if (receiptFailer) clearInterval(receiptFailer);
+      if (receiptDeliverer) clearInterval(receiptDeliverer);
       if (runtimeTeamName) await shutdownTeam(runtimeTeamName, cwd, { force: true }).catch(() => {});
       if (typeof previousTmux === 'string') process.env.TMUX = previousTmux;
       else delete process.env.TMUX;
@@ -1979,6 +2005,34 @@ esac
       else delete process.env.OMX_TEAM_STARTUP_DISPATCH_RETRIES;
       await rm(cwd, { recursive: true, force: true });
     }
+  });
+
+  it('settleStartupAttemptResults waits for sibling startup attempt to settle after worker startup throw', async () => {
+    let worker2Settled = false;
+    const startupAttemptResults = await settleStartupAttemptResults([
+      {
+        workerIndex: 1,
+        workerName: 'worker-1',
+        attempt: Promise.reject(new Error('test_startup_attempt_throw:worker-1')),
+      },
+      {
+        workerIndex: 2,
+        workerName: 'worker-2',
+        attempt: new Promise((resolve) => {
+          setTimeout(() => {
+            worker2Settled = true;
+            resolve({ ok: true, workerIndex: 2, workerName: 'worker-2' });
+          }, 100);
+        }),
+      },
+    ]);
+
+    assert.equal(worker2Settled, true, 'worker-2 startup attempt should settle before results return');
+    const firstStartupError = startupAttemptResults
+      .filter((result): result is Extract<typeof result, { ok: false }> => !result.ok)
+      .sort((a, b) => a.workerIndex - b.workerIndex)[0];
+    assert.equal(firstStartupError?.workerName, 'worker-1');
+    assert.match(String(firstStartupError?.error), /test_startup_attempt_throw:worker-1/);
   });
 
   it('startTeam still fails startup when the worker pane is dead/unrecoverable', async () => {
