@@ -55,7 +55,7 @@ describe('hook-primary PostToolUse E2E contract guardrails', () => {
 
     assert.match(runtimeSource, /export async function monitorTeam\s*\(/);
     assert.match(runtimeSource, /autoCommitDirtyWorktree/);
-    assert.match(notifyWorkerSource, /buildTeamWorkerStopOutput|handleTeamWorker/);
+    assert.match(notifyWorkerSource, /maybeNotifyLeaderWorkerIdle|updateWorkerHeartbeat/);
   });
 
   it('does not add conflict auto-repair or final-history rewrite automation to the hook path', async () => {
