@@ -13,6 +13,7 @@ import { version } from "./version.js";
 import { tmuxHookCommand } from "./tmux-hook.js";
 import { hooksCommand } from "./hooks.js";
 import { hudCommand } from "../hud/index.js";
+import { sidecarCommand } from "../sidecar/index.js";
 import { teamCommand } from "./team.js";
 import { ralphCommand } from "./ralph.js";
 import { askCommand } from "./ask.js";
@@ -178,6 +179,7 @@ Usage:
   omx tmux-hook Manage tmux prompt injection workaround (init|status|validate|test)
   omx hooks     Manage hook plugins (init|status|validate|test)
   omx hud       Show HUD statusline (--watch, --json, --preset=NAME)
+  omx sidecar   Show read-only team/multi-agent visualization (--watch, --json, --tmux)
   omx state     Read/write/list OMX mode state via CLI parity surface
   omx notepad   CLI parity for OMX notepad MCP tools
   omx project-memory
@@ -290,6 +292,7 @@ type CliCommand =
   | "tmux-hook"
   | "hooks"
   | "hud"
+  | "sidecar"
   | "state"
   | "wiki"
   | "status"
@@ -310,6 +313,7 @@ const NESTED_HELP_COMMANDS = new Set<CliCommand>([
   "exec",
   "hooks",
   "hud",
+  "sidecar",
   "state",
   "wiki",
   "ralph",
@@ -617,6 +621,7 @@ export async function main(args: string[]): Promise<void> {
     "tmux-hook",
     "hooks",
     "hud",
+    "sidecar",
     "state",
     "status",
     "cancel",
@@ -719,6 +724,9 @@ export async function main(args: string[]): Promise<void> {
         break;
       case "hud":
         await hudCommand(args.slice(1));
+        break;
+      case "sidecar":
+        await sidecarCommand(args.slice(1));
         break;
       case "state":
         await stateCommand(args.slice(1));
