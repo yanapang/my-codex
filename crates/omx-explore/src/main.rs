@@ -2027,9 +2027,8 @@ printf '# Answer\nok\n' > "$output_path"
         assert!(message.contains("from=`spark-model`"));
         assert!(message.contains("to=`fallback-model`"));
         assert!(message.contains("spark_attempt_failed exit=17"));
-        assert!(message.contains(
-            "stdout fallback notice is emitted only after successful fallback output"
-        ));
+        assert!(message
+            .contains("stdout fallback notice is emitted only after successful fallback output"));
         assert!(!message.contains("output includes a fallback notice"));
         assert!(!message.contains("## OMX Explore fallback"));
     }
