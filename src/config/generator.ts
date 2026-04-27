@@ -18,6 +18,7 @@ import { AGENT_DEFINITIONS } from "../agents/definitions.js";
 import { DEFAULT_FRONTIER_MODEL } from "./models.js";
 import type { UnifiedMcpRegistryServer } from "./mcp-registry.js";
 import { getOmxFirstPartySetupMcpServers } from "./omx-first-party-mcp.js";
+import type { HudPreset } from "../hud/types.js";
 
 interface MergeOptions {
   includeTui?: boolean;
@@ -25,6 +26,7 @@ interface MergeOptions {
   sharedMcpServers?: UnifiedMcpRegistryServer[];
   sharedMcpRegistrySource?: string;
   verbose?: boolean;
+  statusLinePreset?: HudPreset;
 }
 
 function escapeTomlString(value: string): string {
@@ -60,8 +62,47 @@ const OMX_AGENTS_MAX_DEPTH = 2;
 const OMX_EXPLORE_ROUTING_DEFAULT = "1";
 const OMX_EXPLORE_CMD_ENV = "USE_OMX_EXPLORE_CMD";
 const DEFAULT_LAUNCHER_MCP_STARTUP_TIMEOUT_SEC = 15;
-const OMX_TUI_STATUS_LINE =
-  'status_line = ["model-with-reasoning", "git-branch", "context-remaining", "total-input-tokens", "total-output-tokens", "five-hour-limit", "weekly-limit"]';
+const STATUS_LINE_FOCUSED_FIELDS: readonly string[] = [
+  "model-with-reasoning",
+  "git-branch",
+  "context-remaining",
+  "total-input-tokens",
+  "total-output-tokens",
+  "five-hour-limit",
+  "weekly-limit",
+];
+
+// `full` is currently identical to `focused`. It is reserved for future
+// expansion as Codex CLI adds support for additional status_line fields.
+export const STATUS_LINE_PRESETS: Record<HudPreset, readonly string[]> = {
+  minimal: ["model-with-reasoning", "git-branch"],
+  focused: STATUS_LINE_FOCUSED_FIELDS,
+  full: STATUS_LINE_FOCUSED_FIELDS,
+};
+
+export const DEFAULT_STATUS_LINE_PRESET: HudPreset = "focused";
+
+export function statusLineForPreset(
+  preset: HudPreset = DEFAULT_STATUS_LINE_PRESET,
+): string {
+  const fields =
+    STATUS_LINE_PRESETS[preset] ??
+    STATUS_LINE_PRESETS[DEFAULT_STATUS_LINE_PRESET];
+  return `status_line = [${fields.map((field) => `"${field}"`).join(", ")}]`;
+}
+
+const OMX_MANAGED_STATUS_LINES: ReadonlySet<string> = new Set(
+  (Object.keys(STATUS_LINE_PRESETS) as HudPreset[]).map((preset) =>
+    statusLineForPreset(preset),
+  ),
+);
+
+function isOmxManagedStatusLine(line: string): boolean {
+  return OMX_MANAGED_STATUS_LINES.has(line.trim());
+}
+
+// Backward-compatible alias: equivalent to statusLineForPreset("focused").
+const OMX_TUI_STATUS_LINE = statusLineForPreset(DEFAULT_STATUS_LINE_PRESET);
 const LEGACY_OMX_TEAM_RUN_TABLE_PATTERN =
   /^\s*\[mcp_servers\.(?:"omx_team_run"|omx_team_run)\]\s*$/m;
 const OMX_CONFIG_MARKER = "oh-my-codex (OMX) Configuration";
@@ -705,7 +746,7 @@ function extractCustomizedTuiSectionsFromOmxBlocks(config: string): string[] {
         tuiLines.push(trimmed);
         if (
           /^status_line\s*=/.test(trimmed) &&
-          trimmed !== OMX_TUI_STATUS_LINE
+          !isOmxManagedStatusLine(trimmed)
         ) {
           hasCustomizedStatusLine = true;
         }
@@ -722,7 +763,10 @@ function extractCustomizedTuiSectionsFromOmxBlocks(config: string): string[] {
   return sections;
 }
 
-function upsertTuiStatusLine(config: string): {
+function upsertTuiStatusLine(
+  config: string,
+  preset: HudPreset = DEFAULT_STATUS_LINE_PRESET,
+): {
   cleaned: string;
   hadExistingTui: boolean;
 } {
@@ -774,7 +818,7 @@ function upsertTuiStatusLine(config: string): {
   const mergedSection = [
     "[tui]",
     ...preservedKeyLines,
-    preservedStatusLine ?? OMX_TUI_STATUS_LINE,
+    preservedStatusLine ?? statusLineForPreset(preset),
   ];
   const firstStart = sections[0].start;
   const rebuilt: string[] = [];
@@ -1066,7 +1110,11 @@ function getSharedMcpRegistryBlock(
  * OMX table-section block (MCP servers, TUI).
  * Contains ONLY [table] sections — no bare keys.
  */
-function getOmxTablesBlock(pkgRoot: string, includeTui = true): string {
+function getOmxTablesBlock(
+  pkgRoot: string,
+  includeTui = true,
+  statusLinePreset: HudPreset = DEFAULT_STATUS_LINE_PRESET,
+): string {
   const lines = [
     "",
     "# ============================================================",
@@ -1097,7 +1145,7 @@ function getOmxTablesBlock(pkgRoot: string, includeTui = true): string {
           "",
           "# OMX TUI StatusLine (Codex CLI v0.101.0+)",
           "[tui]",
-          OMX_TUI_STATUS_LINE,
+          statusLineForPreset(statusLinePreset),
           "",
         ]
       : [""]),
@@ -1130,6 +1178,8 @@ export function buildMergedConfig(
 ): string {
   let existing = existingConfig;
   const includeTui = options.includeTui !== false;
+  const statusLinePreset =
+    options.statusLinePreset ?? DEFAULT_STATUS_LINE_PRESET;
   const customizedManagedTuiSections =
     extractCustomizedTuiSectionsFromOmxBlocks(existing);
 
@@ -1155,7 +1205,7 @@ export function buildMergedConfig(
   existing = upsertEnvSettings(existing);
   existing = upsertAgentsSettings(existing);
   const tuiUpsert = includeTui
-    ? upsertTuiStatusLine(existing)
+    ? upsertTuiStatusLine(existing, statusLinePreset)
     : { cleaned: existing, hadExistingTui: false };
   existing = tuiUpsert.cleaned;
 
@@ -1167,6 +1217,7 @@ export function buildMergedConfig(
   const tablesBlock = getOmxTablesBlock(
     pkgRoot,
     includeTui && !tuiUpsert.hadExistingTui,
+    statusLinePreset,
   );
   const sharedRegistryBlock = getSharedMcpRegistryBlock(
     options.sharedMcpServers ?? [],
