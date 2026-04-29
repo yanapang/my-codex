@@ -665,6 +665,12 @@ Subagent evidence reporting fields:
 - Subagent model: ${childModel}
 - Findings integrated: <brief bullets>
 - Serial searches before spawn: <number>
+
+Delegation compliance evidence (required for completion):
+- Include exactly one of these lines in the task completion \`result\` passed to \`omx team api transition-task-status\`:
+  - \`Subagent spawn evidence: <count, child task names/thread ids, and what findings were integrated>\`
+  - \`Subagent skip reason: <why serial execution was safer/sufficient>\`
+- Completion is rejected with \`missing_delegation_compliance_evidence\` when this broad-task evidence is absent.
 `;
 }
 

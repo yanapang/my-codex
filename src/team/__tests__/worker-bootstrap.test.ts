@@ -452,7 +452,10 @@ describe("worker bootstrap", () => {
     assert.match(inbox, /gpt-5\.4-mini/);
     assert.match(inbox, /Map runtime assignment flow/);
     assert.match(inbox, /Subagent evidence reporting fields/);
+    assert.match(inbox, /Delegation compliance evidence \(required for completion\)/);
+    assert.match(inbox, /Subagent spawn evidence:/);
     assert.match(inbox, /Subagent skip reason:/);
+    assert.match(inbox, /missing_delegation_compliance_evidence/);
   });
 
   it("generateInitialInbox keeps mode none tasks quiet about delegation contract", () => {
@@ -524,6 +527,7 @@ describe("worker bootstrap", () => {
     assert.match(inbox, /spawn up to 3 Codex native subagents/i);
     assert.match(inbox, /gpt-5\.4-mini/);
     assert.match(inbox, /Search parser references/);
+    assert.match(inbox, /Subagent spawn evidence:/);
     assert.match(inbox, /Subagent skip reason:/);
   });
 
