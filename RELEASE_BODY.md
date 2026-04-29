@@ -33,4 +33,4 @@ Release readiness evidence is recorded in `docs/qa/release-readiness-0.15.1.md`.
 
 Thanks to everyone who contributed launch-policy controls, Team DAG hardening, setup/plugin reliability, MCP/runtime fixes, and verification work for this patch release.
 
-**Full Changelog**: [`v0.15.0...v0.15.1`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.15.0...v0.15.1)
+**Full Changelog**: [`v0.14.3...v0.15.1`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.14.3...v0.15.1)

@@ -4,8 +4,9 @@ Date: 2026-04-29
 Target version: **0.15.1**
 Candidate source branch: `dev` / `origin/dev`
 Candidate source SHA before local bump: `50b68ee5`
-Reachable base tag from candidate source: `v0.15.0`
-Compare link: [`v0.15.0...v0.15.1`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.15.0...v0.15.1)
+Reachable base tag from candidate source: `v0.14.3`
+Compare link: [`v0.14.3...v0.15.1`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.14.3...v0.15.1)
+Range note: `v0.15.0` exists but is not an ancestor of the current `dev` release train, so the tag-triggered release workflow must use `v0.14.3` as the reachable compare base.
 
 ## Scope
 
