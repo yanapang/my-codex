@@ -1207,11 +1207,12 @@ export async function launchWithHud(args: string[]): Promise<void> {
   }
 
   // ── Phase 2: run ────────────────────────────────────────────────────────
+  let postLaunchHandledExternally = false;
   try {
     const notifyTempContractRaw = notifyTempResult.contract.active
       ? serializeNotifyTempContract(notifyTempResult.contract)
       : null;
-    runCodex(
+    const launchResult = runCodex(
       cwd,
       normalizedArgs,
       sessionId,
@@ -1219,10 +1220,14 @@ export async function launchWithHud(args: string[]): Promise<void> {
       codexHomeOverride,
       notifyTempContractRaw,
       effectiveExplicitLaunchPolicy,
+      projectLocalCodexHomeForCleanup,
     );
+    postLaunchHandledExternally = launchResult.postLaunchHandledExternally;
   } finally {
     // ── Phase 3: postLaunch ─────────────────────────────────────────────
-    await postLaunch(cwd, sessionId, codexHomeOverride, enableNotifyFallbackAuthority, projectLocalCodexHomeForCleanup);
+    if (!postLaunchHandledExternally) {
+      await postLaunch(cwd, sessionId, codexHomeOverride, enableNotifyFallbackAuthority, projectLocalCodexHomeForCleanup);
+    }
   }
 }
 
@@ -1982,7 +1987,13 @@ function buildDetachedSessionLeaderCommand(
   cwd: string,
   sessionName: string,
   codexCmd: string,
+  sessionId?: string,
+  codexHomeOverride?: string,
+  projectLocalCodexHomeForCleanup?: string,
 ): string {
+  const detachedPostLaunchHelper = sessionId
+    ? `${buildDetachedSessionPostLaunchHelperCommand(cwd, sessionId, codexHomeOverride, projectLocalCodexHomeForCleanup)} >/dev/null 2>&1 || true;`
+    : "";
   const wrapped = [
     buildTmuxExtendedKeysAcquireShellSnippet(cwd),
     'exec 3<&0;',
@@ -1996,6 +2007,7 @@ function buildDetachedSessionLeaderCommand(
     "fi;",
     'exec 3<&- 2>/dev/null || true;',
     buildTmuxExtendedKeysReleaseShellSnippet(cwd),
+    detachedPostLaunchHelper,
     'if [ "$status" -lt 128 ]; then',
     `tmux kill-session -t "${escapeShellDoubleQuotedValue(sessionName)}" >/dev/null 2>&1 || true;`,
     "fi;",
@@ -2007,6 +2019,31 @@ function buildDetachedSessionLeaderCommand(
     'wait "$omx_codex_pid";',
   ].join(" ");
   return `/bin/sh -c ${quoteShellArg(wrapped)}`;
+}
+
+function buildDetachedSessionPostLaunchHelperCommand(
+  cwd: string,
+  sessionId: string,
+  codexHomeOverride?: string,
+  projectLocalCodexHomeForCleanup?: string,
+): string {
+  const cwdLiteral = JSON.stringify(cwd);
+  const sessionIdLiteral = JSON.stringify(sessionId);
+  const codexHomeLiteral =
+    typeof codexHomeOverride === "string" && codexHomeOverride.length > 0
+      ? JSON.stringify(codexHomeOverride)
+      : "undefined";
+  const projectLocalCleanupLiteral =
+    typeof projectLocalCodexHomeForCleanup === "string" &&
+    projectLocalCodexHomeForCleanup.length > 0
+      ? JSON.stringify(projectLocalCodexHomeForCleanup)
+      : "undefined";
+  const moduleUrlLiteral = JSON.stringify(import.meta.url);
+  const script = [
+    `const mod = await import(${moduleUrlLiteral});`,
+    `await mod.runDetachedSessionPostLaunch(${cwdLiteral}, ${sessionIdLiteral}, ${codexHomeLiteral}, ${projectLocalCleanupLiteral});`,
+  ].join(" ");
+  return `${quoteShellArg(process.execPath)} --input-type=module -e ${quoteShellArg(script)}`;
 }
 
 type TmuxExecSync = (file: string, args: readonly string[]) => string;
@@ -2172,10 +2209,18 @@ export function buildDetachedSessionBootstrapSteps(
   notifyTempContractRaw?: string | null,
   nativeWindows = false,
   sessionId?: string,
+  projectLocalCodexHomeForCleanup?: string,
 ): DetachedSessionTmuxStep[] {
   const detachedLeaderCmd = nativeWindows
     ? "powershell.exe"
-    : buildDetachedSessionLeaderCommand(cwd, sessionName, codexCmd);
+    : buildDetachedSessionLeaderCommand(
+        cwd,
+        sessionName,
+        codexCmd,
+        sessionId,
+        codexHomeOverride,
+        projectLocalCodexHomeForCleanup,
+      );
   const newSessionArgs: string[] = [
     "new-session",
     "-d",
@@ -2779,7 +2824,8 @@ function runCodex(
   codexHomeOverride?: string,
   notifyTempContractRaw?: string | null,
   explicitLaunchPolicy?: CodexLaunchPolicy,
-): void {
+  projectLocalCodexHomeForCleanup?: string,
+): { postLaunchHandledExternally: boolean } {
   const launchArgs = injectModelInstructionsBypassArgs(
     cwd,
     args,
@@ -2819,7 +2865,7 @@ function runCodex(
 
   if (isCodexVersionRequest(launchArgs)) {
     runCodexBlocking(cwd, launchArgs, codexEnvWithNotify);
-    return;
+    return { postLaunchHandledExternally: false };
   }
 
   if (launchPolicy === "inside-tmux") {
@@ -2880,10 +2926,12 @@ function runCodex(
         killTmuxPane(paneId);
       }
     }
+    return { postLaunchHandledExternally: false };
   } else if (launchPolicy === "direct") {
     // Detached HUD sessions require tmux. Skip the bootstrap entirely when the
     // binary is unavailable so direct launches do not emit noisy ENOENT logs.
     runCodexBlocking(cwd, launchArgs, codexEnvWithNotify);
+    return { postLaunchHandledExternally: false };
   } else {
     // Not in tmux: create a new tmux session with codex + HUD pane
     const codexCmd = buildTmuxPaneCommand("codex", launchArgs);
@@ -2910,6 +2958,7 @@ function runCodex(
         notifyTempContractRaw,
         nativeWindows,
         sessionId,
+        projectLocalCodexHomeForCleanup,
       );
       for (const step of bootstrapSteps) {
         const output = execTmuxFileSync(step.args, {
@@ -2996,6 +3045,7 @@ function runCodex(
           }
         }
       }
+      return { postLaunchHandledExternally: !nativeWindows };
     } catch (err) {
       logCliOperationFailure(err);
       if (createdDetachedSession) {
@@ -3016,6 +3066,7 @@ function runCodex(
       }
       // tmux not available or failed, just run codex directly
       runCodexBlocking(cwd, launchArgs, codexEnvWithNotify);
+      return { postLaunchHandledExternally: false };
     }
   }
 }
@@ -3305,6 +3356,21 @@ async function postLaunch(
     logCliOperationFailure(err);
     // Non-fatal
   }
+}
+
+export async function runDetachedSessionPostLaunch(
+  cwd: string,
+  sessionId: string,
+  codexHomeOverride?: string,
+  projectLocalCodexHomeForCleanup?: string,
+): Promise<void> {
+  await postLaunch(
+    cwd,
+    sessionId,
+    codexHomeOverride,
+    false,
+    projectLocalCodexHomeForCleanup,
+  );
 }
 
 async function emitNativeHookEvent(
