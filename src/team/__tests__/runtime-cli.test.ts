@@ -12,6 +12,32 @@ async function loadRuntimeCliModule() {
 }
 
 describe('runtime-cli helpers', () => {
+  it('accepts inline JSON payloads without consuming stdin', async () => {
+    const runtimeCli = await loadRuntimeCliModule();
+    const base64Payload = Buffer.from(
+      '{"teamName":"alpha","task":"quote \\"this\\" & keep 100%"}',
+      'utf-8',
+    ).toString('base64url');
+
+    assert.equal(
+      runtimeCli.resolveRuntimeCliInlineInput(['--input-json', '{"teamName":"alpha"}']),
+      '{"teamName":"alpha"}',
+    );
+    assert.equal(
+      runtimeCli.resolveRuntimeCliInlineInput(['--input-json-base64', base64Payload]),
+      '{"teamName":"alpha","task":"quote \\"this\\" & keep 100%"}',
+    );
+    assert.equal(runtimeCli.resolveRuntimeCliInlineInput([]), null);
+    assert.throws(
+      () => runtimeCli.resolveRuntimeCliInlineInput(['--input-json']),
+      /Missing JSON payload for --input-json/,
+    );
+    assert.throws(
+      () => runtimeCli.resolveRuntimeCliInlineInput(['--input-json-base64']),
+      /Missing JSON payload for --input-json-base64/,
+    );
+  });
+
   it('normalizes per-worker providers and validates supported values', async () => {
     const runtimeCli = await loadRuntimeCliModule();
 

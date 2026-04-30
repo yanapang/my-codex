@@ -1,7 +1,8 @@
 /**
  * CLI entry point for team runtime.
- * Reads JSON config from stdin, runs startTeam/monitorTeam/shutdownTeam,
- * writes structured JSON result to stdout.
+ * Reads JSON config from --input-json, --input-json-base64, or stdin,
+ * runs startTeam/monitorTeam/shutdownTeam, writes structured JSON result
+ * to stdout.
  *
  * Spawned by OMX team orchestration entrypoints when a background team run starts.
  */
@@ -38,10 +39,13 @@ interface CliInput {
   teamName: string;
   workerCount?: number;
   agentTypes: string[];
-  tasks: Array<{ subject: string; description: string }>;
+  tasks: Array<{ subject: string; description: string; owner?: string; role?: string }>;
   cwd: string;
   pollIntervalMs?: number;
 }
+
+const RUNTIME_CLI_INPUT_JSON_FLAG = '--input-json';
+const RUNTIME_CLI_INPUT_JSON_BASE64_FLAG = '--input-json-base64';
 
 type TeamWorkerProvider = 'codex' | 'claude' | 'gemini';
 
@@ -198,21 +202,50 @@ export function normalizeAgentTypes(raw: string[], workerCount: number): TeamWor
   return providers as TeamWorkerProvider[];
 }
 
-async function main(): Promise<void> {
-  const startTime = Date.now();
+export function resolveRuntimeCliInlineInput(argv: readonly string[]): string | null {
+  const index = argv.indexOf(RUNTIME_CLI_INPUT_JSON_FLAG);
+  if (index !== -1) {
+    const payload = argv[index + 1];
+    if (typeof payload !== 'string' || payload.trim() === '') {
+      throw new Error(`Missing JSON payload for ${RUNTIME_CLI_INPUT_JSON_FLAG}`);
+    }
+    return payload;
+  }
 
-  // Read stdin
+  const base64Index = argv.indexOf(RUNTIME_CLI_INPUT_JSON_BASE64_FLAG);
+  if (base64Index === -1) {
+    return null;
+  }
+  const payload = argv[base64Index + 1];
+  if (typeof payload !== 'string' || payload.trim() === '') {
+    throw new Error(`Missing JSON payload for ${RUNTIME_CLI_INPUT_JSON_BASE64_FLAG}`);
+  }
+  return Buffer.from(payload.trim(), 'base64url').toString('utf-8');
+}
+
+async function readRuntimeCliRawInput(argv: readonly string[]): Promise<string> {
+  const inlineInput = resolveRuntimeCliInlineInput(argv);
+  if (inlineInput != null) {
+    return inlineInput.trim();
+  }
+
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {
     chunks.push(chunk as Buffer);
   }
-  const rawInput = Buffer.concat(chunks).toString('utf-8').trim();
+  return Buffer.concat(chunks).toString('utf-8').trim();
+}
+
+async function main(): Promise<void> {
+  const startTime = Date.now();
+
+  const rawInput = await readRuntimeCliRawInput(process.argv.slice(2));
 
   let input: CliInput;
   try {
     input = JSON.parse(rawInput) as CliInput;
   } catch (err) {
-    process.stderr.write(`[runtime-cli] Failed to parse stdin JSON: ${err}\n`);
+    process.stderr.write(`[runtime-cli] Failed to parse JSON input: ${err}\n`);
     process.exit(1);
   }
 

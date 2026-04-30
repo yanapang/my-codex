@@ -6,11 +6,15 @@
  * canonical OMX execution surface.
  */
 
+import { join } from 'node:path';
 import type { PipelineStage, StageContext, StageResult } from '../types.js';
+import { buildTeamExecutionPlan } from '../../cli/team.js';
 import {
   buildFollowupStaffingPlan,
   resolveAvailableAgentTypes,
 } from '../../team/followup-planner.js';
+import { sanitizeTeamName } from '../../team/tmux-session.js';
+import { packageRoot } from '../../utils/paths.js';
 
 export interface TeamExecStageOptions {
   /** Number of Codex CLI workers to launch. Defaults to 2. */
@@ -24,6 +28,71 @@ export interface TeamExecStageOptions {
 
   /** Additional environment variables for worker launch. */
   extraEnv?: Record<string, string>;
+}
+
+const DEFAULT_TEAM_RUNTIME_PROVIDER = 'codex';
+
+interface BuildTeamInstructionOptions {
+  platform?: NodeJS.Platform;
+}
+
+interface TeamRuntimeCliTaskInput {
+  subject: string;
+  description: string;
+  owner?: string;
+  role?: string;
+}
+
+interface TeamRuntimeCliLaunchInput {
+  teamName: string;
+  workerCount: number;
+  agentTypes: string[];
+  tasks: TeamRuntimeCliTaskInput[];
+  cwd: string;
+}
+
+function deriveTeamNameFromTask(task: string): string {
+  const slug = task
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 30);
+  return sanitizeTeamName(slug || 'team-task');
+}
+
+function quotePosixShellArg(value: string): string {
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function quoteWindowsCmdArg(value: string): string {
+  return `"${value.replace(/%/g, '%%').replace(/"/g, '""')}"`;
+}
+
+function quoteShellArg(value: string, platform: NodeJS.Platform): string {
+  return platform === 'win32' ? quoteWindowsCmdArg(value) : quotePosixShellArg(value);
+}
+
+function buildTeamRuntimeCliLaunchInput(descriptor: TeamExecDescriptor): TeamRuntimeCliLaunchInput {
+  const executionPlan = buildTeamExecutionPlan(
+    descriptor.task,
+    descriptor.workerCount,
+    descriptor.agentType,
+    true,
+    true,
+  );
+  return {
+    teamName: deriveTeamNameFromTask(descriptor.task),
+    workerCount: descriptor.workerCount,
+    agentTypes: [DEFAULT_TEAM_RUNTIME_PROVIDER],
+    tasks: executionPlan.tasks.map(({ subject, description, owner, role }) => ({
+      subject,
+      description,
+      ...(owner ? { owner } : {}),
+      ...(role ? { role } : {}),
+    })),
+    cwd: descriptor.cwd,
+  };
 }
 
 /**
@@ -114,7 +183,17 @@ export interface TeamExecDescriptor {
 /**
  * Build the `omx team` CLI instruction from a descriptor.
  */
-export function buildTeamInstruction(descriptor: TeamExecDescriptor): string {
-  const launchCommand = `omx team ${descriptor.workerCount}:${descriptor.agentType} ${JSON.stringify(descriptor.task)}`;
+export function buildTeamInstruction(
+  descriptor: TeamExecDescriptor,
+  options: BuildTeamInstructionOptions = {},
+): string {
+  const runtimeCliInput = buildTeamRuntimeCliLaunchInput(descriptor);
+  const runtimeCliPath = join(packageRoot(), 'dist', 'team', 'runtime-cli.js');
+  const platform = options.platform ?? process.platform;
+  const encodedInput = Buffer.from(JSON.stringify(runtimeCliInput), 'utf-8').toString('base64url');
+  const launchCommand = `${quoteShellArg(process.execPath, platform)} ${quoteShellArg(runtimeCliPath, platform)} --input-json-base64 ${encodedInput}`;
+  if (platform === 'win32') {
+    return launchCommand;
+  }
   return `${launchCommand} # staffing=${descriptor.staffingPlan.staffingSummary} # verify=${descriptor.staffingPlan.verificationPlan.summary}`;
 }
