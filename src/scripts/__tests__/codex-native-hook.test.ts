@@ -2475,6 +2475,38 @@ esac
     }
   });
 
+  it("warns when a read-only command is chained before sloppy fallback writes", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-slop-chained-write-"));
+    try {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-slop-chained-write",
+          tool_input: {
+            command: [
+              "rg foo src && cat > src/runtime.ts <<EOF",
+              "export function loadRuntime() {",
+              "  // implement quick hack fallback if it fails",
+              "  return 'local';",
+              "}",
+              "EOF",
+            ].join("\n"),
+          },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal((result.outputJson as { decision?: string } | null)?.decision, undefined);
+      assert.equal((result.outputJson as { hookSpecificOutput?: { hookEventName?: string } } | null)?.hookSpecificOutput?.hookEventName, "PreToolUse");
+      assert.match(JSON.stringify(result.outputJson), /don't make potential slop/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("does not warn on PreToolUse for grounded compatibility fallback code", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-slop-grounded-"));
     try {

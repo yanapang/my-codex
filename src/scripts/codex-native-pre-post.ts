@@ -685,6 +685,7 @@ const READ_ONLY_COMMAND_TOKENS = new Set([
 ]);
 
 function commandStartsWithReadOnlyInspection(command: string): boolean {
+  if (commandHasWriteLikeIntent(command)) return false;
   const tokens = tokenizeShellCommand(command);
   if (!tokens || tokens.length === 0) return false;
   let commandToken = tokens[0] ?? "";
