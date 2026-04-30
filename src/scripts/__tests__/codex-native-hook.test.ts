@@ -5654,6 +5654,101 @@ esac
     }
   });
 
+  it("does not block a question-only pane from Ralph state owned by another Codex session", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-ralph-question-pane-"));
+    const previousTmuxPane = process.env.TMUX_PANE;
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const questionSessionId = "sess-question-pane";
+      const questionNativeSessionId = "codex-question-pane";
+      await mkdir(join(stateDir, "sessions", questionSessionId), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), {
+        session_id: questionSessionId,
+        native_session_id: questionNativeSessionId,
+        cwd,
+      });
+      await writeJson(join(stateDir, "sessions", questionSessionId, "ralph-state.json"), {
+        active: true,
+        mode: "ralph",
+        current_phase: "executing",
+        session_id: questionSessionId,
+        owner_omx_session_id: "sess-ralph-owner",
+        owner_codex_session_id: "codex-ralph-owner",
+        thread_id: "thread-ralph-owner",
+        tmux_pane_id: "%41",
+      });
+
+      process.env.TMUX_PANE = "%99";
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: questionNativeSessionId,
+          thread_id: "thread-question-pane",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.equal(result.outputJson, null);
+    } finally {
+      if (typeof previousTmuxPane === "string") process.env.TMUX_PANE = previousTmuxPane;
+      else delete process.env.TMUX_PANE;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks same-session Ralph Stop continuation when ownership identifiers match", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-ralph-owned-session-"));
+    const previousTmuxPane = process.env.TMUX_PANE;
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const omxSessionId = "sess-ralph-owned";
+      const nativeSessionId = "codex-ralph-owned";
+      await mkdir(join(stateDir, "sessions", omxSessionId), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), {
+        session_id: omxSessionId,
+        native_session_id: nativeSessionId,
+        cwd,
+      });
+      await writeJson(join(stateDir, "sessions", omxSessionId, "ralph-state.json"), {
+        active: true,
+        mode: "ralph",
+        current_phase: "executing",
+        session_id: omxSessionId,
+        owner_omx_session_id: omxSessionId,
+        owner_codex_session_id: nativeSessionId,
+        thread_id: "thread-ralph-owned",
+        tmux_pane_id: "%42",
+      });
+
+      process.env.TMUX_PANE = "%42";
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: nativeSessionId,
+          thread_id: "thread-ralph-owned",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.deepEqual(result.outputJson, {
+        decision: "block",
+        reason:
+          "OMX Ralph is still active (phase: executing; state: .omx/state/sessions/sess-ralph-owned/ralph-state.json); continue the task and gather fresh verification evidence before stopping.",
+        stopReason: "ralph_executing",
+        systemMessage:
+          "OMX Ralph is still active (phase: executing; state: .omx/state/sessions/sess-ralph-owned/ralph-state.json); continue the task and gather fresh verification evidence before stopping.",
+      });
+    } finally {
+      if (typeof previousTmuxPane === "string") process.env.TMUX_PANE = previousTmuxPane;
+      else delete process.env.TMUX_PANE;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("prefers canonical run-state terminal lifecycle before stale session Ralph state during Stop", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-canonical-run-state-ralph-"));
     try {
