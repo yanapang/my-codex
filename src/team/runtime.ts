@@ -1532,7 +1532,7 @@ async function assertNestedTeamAllowed(cwd: string): Promise<void> {
   throw new Error('nested_team_disallowed');
 }
 
-type WorkerStartupEvidence = 'task_claim' | 'worker_progress' | 'leader_ack' | 'none';
+type WorkerStartupEvidence = 'task_claim' | 'worker_progress' | 'leader_ack' | 'ready_prompt' | 'none';
 
 async function readWorkerStartupEvidence(
   teamName: string,
@@ -2650,6 +2650,9 @@ export async function startTeam(
         }
       }
 
+      const startupReadyPromptObserved =
+        workerLaunchMode === 'interactive' && !skipWorkerReadyWait && !initialPrompt;
+
       let dispatchOutcome: DispatchOutcome = initialPrompt
         ? { ok: true, transport: 'none', reason: 'startup_prompt_delivered_at_launch' }
         : (startupDirectOutcome ?? { ok: false, transport: 'none', reason: 'not_attempted' });
@@ -2670,6 +2673,7 @@ export async function startTeam(
             inboxCorrelationKey: `startup:${workerName}`,
             requireWorkerStartupEvidence: true,
             startupEvidenceTimeoutMs: workerStartupEvidenceTimeoutMs,
+            startupReadyPromptObserved,
             startupTiming,
           });
           await logStartupTiming({
@@ -4059,6 +4063,7 @@ async function dispatchCriticalInboxInstruction(params: {
   inboxCorrelationKey: string;
   requireWorkerStartupEvidence?: boolean;
   startupEvidenceTimeoutMs?: number;
+  startupReadyPromptObserved?: boolean;
   startupTiming?: StartupTimingRecorder;
 }): Promise<DispatchOutcome> {
   const {
@@ -4076,6 +4081,7 @@ async function dispatchCriticalInboxInstruction(params: {
     inboxCorrelationKey,
     requireWorkerStartupEvidence,
     startupEvidenceTimeoutMs,
+    startupReadyPromptObserved = false,
     startupTiming,
   } = params;
   const noteTiming = (phase: StartupTimingPhase, details?: Omit<StartupTimingEvent, 'phase' | 'at' | 'elapsed_ms'>) => {
@@ -4161,6 +4167,14 @@ async function dispatchCriticalInboxInstruction(params: {
     if (!requiresObservedStartupEvidence) {
       return { ok: true, transport: 'hook', reason: 'hook_receipt_notified', request_id: queued.request_id };
     }
+    if (startupReadyPromptObserved) {
+      return {
+        ok: true,
+        transport: 'hook',
+        reason: 'hook_receipt_notified_with_ready_prompt',
+        request_id: queued.request_id,
+      };
+    }
     startupEvidence = await waitForWorkerStartupEvidence({
       teamName,
       workerName,
@@ -4186,14 +4200,16 @@ async function dispatchCriticalInboxInstruction(params: {
   if (receipt?.status === 'failed') {
     const fallback = await notifyWorkerOutcome(config, workerIndex, triggerMessage, paneId);
     if (fallback.ok) {
-      const fallbackStartupEvidence = await waitForRequiredStartupEvidenceAfterDirectFallback({
-        requireWorkerStartupEvidence,
-        workerCli,
-        teamName,
-        workerName,
-        cwd,
-        timeoutMs: startupEvidenceTimeoutMs,
-      });
+      const fallbackStartupEvidence = startupReadyPromptObserved
+        ? 'ready_prompt'
+        : await waitForRequiredStartupEvidenceAfterDirectFallback({
+          requireWorkerStartupEvidence,
+          workerCli,
+          teamName,
+          workerName,
+          cwd,
+          timeoutMs: startupEvidenceTimeoutMs,
+        });
       noteTiming('startup_evidence', {
         ok: fallbackStartupEvidence !== 'none',
         reason: fallbackStartupEvidence,
@@ -4264,14 +4280,16 @@ async function dispatchCriticalInboxInstruction(params: {
     ? `${startupFallbackLabel}_fallback_failed:${fallback.reason}`
     : `fallback_attempted_but_unconfirmed:${fallback.reason}`;
   if (fallback.ok) {
-    const fallbackStartupEvidence = await waitForRequiredStartupEvidenceAfterDirectFallback({
-      requireWorkerStartupEvidence,
-      workerCli,
-      teamName,
-      workerName,
-      cwd,
-      timeoutMs: startupEvidenceTimeoutMs,
-    });
+    const fallbackStartupEvidence = startupReadyPromptObserved
+      ? 'ready_prompt'
+      : await waitForRequiredStartupEvidenceAfterDirectFallback({
+        requireWorkerStartupEvidence,
+        workerCli,
+        teamName,
+        workerName,
+        cwd,
+        timeoutMs: startupEvidenceTimeoutMs,
+      });
     noteTiming('startup_evidence', {
       ok: fallbackStartupEvidence !== 'none',
       reason: fallbackStartupEvidence,
