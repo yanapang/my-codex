@@ -208,12 +208,52 @@ describe('Team Exec Stage', () => {
     assert.equal(arts.agentType, 'architect');
   });
 
-  it('derives the team-exec task from the latest approved PRD handoff', async () => {
+  it('derives the team-exec task from a relative latest approved PRD handoff path', async () => {
     const plansDir = join(tempDir, '.omx', 'plans');
     await mkdir(plansDir, { recursive: true });
-    const approvedPrdPath = join(plansDir, 'prd-alpha.md');
+    const approvedPrdPath = join(plansDir, 'prd-zeta.md');
     await writeFile(
       approvedPrdPath,
+      '# Zeta plan\n\nLaunch via omx team 5:debugger "Execute zeta handoff"\n',
+    );
+    await writeFile(join(plansDir, 'test-spec-zeta.md'), '# Zeta test spec\n');
+
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tmpdir());
+      const stage = createTeamExecStage();
+      const result = await stage.run(makeCtx({
+        task: 'original request task',
+        artifacts: {
+          ralplan: {
+            task: 'original request task',
+            data: 'plan-content',
+            stage: 'ralplan',
+            latestPlanPath: join('.omx', 'plans', 'prd-zeta.md'),
+          },
+        },
+      }));
+
+      assert.equal(result.status, 'completed');
+      const descriptor = (result.artifacts as Record<string, unknown>).teamDescriptor as Record<string, unknown>;
+      const instruction = (result.artifacts as Record<string, unknown>).instruction as string;
+      assert.equal(descriptor.task, 'Execute zeta handoff');
+      assert.match(instruction, /Execute zeta handoff/);
+      assert.doesNotMatch(instruction, /plan-content/);
+      assert.ok(Array.isArray(descriptor.availableAgentTypes));
+      assert.ok((descriptor.availableAgentTypes as unknown[]).length > 0);
+      assert.equal(typeof (descriptor.staffingPlan as Record<string, unknown>).staffingSummary, 'string');
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+
+  it('fails closed when latestPlanPath is not the selected latest approved PRD', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    await mkdir(plansDir, { recursive: true });
+    const stalePrdPath = join(plansDir, 'prd-alpha.md');
+    await writeFile(
+      stalePrdPath,
       '# Alpha plan\n\nLaunch via omx team 2:executor "Execute alpha handoff"\n',
     );
     await writeFile(join(plansDir, 'test-spec-alpha.md'), '# Alpha test spec\n');
@@ -231,21 +271,14 @@ describe('Team Exec Stage', () => {
           task: 'original request task',
           data: 'plan-content',
           stage: 'ralplan',
-          latestPlanPath: approvedPrdPath,
+          latestPlanPath: stalePrdPath,
         },
       },
     }));
 
-    assert.equal(result.status, 'completed');
-    const descriptor = (result.artifacts as Record<string, unknown>).teamDescriptor as Record<string, unknown>;
-    const instruction = (result.artifacts as Record<string, unknown>).instruction as string;
-    assert.equal(descriptor.task, 'Execute alpha handoff');
-    assert.match(instruction, /Execute alpha handoff/);
-    assert.doesNotMatch(instruction, /Execute zeta handoff/);
-    assert.doesNotMatch(instruction, /plan-content/);
-    assert.ok(Array.isArray(descriptor.availableAgentTypes));
-    assert.ok((descriptor.availableAgentTypes as unknown[]).length > 0);
-    assert.equal(typeof (descriptor.staffingPlan as Record<string, unknown>).staffingSummary, 'string');
+    assert.equal(result.status, 'failed');
+    assert.match(result.error ?? '', /team_exec_approved_handoff_stale:/);
+    assert.deepEqual(result.artifacts, {});
   });
 
   it('keeps structural ralplan handoffs on the generic task path', async () => {
@@ -273,6 +306,37 @@ describe('Team Exec Stage', () => {
     assert.equal(descriptor.task, 'structural pipeline task');
     assert.match(instruction, /structural pipeline task/);
     assert.doesNotMatch(instruction, /plan-content/);
+  });
+
+  it('does not adopt a pre-existing approved plan when latestPlanPath is absent', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    await mkdir(plansDir, { recursive: true });
+    await writeFile(
+      join(plansDir, 'prd-zeta.md'),
+      '# Zeta plan\n\nLaunch via omx team 5:debugger "Execute zeta handoff"\n',
+    );
+    await writeFile(join(plansDir, 'test-spec-zeta.md'), '# Zeta test spec\n');
+
+    const stage = createTeamExecStage();
+    const result = await stage.run(makeCtx({
+      task: 'generic pipeline task',
+      artifacts: {
+        ralplan: {
+          task: 'generic pipeline task',
+          stage: 'ralplan',
+          prdPaths: [join(plansDir, 'prd-zeta.md')],
+          testSpecPaths: [join(plansDir, 'test-spec-zeta.md')],
+          planningComplete: true,
+        },
+      },
+    }));
+
+    assert.equal(result.status, 'completed');
+    const descriptor = (result.artifacts as Record<string, unknown>).teamDescriptor as Record<string, unknown>;
+    const instruction = (result.artifacts as Record<string, unknown>).instruction as string;
+    assert.equal(descriptor.task, 'generic pipeline task');
+    assert.match(instruction, /generic pipeline task/);
+    assert.doesNotMatch(instruction, /Execute zeta handoff/);
   });
 
   it('fails closed when latestPlanPath has no team launch hint', async () => {
@@ -310,6 +374,7 @@ describe('Team Exec Stage', () => {
         'Launch via omx team 2:executor "Execute second handoff"',
       ].join('\n'),
     );
+    await writeFile(join(plansDir, 'test-spec-ambiguous-team-hint.md'), '# Test spec\n');
 
     const stage = createTeamExecStage();
     const result = await stage.run(makeCtx({

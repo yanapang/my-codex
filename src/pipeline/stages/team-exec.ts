@@ -7,11 +7,13 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { PipelineStage, StageContext, StageResult } from '../types.js';
 import {
   buildFollowupStaffingPlan,
   resolveAvailableAgentTypes,
 } from '../../team/followup-planner.js';
+import { readLatestPlanningArtifacts } from '../../planning/artifacts.js';
 
 export interface TeamExecStageOptions {
   /** Number of Codex CLI workers to launch. Defaults to 2. */
@@ -51,25 +53,41 @@ function resolveRequestedTask(ctx: StageContext, ralplanArtifacts?: Record<strin
   return ralplanTask || ctx.task;
 }
 
-function resolveApprovedTeamTaskFromPlanPath(latestPlanPath: string): string {
+function resolveApprovedTeamPlanPath(cwd: string, latestPlanPath: string): string {
+  const resolvedLatestPlanPath = resolve(cwd, latestPlanPath);
+  const selection = readLatestPlanningArtifacts(cwd);
+  const selectedPrdPath = selection.prdPath ? resolve(selection.prdPath) : null;
+
+  if (!selectedPrdPath || selection.testSpecPaths.length === 0) {
+    throw new Error(`team_exec_approved_handoff_missing:${resolvedLatestPlanPath}`);
+  }
+  if (selectedPrdPath !== resolvedLatestPlanPath) {
+    throw new Error(`team_exec_approved_handoff_stale:${resolvedLatestPlanPath}:${selectedPrdPath}`);
+  }
+
+  return selectedPrdPath;
+}
+
+function resolveApprovedTeamTaskFromPlanPath(cwd: string, latestPlanPath: string): string {
+  const approvedPlanPath = resolveApprovedTeamPlanPath(cwd, latestPlanPath);
   let content = '';
   try {
-    content = readFileSync(latestPlanPath, 'utf-8');
+    content = readFileSync(approvedPlanPath, 'utf-8');
   } catch {
-    throw new Error(`team_exec_approved_handoff_missing:${latestPlanPath}`);
+    throw new Error(`team_exec_approved_handoff_missing:${approvedPlanPath}`);
   }
 
   const matches = [...content.matchAll(APPROVED_TEAM_LAUNCH_PATTERN)];
   if (matches.length === 0) {
-    throw new Error(`team_exec_approved_handoff_missing:${latestPlanPath}`);
+    throw new Error(`team_exec_approved_handoff_missing:${approvedPlanPath}`);
   }
   if (matches.length > 1) {
-    throw new Error(`team_exec_approved_handoff_ambiguous:${latestPlanPath}`);
+    throw new Error(`team_exec_approved_handoff_ambiguous:${approvedPlanPath}`);
   }
 
   const task = matches[0]?.groups?.task ? decodeQuotedValue(matches[0].groups.task) : null;
   if (!task) {
-    throw new Error(`team_exec_approved_handoff_missing:${latestPlanPath}`);
+    throw new Error(`team_exec_approved_handoff_missing:${approvedPlanPath}`);
   }
   return task;
 }
@@ -82,7 +100,7 @@ function resolveTeamExecTask(ctx: StageContext, ralplanArtifacts?: Record<string
   if (!latestPlanPath) {
     return requestedTask;
   }
-  return resolveApprovedTeamTaskFromPlanPath(latestPlanPath);
+  return resolveApprovedTeamTaskFromPlanPath(ctx.cwd, latestPlanPath);
 }
 
 /**
