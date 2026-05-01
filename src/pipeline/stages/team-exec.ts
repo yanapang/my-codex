@@ -6,6 +6,7 @@
  * canonical OMX execution surface.
  */
 
+import { readFileSync } from 'node:fs';
 import type { PipelineStage, StageContext, StageResult } from '../types.js';
 import {
   buildFollowupStaffingPlan,
@@ -26,13 +27,71 @@ export interface TeamExecStageOptions {
   extraEnv?: Record<string, string>;
 }
 
+const APPROVED_TEAM_LAUNCH_PATTERN = /(?<command>(?:omx\s+team|\$team)\s+(?<ralph>ralph\s+)?(?<count>\d+)(?::(?<role>[a-z][a-z0-9-]*))?\s+(?<task>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'))/gi;
+
+function decodeQuotedValue(raw: string): string | null {
+  const normalized = raw.trim();
+  if (!normalized) return null;
+
+  try {
+    return JSON.parse(normalized) as string;
+  } catch {
+    if (
+      (normalized.startsWith('"') && normalized.endsWith('"'))
+      || (normalized.startsWith("'") && normalized.endsWith("'"))
+    ) {
+      return normalized.slice(1, -1);
+    }
+    return null;
+  }
+}
+
+function resolveRequestedTask(ctx: StageContext, ralplanArtifacts?: Record<string, unknown>): string {
+  const ralplanTask = typeof ralplanArtifacts?.task === 'string' ? ralplanArtifacts.task.trim() : '';
+  return ralplanTask || ctx.task;
+}
+
+function resolveApprovedTeamTaskFromPlanPath(latestPlanPath: string): string {
+  let content = '';
+  try {
+    content = readFileSync(latestPlanPath, 'utf-8');
+  } catch {
+    throw new Error(`team_exec_approved_handoff_missing:${latestPlanPath}`);
+  }
+
+  const matches = [...content.matchAll(APPROVED_TEAM_LAUNCH_PATTERN)];
+  if (matches.length === 0) {
+    throw new Error(`team_exec_approved_handoff_missing:${latestPlanPath}`);
+  }
+  if (matches.length > 1) {
+    throw new Error(`team_exec_approved_handoff_ambiguous:${latestPlanPath}`);
+  }
+
+  const task = matches[0]?.groups?.task ? decodeQuotedValue(matches[0].groups.task) : null;
+  if (!task) {
+    throw new Error(`team_exec_approved_handoff_missing:${latestPlanPath}`);
+  }
+  return task;
+}
+
+function resolveTeamExecTask(ctx: StageContext, ralplanArtifacts?: Record<string, unknown>): string {
+  const requestedTask = resolveRequestedTask(ctx, ralplanArtifacts);
+  const latestPlanPath = typeof ralplanArtifacts?.latestPlanPath === 'string'
+    ? ralplanArtifacts.latestPlanPath.trim()
+    : '';
+  if (!latestPlanPath) {
+    return requestedTask;
+  }
+  return resolveApprovedTeamTaskFromPlanPath(latestPlanPath);
+}
+
 /**
  * Create a team-exec pipeline stage.
  *
  * This stage delegates to the existing `omx team` infrastructure, which
- * starts real Codex CLI workers in tmux panes. The stage collects the
- * plan artifacts from the previous RALPLAN stage and passes them as
- * the team task description.
+ * starts real Codex CLI workers in tmux panes. When RALPLAN names a
+ * concrete approved PRD handoff, team-exec reuses that exact task text;
+ * otherwise it stays on the generic request-task path.
  */
 export function createTeamExecStage(options: TeamExecStageOptions = {}): PipelineStage {
   const workerCount = options.workerCount ?? 2;
@@ -45,20 +104,19 @@ export function createTeamExecStage(options: TeamExecStageOptions = {}): Pipelin
       const startTime = Date.now();
 
       try {
-        // Extract plan context from previous stage artifacts
-        const ralplanArtifacts = ctx.artifacts['ralplan'] as Record<string, unknown> | undefined;
-        const planContext = ralplanArtifacts
-          ? `Plan from RALPLAN stage:\n${JSON.stringify(ralplanArtifacts, null, 2)}\n\nTask: ${ctx.task}`
-          : ctx.task;
+        const ralplanArtifacts = typeof ctx.artifacts['ralplan'] === 'object' && ctx.artifacts['ralplan'] !== null
+          ? ctx.artifacts['ralplan'] as Record<string, unknown>
+          : undefined;
+        const task = resolveTeamExecTask(ctx, ralplanArtifacts);
         const availableAgentTypes = await resolveAvailableAgentTypes(ctx.cwd);
-        const staffingPlan = buildFollowupStaffingPlan('team', ctx.task, availableAgentTypes, {
+        const staffingPlan = buildFollowupStaffingPlan('team', task, availableAgentTypes, {
           workerCount,
           fallbackRole: agentType,
         });
 
         // Build team execution descriptor
         const teamDescriptor: TeamExecDescriptor = {
-          task: planContext,
+          task,
           workerCount,
           agentType,
           availableAgentTypes,

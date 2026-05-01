@@ -208,20 +208,123 @@ describe('Team Exec Stage', () => {
     assert.equal(arts.agentType, 'architect');
   });
 
-  it('includes ralplan artifacts in team task when available', async () => {
-    const stage = createTeamExecStage();
-    const ctx = makeCtx({
-      artifacts: {
-        ralplan: { data: 'plan-content', stage: 'ralplan' },
-      },
-    });
-    const result = await stage.run(ctx);
+  it('derives the team-exec task from the latest approved PRD handoff', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    await mkdir(plansDir, { recursive: true });
+    const approvedPrdPath = join(plansDir, 'prd-alpha.md');
+    await writeFile(
+      approvedPrdPath,
+      '# Alpha plan\n\nLaunch via omx team 2:executor "Execute alpha handoff"\n',
+    );
+    await writeFile(join(plansDir, 'test-spec-alpha.md'), '# Alpha test spec\n');
+    await writeFile(
+      join(plansDir, 'prd-zeta.md'),
+      '# Zeta plan\n\nLaunch via omx team 5:debugger "Execute zeta handoff"\n',
+    );
+    await writeFile(join(plansDir, 'test-spec-zeta.md'), '# Zeta test spec\n');
 
+    const stage = createTeamExecStage();
+    const result = await stage.run(makeCtx({
+      task: 'original request task',
+      artifacts: {
+        ralplan: {
+          task: 'original request task',
+          data: 'plan-content',
+          stage: 'ralplan',
+          latestPlanPath: approvedPrdPath,
+        },
+      },
+    }));
+
+    assert.equal(result.status, 'completed');
     const descriptor = (result.artifacts as Record<string, unknown>).teamDescriptor as Record<string, unknown>;
-    assert.ok((descriptor.task as string).includes('plan-content'));
+    const instruction = (result.artifacts as Record<string, unknown>).instruction as string;
+    assert.equal(descriptor.task, 'Execute alpha handoff');
+    assert.match(instruction, /Execute alpha handoff/);
+    assert.doesNotMatch(instruction, /Execute zeta handoff/);
+    assert.doesNotMatch(instruction, /plan-content/);
     assert.ok(Array.isArray(descriptor.availableAgentTypes));
     assert.ok((descriptor.availableAgentTypes as unknown[]).length > 0);
     assert.equal(typeof (descriptor.staffingPlan as Record<string, unknown>).staffingSummary, 'string');
+  });
+
+  it('keeps structural ralplan handoffs on the generic task path', async () => {
+    const stage = createTeamExecStage();
+    const result = await stage.run(makeCtx({
+      task: 'structural pipeline task',
+      artifacts: {
+        ralplan: {
+          task: 'structural pipeline task',
+          data: 'plan-content',
+          stage: 'ralplan',
+          plansDir: join(tempDir, '.omx', 'plans'),
+          specsDir: join(tempDir, '.omx', 'specs'),
+          prdPaths: [],
+          testSpecPaths: [],
+          deepInterviewSpecPaths: [],
+          planningComplete: false,
+        },
+      },
+    }));
+
+    assert.equal(result.status, 'completed');
+    const descriptor = (result.artifacts as Record<string, unknown>).teamDescriptor as Record<string, unknown>;
+    const instruction = (result.artifacts as Record<string, unknown>).instruction as string;
+    assert.equal(descriptor.task, 'structural pipeline task');
+    assert.match(instruction, /structural pipeline task/);
+    assert.doesNotMatch(instruction, /plan-content/);
+  });
+
+  it('fails closed when latestPlanPath has no team launch hint', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    await mkdir(plansDir, { recursive: true });
+    const prdPath = join(plansDir, 'prd-no-team-hint.md');
+    await writeFile(prdPath, '# PRD\n\nNo team launch hint here.\n');
+
+    const stage = createTeamExecStage();
+    const result = await stage.run(makeCtx({
+      task: 'original request task',
+      artifacts: {
+        ralplan: {
+          task: 'original request task',
+          stage: 'ralplan',
+          latestPlanPath: prdPath,
+        },
+      },
+    }));
+
+    assert.equal(result.status, 'failed');
+    assert.match(result.error ?? '', /team_exec_approved_handoff_missing:/);
+  });
+
+  it('fails closed when latestPlanPath has ambiguous team launch hints', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    await mkdir(plansDir, { recursive: true });
+    const prdPath = join(plansDir, 'prd-ambiguous-team-hint.md');
+    await writeFile(
+      prdPath,
+      [
+        '# PRD',
+        '',
+        'Launch via omx team 2:executor "Execute first handoff"',
+        'Launch via omx team 2:executor "Execute second handoff"',
+      ].join('\n'),
+    );
+
+    const stage = createTeamExecStage();
+    const result = await stage.run(makeCtx({
+      task: 'original request task',
+      artifacts: {
+        ralplan: {
+          task: 'original request task',
+          stage: 'ralplan',
+          latestPlanPath: prdPath,
+        },
+      },
+    }));
+
+    assert.equal(result.status, 'failed');
+    assert.match(result.error ?? '', /team_exec_approved_handoff_ambiguous:/);
   });
 
   it('falls back to raw task when no ralplan artifacts exist', async () => {
