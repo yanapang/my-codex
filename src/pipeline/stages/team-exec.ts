@@ -7,13 +7,14 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, isAbsolute, normalize, relative, resolve } from 'node:path';
 import type { PipelineStage, StageContext, StageResult } from '../types.js';
 import {
   buildFollowupStaffingPlan,
   resolveAvailableAgentTypes,
 } from '../../team/followup-planner.js';
-import { readLatestPlanningArtifacts } from '../../planning/artifacts.js';
+import { readLatestPlanningArtifacts, readPlanningArtifacts, type PlanningArtifacts } from '../../planning/artifacts.js';
+import { sameFilePath } from '../../utils/paths.js';
 
 export interface TeamExecStageOptions {
   /** Number of Codex CLI workers to launch. Defaults to 2. */
@@ -53,16 +54,50 @@ function resolveRequestedTask(ctx: StageContext, ralplanArtifacts?: Record<strin
   return ralplanTask || ctx.task;
 }
 
-function resolveApprovedTeamPlanPath(cwd: string, latestPlanPath: string): string {
-  const resolvedLatestPlanPath = resolve(cwd, latestPlanPath);
-  const selection = readLatestPlanningArtifacts(cwd);
-  const selectedPrdPath = selection.prdPath ? resolve(selection.prdPath) : null;
+function normalizePlanningRelativePath(rawPath: string): string {
+  const trimmed = rawPath.trim().replace(/^`|`$/g, '').replace(/\\/g, '/');
+  const withoutDotPrefix = trimmed.startsWith('./') ? trimmed.slice(2) : trimmed;
+  return normalize(withoutDotPrefix).replace(/\\/g, '/');
+}
 
-  if (!selectedPrdPath || selection.testSpecPaths.length === 0) {
-    throw new Error(`team_exec_approved_handoff_missing:${resolvedLatestPlanPath}`);
+function resolvePlanningPrdPath(
+  artifacts: PlanningArtifacts,
+  cwd: string,
+  rawPath: string,
+): { matchedPath: string | null; fallbackPath: string } {
+  const normalizedRawPath = rawPath.trim();
+  if (isAbsolute(normalizedRawPath)) {
+    const resolvedPath = resolve(normalizedRawPath);
+    const matchedPath = artifacts.prdPaths.find((candidatePath) => sameFilePath(candidatePath, resolvedPath)) ?? null;
+    return { matchedPath, fallbackPath: resolvedPath };
   }
-  if (selectedPrdPath !== resolvedLatestPlanPath) {
-    throw new Error(`team_exec_approved_handoff_stale:${resolvedLatestPlanPath}:${selectedPrdPath}`);
+
+  const repoRoot = dirname(dirname(artifacts.plansDir));
+  const normalizedPath = normalizePlanningRelativePath(normalizedRawPath);
+  const matchedPath = artifacts.prdPaths.find((candidatePath) => {
+    const repoRelativePath = normalizePlanningRelativePath(relative(repoRoot, candidatePath));
+    const plansRelativePath = normalizePlanningRelativePath(relative(artifacts.plansDir, candidatePath));
+    return normalizedPath === repoRelativePath || normalizedPath === plansRelativePath;
+  }) ?? null;
+  return {
+    matchedPath,
+    fallbackPath: resolve(cwd, normalizedPath),
+  };
+}
+
+function resolveApprovedTeamPlanPath(cwd: string, latestPlanPath: string): string {
+  const artifacts = readPlanningArtifacts(cwd);
+  const resolvedLatestPlanPath = resolvePlanningPrdPath(artifacts, cwd, latestPlanPath);
+  const selection = readLatestPlanningArtifacts(cwd);
+  const selectedPrdPath = selection.prdPath
+    ? resolvePlanningPrdPath(artifacts, cwd, selection.prdPath).matchedPath
+    : null;
+
+  if (!selectedPrdPath || selection.testSpecPaths.length === 0 || !resolvedLatestPlanPath.matchedPath) {
+    throw new Error(`team_exec_approved_handoff_missing:${resolvedLatestPlanPath.fallbackPath}`);
+  }
+  if (selectedPrdPath !== resolvedLatestPlanPath.matchedPath) {
+    throw new Error(`team_exec_approved_handoff_stale:${resolvedLatestPlanPath.matchedPath}:${selectedPrdPath}`);
   }
 
   return selectedPrdPath;

@@ -1,7 +1,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
-import { join } from 'path';
+import { basename, dirname, join } from 'path';
 import { tmpdir } from 'os';
 import { existsSync } from 'fs';
 import type { StageContext } from '../types.js';
@@ -243,6 +243,40 @@ describe('Team Exec Stage', () => {
       assert.ok(Array.isArray(descriptor.availableAgentTypes));
       assert.ok((descriptor.availableAgentTypes as unknown[]).length > 0);
       assert.equal(typeof (descriptor.staffingPlan as Record<string, unknown>).staffingSummary, 'string');
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+
+  it('derives the team-exec task when latestPlanPath is already cwd-prefixed', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    await mkdir(plansDir, { recursive: true });
+    await writeFile(
+      join(plansDir, 'prd-zeta.md'),
+      '# Zeta plan\n\nLaunch via omx team 5:debugger "Execute zeta handoff"\n',
+    );
+    await writeFile(join(plansDir, 'test-spec-zeta.md'), '# Zeta test spec\n');
+
+    const relativeCwd = basename(tempDir);
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(dirname(tempDir));
+      const stage = createTeamExecStage();
+      const result = await stage.run(makeCtx({
+        cwd: relativeCwd,
+        task: 'original request task',
+        artifacts: {
+          ralplan: {
+            task: 'original request task',
+            stage: 'ralplan',
+            latestPlanPath: join(relativeCwd, '.omx', 'plans', 'prd-zeta.md'),
+          },
+        },
+      }));
+
+      assert.equal(result.status, 'completed');
+      const descriptor = (result.artifacts as Record<string, unknown>).teamDescriptor as Record<string, unknown>;
+      assert.equal(descriptor.task, 'Execute zeta handoff');
     } finally {
       process.chdir(previousCwd);
     }
