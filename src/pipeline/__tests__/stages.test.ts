@@ -282,6 +282,35 @@ describe('Team Exec Stage', () => {
     }
   });
 
+  it('derives the team-exec task from single-quoted approved handoff text with escapes', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    await mkdir(plansDir, { recursive: true });
+    await writeFile(
+      join(plansDir, 'prd-zeta.md'),
+      "# Zeta plan\n\nLaunch via $team 2:executor 'Fix Bob\\'s regression'\n",
+    );
+    await writeFile(join(plansDir, 'test-spec-zeta.md'), '# Zeta test spec\n');
+
+    const stage = createTeamExecStage();
+    const result = await stage.run(makeCtx({
+      task: 'original request task',
+      artifacts: {
+        ralplan: {
+          task: 'original request task',
+          stage: 'ralplan',
+          latestPlanPath: join('.omx', 'plans', 'prd-zeta.md'),
+        },
+      },
+    }));
+
+    assert.equal(result.status, 'completed');
+    const descriptor = (result.artifacts as Record<string, unknown>).teamDescriptor as Record<string, unknown>;
+    const instruction = (result.artifacts as Record<string, unknown>).instruction as string;
+    assert.equal(descriptor.task, "Fix Bob's regression");
+    assert.match(instruction, /Fix Bob's regression/);
+    assert.doesNotMatch(instruction, /Fix Bob\\'s regression/);
+  });
+
   it('fails closed when latestPlanPath is not the selected latest approved PRD', async () => {
     const plansDir = join(tempDir, '.omx', 'plans');
     await mkdir(plansDir, { recursive: true });

@@ -39,11 +39,11 @@ function decodeQuotedValue(raw: string): string | null {
   try {
     return JSON.parse(normalized) as string;
   } catch {
-    if (
-      (normalized.startsWith('"') && normalized.endsWith('"'))
-      || (normalized.startsWith("'") && normalized.endsWith("'"))
-    ) {
+    if (normalized.startsWith('"') && normalized.endsWith('"')) {
       return normalized.slice(1, -1);
+    }
+    if (normalized.startsWith("'") && normalized.endsWith("'")) {
+      return normalized.slice(1, -1).replace(/\\(.)/g, '$1');
     }
     return null;
   }
