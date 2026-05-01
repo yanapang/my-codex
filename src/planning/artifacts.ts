@@ -1,5 +1,12 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
+import {
+  comparePlanningArtifactPaths,
+  parsePlanningArtifactFileName,
+  planningArtifactSlug,
+  selectLatestPlanningArtifactPath,
+  selectMatchingTestSpecsForPrd,
+} from './artifact-names.js';
 import { omxPlansDir } from '../utils/paths.js';
 
 const PRD_PATTERN = /^prd-.*\.md$/i;
@@ -61,7 +68,7 @@ function readMatchingPaths(dir: string, pattern: RegExp): string[] {
   try {
     return readdirSync(dir)
       .filter((file) => pattern.test(file))
-      .sort((a, b) => a.localeCompare(b))
+      .sort(comparePlanningArtifactPaths)
       .map((file) => join(dir, file));
   } catch {
     return [];
@@ -77,12 +84,14 @@ export function readPlanningArtifacts(cwd: string): PlanningArtifacts {
     specsDir,
     prdPaths: readMatchingPaths(plansDir, PRD_PATTERN),
     testSpecPaths: readMatchingPaths(plansDir, TEST_SPEC_PATTERN),
-    deepInterviewSpecPaths: readMatchingPaths(specsDir, DEEP_INTERVIEW_SPEC_PATTERN),
+    deepInterviewSpecPaths: readMatchingPaths(specsDir, DEEP_INTERVIEW_SPEC_PATTERN)
+      .filter((path) => parsePlanningArtifactFileName(path)?.kind === 'deep-interview'),
   };
 }
 
 export function isPlanningComplete(artifacts: PlanningArtifacts): boolean {
-  return artifacts.prdPaths.length > 0 && artifacts.testSpecPaths.length > 0;
+  const selection = selectLatestPlanningArtifacts(artifacts);
+  return Boolean(selection.prdPath) && selection.testSpecPaths.length > 0;
 }
 
 function decodeQuotedValue(raw: string): string | null {
@@ -101,15 +110,17 @@ function decodeQuotedValue(raw: string): string | null {
   }
 }
 
-function artifactSlug(path: string, prefixPattern: RegExp): string | null {
+function artifactPathSuffix(path: string, prefixPattern: RegExp): string | null {
   const file = basename(path);
   const match = file.match(prefixPattern);
   return match?.groups?.slug ?? null;
 }
 
-function filterArtifactsForSlug(paths: readonly string[], prefixPattern: RegExp, slug: string | null): string[] {
+function selectDeepInterviewSpecPathsForSlug(paths: readonly string[], slug: string | null): string[] {
   if (!slug) return [];
-  return paths.filter((path) => artifactSlug(path, prefixPattern) === slug);
+  return paths
+    .filter((path) => planningArtifactSlug(path, 'deep-interview') === slug)
+    .sort(comparePlanningArtifactPaths);
 }
 
 
@@ -175,7 +186,7 @@ function readApprovedPlanText(cwd: string): { content: string; context: Approved
 
   try {
     const content = readFileSync(latestPrdPath, 'utf-8');
-    const planSlug = artifactSlug(latestPrdPath, /^prd-(?<slug>.*)\.md$/i);
+    const planSlug = artifactPathSuffix(latestPrdPath, /^prd-(?<slug>.*)\.md$/i);
     const repositoryContextSummary = readApprovedRepositoryContextSummary(artifacts, latestPrdPath, planSlug, content);
     return {
       content,
@@ -194,23 +205,15 @@ function readApprovedPlanText(cwd: string): { content: string; context: Approved
 export function selectLatestPlanningArtifacts(
   artifacts: PlanningArtifacts,
 ): LatestPlanningArtifactSelection {
-  const latestPrdPath = artifacts.prdPaths.at(-1) ?? null;
+  const latestPrdPath = selectLatestPlanningArtifactPath(artifacts.prdPaths);
   const slug = latestPrdPath
-    ? artifactSlug(latestPrdPath, /^prd-(?<slug>.*)\.md$/i)
+    ? planningArtifactSlug(latestPrdPath, 'prd')
     : null;
 
   return {
     prdPath: latestPrdPath,
-    testSpecPaths: filterArtifactsForSlug(
-      artifacts.testSpecPaths,
-      /^test-?spec-(?<slug>.*)\.md$/i,
-      slug,
-    ),
-    deepInterviewSpecPaths: filterArtifactsForSlug(
-      artifacts.deepInterviewSpecPaths,
-      /^deep-interview-(?<slug>.*)\.md$/i,
-      slug,
-    ),
+    testSpecPaths: selectMatchingTestSpecsForPrd(latestPrdPath, artifacts.testSpecPaths),
+    deepInterviewSpecPaths: selectDeepInterviewSpecPathsForSlug(artifacts.deepInterviewSpecPaths, slug),
   };
 }
 
@@ -236,13 +239,13 @@ function extractTeamDagMarkdownHandoff(content: string): string | null {
 
 export function readTeamDagArtifactResolution(cwd: string): TeamDagArtifactResolution {
   const artifacts = readPlanningArtifacts(cwd);
-  if (!isPlanningComplete(artifacts)) {
+  if (artifacts.prdPaths.length === 0 || artifacts.testSpecPaths.length === 0) {
     return { source: 'none', prdPath: null, planSlug: null, warnings: ['planning_incomplete'] };
   }
 
   const selection = selectLatestPlanningArtifacts(artifacts);
   const prdPath = selection.prdPath;
-  const planSlug = prdPath ? artifactSlug(prdPath, /^prd-(?<slug>.*)\.md$/i) : null;
+  const planSlug = prdPath ? artifactPathSuffix(prdPath, /^prd-(?<slug>.*)\.md$/i) : null;
   if (!prdPath || !planSlug) {
     return { source: 'none', prdPath, planSlug, warnings: ['missing_prd_slug'] };
   }
