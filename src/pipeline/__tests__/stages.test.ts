@@ -272,12 +272,16 @@ describe('Team Exec Stage', () => {
       );
       assert.equal(runtimeCliInput.teamName, 'implement-feature');
       assert.equal(runtimeCliInput.workerCount, 3);
-      assert.deepEqual(runtimeCliInput.agentTypes, ['codex']);
+      assert.equal('agentTypes' in runtimeCliInput, false);
       assert.equal(runtimeCliInput.cwd, '/tmp/test');
       assert.ok(Array.isArray(runtimeCliInput.tasks));
       assert.equal((runtimeCliInput.tasks as unknown[]).length > 0, true);
       assert.equal('task' in runtimeCliInput, false);
       assert.equal('useWorktrees' in runtimeCliInput, false);
+      assert.equal(
+        (runtimeCliInput.decompositionMetadata as Record<string, unknown>).decomposition_source,
+        'legacy_text',
+      );
       assert.match(instruction, /staffing=/);
       assert.match(instruction, /verify=/);
     });
@@ -328,8 +332,69 @@ describe('Team Exec Stage', () => {
       assert.doesNotMatch(instruction, /# staffing=/);
       assert.doesNotMatch(instruction, /# verify=/);
       assert.equal(runtimeCliInput.workerCount, 1);
-      assert.deepEqual(runtimeCliInput.agentTypes, ['codex']);
+      assert.equal('agentTypes' in runtimeCliInput, false);
       assert.equal(runtimeCliInput.cwd, 'C:\\repo with spaces');
+    });
+
+    it('preserves approved DAG handoff tasks and metadata in the runtime-cli payload', async () => {
+      const plansDir = join(tempDir, '.omx', 'plans');
+      await mkdir(plansDir, { recursive: true });
+      await writeFile(
+        join(plansDir, 'prd-demo.md'),
+        '# Demo\n\nLaunch via omx team 2:executor "Execute approved demo plan"\n',
+      );
+      await writeFile(join(plansDir, 'test-spec-demo.md'), '# Demo Test Spec\n');
+      await writeFile(join(plansDir, 'team-dag-demo.json'), JSON.stringify({
+        schema_version: 1,
+        nodes: [
+          {
+            id: 'impl',
+            lane: 'implementation',
+            role: 'executor',
+            subject: 'Implement runtime',
+            description: 'Change runtime',
+            filePaths: ['src/team/runtime.ts'],
+            requires_code_change: true,
+          },
+          {
+            id: 'verify',
+            lane: 'verification',
+            role: 'test-engineer',
+            subject: 'Verify runtime',
+            description: 'Cover runtime',
+            depends_on: ['impl'],
+          },
+        ],
+        worker_policy: { requested_count: 2, count_source: 'cli-explicit' },
+      }));
+      const staffingPlan = buildFollowupStaffingPlan('team', 'Execute approved demo plan', ['executor', 'test-engineer'], {
+        workerCount: 2,
+      });
+      const instruction = buildTeamInstruction({
+        task: 'Execute approved demo plan',
+        workerCount: 2,
+        agentType: 'executor',
+        availableAgentTypes: ['executor', 'test-engineer'],
+        staffingPlan,
+        useWorktrees: false,
+        cwd: tempDir,
+      });
+      const runtimeCliInput = decodeRuntimeCliInstructionPayload(instruction);
+      const tasks = runtimeCliInput.tasks as Array<Record<string, unknown>>;
+      const decompositionMetadata = runtimeCliInput.decompositionMetadata as Record<string, unknown>;
+
+      assert.equal(runtimeCliInput.teamName, 'execute-approved-demo-plan');
+      assert.equal(runtimeCliInput.workerCount, 2);
+      assert.equal(tasks.length, 2);
+      assert.equal(tasks[0]?.symbolic_id, 'impl');
+      assert.deepEqual(tasks[1]?.symbolic_depends_on, ['impl']);
+      assert.deepEqual(tasks[0]?.filePaths, ['src/team/runtime.ts']);
+      assert.equal(tasks[0]?.lane, 'implementation');
+      assert.equal(decompositionMetadata.decomposition_source, 'dag_sidecar');
+      assert.deepEqual(decompositionMetadata.node_dependencies, {
+        impl: [],
+        verify: ['impl'],
+      });
     });
   });
 });

@@ -49,6 +49,31 @@ describe('runtime-cli helpers', () => {
       runtimeCli.normalizeAgentTypes(['gemini'], 3),
       ['gemini'],
     );
+    assert.equal(
+      runtimeCli.resolveRuntimeCliProviderMap(undefined, 2),
+      null,
+    );
+    assert.equal(
+      runtimeCli.resolveRuntimeCliProviderMap(['claude'], 2),
+      'claude',
+    );
+    assert.deepEqual(
+      runtimeCli.resolveRuntimeCliMissingFields({
+        teamName: 'alpha',
+        workerCount: 2,
+        tasks: [{ subject: 'task', description: 'desc' }],
+        cwd: '/tmp/repo',
+      }),
+      [],
+    );
+    assert.deepEqual(
+      runtimeCli.resolveRuntimeCliMissingFields({
+        teamName: 'alpha',
+        tasks: [{ subject: 'task', description: 'desc' }],
+        cwd: '/tmp/repo',
+      }),
+      ['workerCount or agentTypes'],
+    );
     assert.throws(
       () => runtimeCli.normalizeAgentTypes(['codex', 'invalid'], 2),
       /Expected codex\\|claude\\|gemini/,

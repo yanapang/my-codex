@@ -13,6 +13,7 @@ import { writeFile, rename } from 'fs/promises';
 import { join } from 'path';
 import { startTeam, monitorTeam, shutdownTeam } from './runtime.js';
 import type { TeamRuntime, TeamShutdownSummary, StaleTeamSummary } from './runtime.js';
+import type { TeamDecompositionMetadata } from './repo-aware-decomposition.js';
 import { teamReadConfig as readTeamConfig } from './team-ops.js';
 import { resolveCanonicalTeamStateRoot } from './state-root.js';
 
@@ -38,10 +39,25 @@ async function promptStaleCleanup(summary: StaleTeamSummary): Promise<boolean> {
 interface CliInput {
   teamName: string;
   workerCount?: number;
-  agentTypes: string[];
-  tasks: Array<{ subject: string; description: string; owner?: string; role?: string }>;
+  agentTypes?: string[];
+  tasks: Array<{
+    subject: string;
+    description: string;
+    owner?: string;
+    blocked_by?: string[];
+    depends_on?: string[];
+    symbolic_depends_on?: string[];
+    role?: string;
+    requires_code_change?: boolean;
+    filePaths?: string[];
+    domains?: string[];
+    lane?: string;
+    allocation_reason?: string;
+    symbolic_id?: string;
+  }>;
   cwd: string;
   pollIntervalMs?: number;
+  decompositionMetadata?: TeamDecompositionMetadata;
 }
 
 const RUNTIME_CLI_INPUT_JSON_FLAG = '--input-json';
@@ -202,6 +218,29 @@ export function normalizeAgentTypes(raw: string[], workerCount: number): TeamWor
   return providers as TeamWorkerProvider[];
 }
 
+export function resolveRuntimeCliProviderMap(
+  raw: string[] | undefined,
+  workerCount: number,
+): string | null {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return null;
+  }
+  return normalizeAgentTypes(raw, workerCount).join(',');
+}
+
+export function resolveRuntimeCliMissingFields(input: Partial<CliInput>): string[] {
+  const missing: string[] = [];
+  if (!input.teamName) missing.push('teamName');
+  const hasAgentTypes = Array.isArray(input.agentTypes) && input.agentTypes.length > 0;
+  const hasWorkerCount = Number.isInteger(input.workerCount) && Number(input.workerCount) > 0;
+  if (!hasAgentTypes && !hasWorkerCount) {
+    missing.push('workerCount or agentTypes');
+  }
+  if (!input.tasks || !Array.isArray(input.tasks) || input.tasks.length === 0) missing.push('tasks');
+  if (!input.cwd) missing.push('cwd');
+  return missing;
+}
+
 export function resolveRuntimeCliInlineInput(argv: readonly string[]): string | null {
   const index = argv.indexOf(RUNTIME_CLI_INPUT_JSON_FLAG);
   if (index !== -1) {
@@ -250,11 +289,7 @@ async function main(): Promise<void> {
   }
 
   // Validate required fields
-  const missing: string[] = [];
-  if (!input.teamName) missing.push('teamName');
-  if (!input.agentTypes || !Array.isArray(input.agentTypes) || input.agentTypes.length === 0) missing.push('agentTypes');
-  if (!input.tasks || !Array.isArray(input.tasks) || input.tasks.length === 0) missing.push('tasks');
-  if (!input.cwd) missing.push('cwd');
+  const missing = resolveRuntimeCliMissingFields(input);
   if (missing.length > 0) {
     process.stderr.write(`[runtime-cli] Missing required fields: ${missing.join(', ')}\n`);
     process.exit(1);
@@ -266,9 +301,10 @@ async function main(): Promise<void> {
     tasks,
     cwd,
     pollIntervalMs = 5000,
+    decompositionMetadata,
   } = input;
 
-  const workerCount = input.workerCount ?? agentTypes.length;
+  const workerCount = input.workerCount ?? agentTypes?.length ?? 0;
   const stateRoot = resolveRuntimeCliStateRoot(cwd);
 
   let runtime: TeamRuntime | null = null;
@@ -336,10 +372,12 @@ async function main(): Promise<void> {
   // Start the team — OMX's startTeam takes individual parameters
   const agentType = 'executor';
   try {
-    const providers = normalizeAgentTypes(agentTypes, workerCount);
+    const providerMap = resolveRuntimeCliProviderMap(agentTypes, workerCount);
     const previousCliMap = process.env.OMX_TEAM_WORKER_CLI_MAP;
     try {
-      process.env.OMX_TEAM_WORKER_CLI_MAP = providers.join(',');
+      if (providerMap) {
+        process.env.OMX_TEAM_WORKER_CLI_MAP = providerMap;
+      }
       runtime = await startTeam(
         teamName,
         tasks.map(t => t.subject).join('; '),
@@ -347,11 +385,16 @@ async function main(): Promise<void> {
         workerCount,
         tasks,
         cwd,
-        { confirmStaleCleanup: promptStaleCleanup },
+        {
+          confirmStaleCleanup: promptStaleCleanup,
+          ...(decompositionMetadata ? { decompositionMetadata } : {}),
+        },
       );
     } finally {
-      if (typeof previousCliMap === 'string') process.env.OMX_TEAM_WORKER_CLI_MAP = previousCliMap;
-      else delete process.env.OMX_TEAM_WORKER_CLI_MAP;
+      if (providerMap) {
+        if (typeof previousCliMap === 'string') process.env.OMX_TEAM_WORKER_CLI_MAP = previousCliMap;
+        else delete process.env.OMX_TEAM_WORKER_CLI_MAP;
+      }
     }
   } catch (err) {
     process.stderr.write(`[runtime-cli] startTeam failed: ${err}\n`);

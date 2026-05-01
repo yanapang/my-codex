@@ -8,12 +8,12 @@
 
 import { join } from 'node:path';
 import type { PipelineStage, StageContext, StageResult } from '../types.js';
-import { buildTeamExecutionPlan } from '../../cli/team.js';
+import { buildRepoAwareTeamExecutionPlan, type TeamDecompositionMetadata } from '../../team/repo-aware-decomposition.js';
+import { buildTeamExecutionPlan, parseTeamArgs } from '../../cli/team.js';
 import {
   buildFollowupStaffingPlan,
   resolveAvailableAgentTypes,
 } from '../../team/followup-planner.js';
-import { sanitizeTeamName } from '../../team/tmux-session.js';
 import { packageRoot } from '../../utils/paths.js';
 
 export interface TeamExecStageOptions {
@@ -30,8 +30,6 @@ export interface TeamExecStageOptions {
   extraEnv?: Record<string, string>;
 }
 
-const DEFAULT_TEAM_RUNTIME_PROVIDER = 'codex';
-
 interface BuildTeamInstructionOptions {
   platform?: NodeJS.Platform;
 }
@@ -40,25 +38,24 @@ interface TeamRuntimeCliTaskInput {
   subject: string;
   description: string;
   owner?: string;
+  blocked_by?: string[];
+  depends_on?: string[];
+  symbolic_depends_on?: string[];
   role?: string;
+  requires_code_change?: boolean;
+  filePaths?: string[];
+  domains?: string[];
+  lane?: string;
+  allocation_reason?: string;
+  symbolic_id?: string;
 }
 
 interface TeamRuntimeCliLaunchInput {
   teamName: string;
   workerCount: number;
-  agentTypes: string[];
   tasks: TeamRuntimeCliTaskInput[];
   cwd: string;
-}
-
-function deriveTeamNameFromTask(task: string): string {
-  const slug = task
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 30);
-  return sanitizeTeamName(slug || 'team-task');
+  decompositionMetadata?: TeamDecompositionMetadata;
 }
 
 function quotePosixShellArg(value: string): string {
@@ -74,24 +71,55 @@ function quoteShellArg(value: string, platform: NodeJS.Platform): string {
 }
 
 function buildTeamRuntimeCliLaunchInput(descriptor: TeamExecDescriptor): TeamRuntimeCliLaunchInput {
-  const executionPlan = buildTeamExecutionPlan(
-    descriptor.task,
-    descriptor.workerCount,
-    descriptor.agentType,
-    true,
-    true,
+  const parsed = parseTeamArgs(
+    [`${descriptor.workerCount}:${descriptor.agentType}`, descriptor.task],
+    descriptor.cwd,
   );
+  const executionPlan = buildRepoAwareTeamExecutionPlan({
+    task: parsed.task,
+    workerCount: parsed.workerCount,
+    agentType: parsed.agentType,
+    explicitAgentType: parsed.explicitAgentType,
+    explicitWorkerCount: parsed.explicitWorkerCount,
+    cwd: descriptor.cwd,
+    buildLegacyPlan: buildTeamExecutionPlan,
+    allowDagHandoff: parsed.allowRepoAwareDagHandoff,
+    approvedRepositoryContextSummary: parsed.approvedRepositoryContextSummary,
+  });
   return {
-    teamName: deriveTeamNameFromTask(descriptor.task),
-    workerCount: descriptor.workerCount,
-    agentTypes: [DEFAULT_TEAM_RUNTIME_PROVIDER],
-    tasks: executionPlan.tasks.map(({ subject, description, owner, role }) => ({
+    teamName: parsed.teamName,
+    workerCount: executionPlan.workerCount,
+    tasks: executionPlan.tasks.map(({
+      subject,
+      description,
+      owner,
+      blocked_by,
+      depends_on,
+      symbolic_depends_on,
+      role,
+      requires_code_change,
+      filePaths,
+      domains,
+      lane,
+      allocation_reason,
+      symbolic_id,
+    }) => ({
       subject,
       description,
       ...(owner ? { owner } : {}),
+      ...(blocked_by?.length ? { blocked_by } : {}),
+      ...(depends_on?.length ? { depends_on } : {}),
+      ...(symbolic_depends_on?.length ? { symbolic_depends_on } : {}),
       ...(role ? { role } : {}),
+      ...(requires_code_change ? { requires_code_change } : {}),
+      ...(filePaths?.length ? { filePaths } : {}),
+      ...(domains?.length ? { domains } : {}),
+      ...(lane ? { lane } : {}),
+      ...(allocation_reason ? { allocation_reason } : {}),
+      ...(symbolic_id ? { symbolic_id } : {}),
     })),
     cwd: descriptor.cwd,
+    ...(executionPlan.metadata ? { decompositionMetadata: executionPlan.metadata } : {}),
   };
 }
 
