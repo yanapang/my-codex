@@ -434,6 +434,7 @@ function upsertFeatureFlags(config: string): string {
       "multi_agent = true",
       "child_agents_md = true",
       "codex_hooks = true",
+      "goal = true",
       "",
     ].join("\n");
     if (base.length === 0) {
@@ -461,6 +462,7 @@ function upsertFeatureFlags(config: string): string {
   let multiAgentIdx = -1;
   let childAgentsIdx = -1;
   let codexHooksIdx = -1;
+  let goalIdx = -1;
   for (let i = featuresStart + 1; i < sectionEnd; i++) {
     if (/^\s*multi_agent\s*=/.test(lines[i])) {
       multiAgentIdx = i;
@@ -468,6 +470,8 @@ function upsertFeatureFlags(config: string): string {
       childAgentsIdx = i;
     } else if (/^\s*codex_hooks\s*=/.test(lines[i])) {
       codexHooksIdx = i;
+    } else if (/^\s*goal\s*=/.test(lines[i])) {
+      goalIdx = i;
     }
   }
 
@@ -489,12 +493,19 @@ function upsertFeatureFlags(config: string): string {
     lines[codexHooksIdx] = "codex_hooks = true";
   } else {
     lines.splice(sectionEnd, 0, "codex_hooks = true");
+    sectionEnd += 1;
+  }
+
+  if (goalIdx >= 0) {
+    lines[goalIdx] = "goal = true";
+  } else {
+    lines.splice(sectionEnd, 0, "goal = true");
   }
 
   return lines.join("\n");
 }
 
-export function upsertCodexHooksFeatureFlag(config: string): string {
+export function upsertPluginModeRuntimeFeatureFlags(config: string): string {
   const lines = config.split(/\r?\n/);
   const featuresStart = lines.findIndex((line) =>
     /^\s*\[features\]\s*$/.test(line),
@@ -502,7 +513,12 @@ export function upsertCodexHooksFeatureFlag(config: string): string {
 
   if (featuresStart < 0) {
     const base = config.trimEnd();
-    const featureBlock = ["[features]", "codex_hooks = true", ""].join("\n");
+    const featureBlock = [
+      "[features]",
+      "codex_hooks = true",
+      "goal = true",
+      "",
+    ].join("\n");
     if (base.length === 0) {
       return featureBlock;
     }
@@ -518,10 +534,12 @@ export function upsertCodexHooksFeatureFlag(config: string): string {
   }
 
   let codexHooksIdx = -1;
+  let goalIdx = -1;
   for (let i = featuresStart + 1; i < sectionEnd; i++) {
     if (/^\s*codex_hooks\s*=/.test(lines[i])) {
       codexHooksIdx = i;
-      break;
+    } else if (/^\s*goal\s*=/.test(lines[i])) {
+      goalIdx = i;
     }
   }
 
@@ -529,11 +547,17 @@ export function upsertCodexHooksFeatureFlag(config: string): string {
     lines[codexHooksIdx] = "codex_hooks = true";
   } else {
     lines.splice(sectionEnd, 0, "codex_hooks = true");
+    sectionEnd++;
+  }
+
+  if (goalIdx >= 0) {
+    lines[goalIdx] = "goal = true";
+  } else {
+    lines.splice(sectionEnd, 0, "goal = true");
   }
 
   return lines.join("\n");
 }
-
 interface TomlTableRange {
   start: number;
   end: number;
@@ -781,7 +805,13 @@ export function stripOmxFeatureFlags(config: string): string {
     }
   }
 
-  const omxFlags = ["multi_agent", "child_agents_md", "codex_hooks", "collab"];
+  const omxFlags = [
+    "multi_agent",
+    "child_agents_md",
+    "codex_hooks",
+    "goal",
+    "collab",
+  ];
   const filtered: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     if (i > featuresStart && i < sectionEnd) {
@@ -1399,7 +1429,7 @@ function getOmxTablesBlock(
  *
  * Layout:
  *   1. OMX top-level keys (notify, model_reasoning_effort, developer_instructions)
- *   2. [features] with multi_agent + child_agents_md
+ *   2. [features] with multi_agent + child_agents_md + codex_hooks + goal
  *   3. [shell_environment_policy.set] with defaulted explore-routing opt-in
  *   4. … user sections …
  *   5. OMX [table] sections (mcp_servers, tui)
