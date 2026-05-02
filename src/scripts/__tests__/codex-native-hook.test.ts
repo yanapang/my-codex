@@ -23,6 +23,7 @@ import {
 import { writeSessionStart } from "../../hooks/session.js";
 import { resetTriageConfigCache } from "../../hooks/triage-config.js";
 import { executeStateOperation } from "../../state/operations.js";
+import { OMX_TMUX_HUD_OWNER_ENV } from "../../hud/reconcile.js";
 
 function nativeHookScriptPath(): string {
   return join(process.cwd(), "dist", "scripts", "codex-native-hook.js");
@@ -145,6 +146,7 @@ const TEAM_ENV_KEYS = [
   "OMX_LEADER_PANE_ID",
   "TMUX",
   "TMUX_PANE",
+  "OMX_TMUX_HUD_OWNER",
 ] as const;
 
 const priorTeamEnv = new Map<(typeof TEAM_ENV_KEYS)[number], string | undefined>();
@@ -1916,10 +1918,12 @@ export async function onHookEvent(event) {
     const originalTmux = process.env.TMUX;
     const originalTmuxPane = process.env.TMUX_PANE;
     const originalPath = process.env.PATH;
+    const originalHudOwner = process.env[OMX_TMUX_HUD_OWNER_ENV];
     const originalArgv = process.argv;
     try {
       process.env.TMUX = "1";
       process.env.TMUX_PANE = "%1";
+      process.env[OMX_TMUX_HUD_OWNER_ENV] = "1";
       await mkdir(join(cwd, ".omx", "state"), { recursive: true });
       await writeFile(
         join(cwd, ".omx", "hud-config.json"),
@@ -1980,8 +1984,60 @@ esac
       } else {
         process.env.TMUX_PANE = originalTmuxPane;
       }
+      if (originalHudOwner === undefined) {
+        delete process.env[OMX_TMUX_HUD_OWNER_ENV];
+      } else {
+        process.env[OMX_TMUX_HUD_OWNER_ENV] = originalHudOwner;
+      }
       process.env.PATH = originalPath;
       process.argv = originalArgv;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("skips prompt-submit HUD reconciliation inside unowned tmux panes", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-hud-unowned-"));
+    const originalTmux = process.env.TMUX;
+    const originalTmuxPane = process.env.TMUX_PANE;
+    const originalPath = process.env.PATH;
+    const originalHudOwner = process.env[OMX_TMUX_HUD_OWNER_ENV];
+    try {
+      process.env.TMUX = "1";
+      process.env.TMUX_PANE = "%claude";
+      delete process.env[OMX_TMUX_HUD_OWNER_ENV];
+
+      const binDir = await mkdtemp(join(tmpdir(), "omx-native-hook-hud-unowned-bin-"));
+      const tmuxLog = join(cwd, "tmux.log");
+      await writeFile(
+        join(binDir, "tmux"),
+        `#!/usr/bin/env bash
+printf '%s\n' "$*" >> ${JSON.stringify(tmuxLog)}
+exit 0
+`,
+      );
+      await chmod(join(binDir, "tmux"), 0o755);
+      process.env.PATH = `${binDir}:${originalPath}`;
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "UserPromptSubmit",
+          cwd,
+          session_id: "sess-hud-unowned",
+          prompt: "$ralplan prepare plan",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "keyword-detector");
+      assert.equal(existsSync(tmuxLog), false);
+    } finally {
+      if (originalTmux === undefined) delete process.env.TMUX;
+      else process.env.TMUX = originalTmux;
+      if (originalTmuxPane === undefined) delete process.env.TMUX_PANE;
+      else process.env.TMUX_PANE = originalTmuxPane;
+      if (originalHudOwner === undefined) delete process.env[OMX_TMUX_HUD_OWNER_ENV];
+      else process.env[OMX_TMUX_HUD_OWNER_ENV] = originalHudOwner;
+      process.env.PATH = originalPath;
       await rm(cwd, { recursive: true, force: true });
     }
   });
