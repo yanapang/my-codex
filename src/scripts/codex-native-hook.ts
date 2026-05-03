@@ -54,6 +54,7 @@ import {
   hasAnyPattern,
 } from "./codex-native-pre-post.js";
 import { handleTeamWorkerPostToolUseSuccess } from "./notify-hook/team-worker-posttooluse.js";
+import { maybeNudgeLeaderForAllowedWorkerStop } from "./notify-hook/team-worker-stop.js";
 import {
   resolveCodexExecutionSurface,
   type CodexLauncherKind,
@@ -63,7 +64,7 @@ import {
   buildNativeHookEvent,
 } from "../hooks/extensibility/events.js";
 import type { HookEventEnvelope } from "../hooks/extensibility/types.js";
-import { dispatchHookEvent } from "../hooks/extensibility/dispatcher.js";
+import { dispatchHookEventRuntime } from "../hooks/extensibility/runtime.js";
 import { reconcileHudForPromptSubmit } from "../hud/reconcile.js";
 import { onSessionStart as buildWikiSessionStartContext } from "../wiki/lifecycle.js";
 import { readAutoresearchCompletionStatus, readAutoresearchModeStateForActiveDecision } from "../autoresearch/skill-validation.js";
@@ -113,8 +114,7 @@ export interface NativeHookDispatchResult {
 
 const TERMINAL_MODE_PHASES = new Set(["complete", "completed", "failed", "cancelled"]);
 const SKILL_STOP_BLOCKERS = new Set(["ralplan"]);
-const TEAM_TERMINAL_TASK_STATUSES = new Set(["completed", "failed"]);
-const TEAM_WORKER_STOP_ACTIVE_STATES = new Set(["working", "blocked"]);
+const TEAM_STOP_BLOCKING_TASK_STATUSES = new Set(["pending", "in_progress", "blocked"]);
 const NATIVE_STOP_STATE_FILE = "native-stop-state.json";
 const STABLE_FINAL_RECOMMENDATION_PATTERNS = [
   /^\s*(?:launch|release|ship)-?ready\s*:\s*(?:yes|no)\b[^\n\r]*/im,
@@ -1400,26 +1400,75 @@ async function resolveTeamStateDirForWorkerContext(
   cwd: string,
   workerContext: { teamName: string; workerName: string },
 ): Promise<string | null> {
-  return resolveWorkerNotifyTeamStateRootPath(cwd, workerContext, process.env);
+  const resolved = await resolveWorkerNotifyTeamStateRootPath(cwd, workerContext, process.env).catch(() => null);
+  if (resolved) return resolved;
+  const explicit = safeString(process.env.OMX_TEAM_STATE_ROOT).trim();
+  if (explicit) {
+    const candidate = resolve(cwd, explicit);
+    const workerRoot = join(candidate, "team", workerContext.teamName, "workers", workerContext.workerName);
+    if (existsSync(workerRoot)) return candidate;
+    return candidate;
+  }
+  return null;
 }
 
 
-async function buildTeamWorkerStopOutput(
+type TeamWorkerStopDecision =
+  | {
+      kind: "blocked";
+      stateDir: string;
+      workerContext: { teamName: string; workerName: string };
+      output: Record<string, unknown>;
+    }
+  | {
+      kind: "allowed";
+      stateDir: string;
+      workerContext: { teamName: string; workerName: string };
+    }
+  | {
+      kind: "unresolved";
+      reason: string;
+    };
+
+async function resolveTeamWorkerStopDecision(
   cwd: string,
-): Promise<Record<string, unknown> | null> {
-  const workerContext = parseTeamWorkerEnv(safeString(process.env.OMX_TEAM_INTERNAL_WORKER || process.env.OMX_TEAM_WORKER));
-  if (!workerContext) return null;
+): Promise<TeamWorkerStopDecision> {
+  const workerContext =
+    parseTeamWorkerEnv(safeString(process.env.OMX_TEAM_INTERNAL_WORKER))
+    || parseTeamWorkerEnv(safeString(process.env.OMX_TEAM_WORKER));
+  if (!workerContext) return { kind: "unresolved", reason: "missing_worker_context" };
+
+  const blockWorkerStop = (
+    reasonCode: string,
+    detail: string,
+    stateDirForDecision = join(cwd, ".omx", "state"),
+  ): TeamWorkerStopDecision => ({
+    kind: "blocked",
+    stateDir: stateDirForDecision,
+    workerContext,
+    output: {
+      decision: "block",
+      reason:
+        `OMX team worker ${workerContext.workerName} Stop cannot be allowed for ${reasonCode}: ${detail}. ` +
+        "Continue the assigned task, repair worker state, or report a concrete blocker before stopping.",
+      stopReason: `team_worker_${workerContext.workerName}_${reasonCode}`,
+      systemMessage:
+        `OMX team worker ${workerContext.workerName} Stop lacks completed task evidence (${reasonCode}).`,
+    },
+  });
 
   const stateDir = await resolveTeamStateDirForWorkerContext(cwd, workerContext);
-  if (!stateDir) return null;
+  if (!stateDir) {
+    return blockWorkerStop("missing_state_dir", "team state root could not be resolved");
+  }
   const workerRoot = join(stateDir, "team", workerContext.teamName, "workers", workerContext.workerName);
   const [identity, status] = await Promise.all([
     readJsonIfExists(join(workerRoot, "identity.json")),
     readJsonIfExists(join(workerRoot, "status.json")),
   ]);
-
-  const workerState = safeString(status?.state).trim().toLowerCase();
-  if (!TEAM_WORKER_STOP_ACTIVE_STATES.has(workerState)) return null;
+  if (!identity && !status && !existsSync(workerRoot)) {
+    return blockWorkerStop("missing_worker_state", "worker identity/status state is missing", stateDir);
+  }
 
   const candidateTaskIds = new Set<string>();
   const currentTaskId = safeString(status?.current_task_id).trim();
@@ -1430,27 +1479,65 @@ async function buildTeamWorkerStopOutput(
     if (normalized) candidateTaskIds.add(normalized);
   }
 
+  const tasksDir = join(stateDir, "team", workerContext.teamName, "tasks");
+  if (existsSync(tasksDir)) {
+    const taskFiles = await readdir(tasksDir).catch(() => []);
+    for (const entry of taskFiles) {
+      if (!/^task-\d+\.json$/.test(entry)) continue;
+      const task = await readJsonIfExists(join(tasksDir, entry));
+      const taskOwner = safeString(task?.owner).trim();
+      const taskClaimOwner = safeString(safeObject(task?.claim).owner).trim();
+      if (taskOwner !== workerContext.workerName && taskClaimOwner !== workerContext.workerName) continue;
+      const idFromFile = /^task-(\d+)\.json$/.exec(entry)?.[1] ?? "";
+      const taskId = safeString(task?.id).trim() || idFromFile;
+      if (taskId) candidateTaskIds.add(taskId);
+    }
+  }
+
+  if (candidateTaskIds.size === 0) {
+    return blockWorkerStop("missing_task_assignment", "no current_task_id or assigned_tasks are recorded", stateDir);
+  }
+
+  let completedTaskCount = 0;
   for (const taskId of candidateTaskIds) {
     const task = await readJsonIfExists(
       join(stateDir, "team", workerContext.teamName, "tasks", `task-${taskId}.json`),
     );
     const statusValue = safeString(task?.status).trim().toLowerCase();
-    if (!statusValue || TEAM_TERMINAL_TASK_STATUSES.has(statusValue)) continue;
+    if (!statusValue) {
+      return blockWorkerStop(`missing_task_state_${taskId}`, `task ${taskId} has no readable status`, stateDir);
+    }
+    if (statusValue === "completed") {
+      completedTaskCount += 1;
+      continue;
+    }
+    if (!TEAM_STOP_BLOCKING_TASK_STATUSES.has(statusValue)) {
+      return blockWorkerStop(
+        `non_completed_task_${taskId}_${statusValue}`,
+        `task ${taskId} is ${statusValue}, not completed`,
+        stateDir,
+      );
+    }
     return {
-      decision: "block",
-      reason:
-        `OMX team worker ${workerContext.workerName} is still assigned non-terminal task ${taskId} (${statusValue}); continue the current assigned task or report a concrete blocker before stopping.`,
-      stopReason: `team_worker_${workerContext.workerName}_${taskId}_${statusValue}`,
-      systemMessage:
-        `OMX team worker ${workerContext.workerName} is still assigned task ${taskId} (${statusValue}).`,
+      kind: "blocked",
+      stateDir,
+      workerContext,
+      output: {
+        decision: "block",
+        reason:
+          `OMX team worker ${workerContext.workerName} is still assigned non-terminal task ${taskId} (${statusValue}); continue the current assigned task or report a concrete blocker before stopping.`,
+        stopReason: `team_worker_${workerContext.workerName}_${taskId}_${statusValue}`,
+        systemMessage:
+          `OMX team worker ${workerContext.workerName} is still assigned task ${taskId} (${statusValue}).`,
+      },
     };
   }
 
-  return null;
-}
+  if (completedTaskCount === candidateTaskIds.size) {
+    return { kind: "allowed", stateDir, workerContext };
+  }
 
-function hasTeamWorkerContext(): boolean {
-  return parseTeamWorkerEnv(safeString(process.env.OMX_TEAM_INTERNAL_WORKER || process.env.OMX_TEAM_WORKER)) !== null;
+  return blockWorkerStop("missing_completed_task_evidence", "no referenced worker task is completed", stateDir);
 }
 
 function isStopExempt(payload: CodexHookPayload): boolean {
@@ -2207,17 +2294,29 @@ async function buildStopHookOutput(
       }
     }
 
-    const teamWorkerOutput = await buildTeamWorkerStopOutput(cwd);
-    if (hasTeamWorkerContext() && teamWorkerOutput) {
+    const teamWorkerDecision = await resolveTeamWorkerStopDecision(cwd);
+    if (teamWorkerDecision.kind === "blocked") {
       return await returnPersistentStopBlock(
         payload,
         stateDir,
         "team-worker-stop",
-        safeString(teamWorkerOutput.stopReason),
-        teamWorkerOutput,
+        safeString(teamWorkerDecision.output.stopReason),
+        teamWorkerDecision.output,
         canonicalSessionId,
         { allowRepeatDuringStopHook: false },
       );
+    }
+    if (teamWorkerDecision.kind === "allowed") {
+      try {
+        await maybeNudgeLeaderForAllowedWorkerStop({
+          stateDir: teamWorkerDecision.stateDir,
+          logsDir: join(cwd, ".omx", "logs"),
+          workerContext: teamWorkerDecision.workerContext,
+        });
+      } catch (err) {
+        void err;
+      }
+      return null;
     }
 
     const autopilotOutput = await buildModeBasedStopOutput("autopilot", cwd, canonicalSessionId);
@@ -2607,7 +2706,11 @@ export async function dispatchCodexNativeHook(
         mode: safeString(payload.mode).trim() || undefined,
       },
     );
-    await dispatchHookEvent(event, { cwd });
+    await dispatchHookEventRuntime({
+      event,
+      cwd,
+      allowTeamWorkerSideEffects: false,
+    });
   }
 
   if ((hookEventName === "SessionStart" && !skipCanonicalSessionStartContext) || hookEventName === "UserPromptSubmit") {
