@@ -5,6 +5,7 @@ import { extname, join, relative, resolve } from "path";
 import { pathToFileURL } from "url";
 import { readModeState, readModeStateForActiveDecision, readModeStateForSession, updateModeState } from "../modes/base.js";
 import {
+  extractSessionIdFromInitializedStatePath,
   listActiveSkills,
   readVisibleSkillActiveState,
 } from "../state/skill-active.js";
@@ -553,6 +554,19 @@ async function isVisibleRalphActiveForSession(cwd: string, sessionId: string): P
   ));
 }
 
+async function hasConsistentRalphSkillActivation(cwd: string, sessionId: string): Promise<boolean> {
+  const canonicalState = await readVisibleSkillActiveState(cwd, sessionId);
+  if (!canonicalState) return true;
+
+  const initializedMode = safeString(canonicalState.initialized_mode).trim();
+  if (initializedMode && initializedMode !== "ralph") return true;
+
+  const initializedPathSessionId = extractSessionIdFromInitializedStatePath(canonicalState.initialized_state_path);
+  if (initializedPathSessionId && initializedPathSessionId !== sessionId) return false;
+
+  return true;
+}
+
 async function readActiveRalphState(
   stateDir: string,
   preferredSessionId?: string,
@@ -606,6 +620,7 @@ async function readActiveRalphState(
         currentNativeSessionId,
         tmuxPaneId: safeString(ownerContext?.tmuxPaneId).trim(),
       })
+      && await hasConsistentRalphSkillActivation(cwd, sessionId)
     ) {
       return { state: sessionScoped, path: sessionScopedPath };
     }

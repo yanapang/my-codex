@@ -7004,6 +7004,51 @@ exit 0
     }
   });
 
+  it("does not block Stop when Ralph skill-active initialization points at another session", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-ralph-stale-skill-active-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const currentSessionId = "sess-current-ralph";
+      await mkdir(join(stateDir, "sessions", currentSessionId), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), {
+        session_id: currentSessionId,
+        native_session_id: currentSessionId,
+        cwd,
+      });
+      await writeJson(join(stateDir, "sessions", currentSessionId, "ralph-state.json"), {
+        active: true,
+        mode: "ralph",
+        current_phase: "verifying",
+        session_id: currentSessionId,
+        owner_omx_session_id: currentSessionId,
+        task_slug: "stale-rebound-task",
+      });
+      await writeJson(join(stateDir, "sessions", currentSessionId, "skill-active-state.json"), {
+        active: true,
+        skill: "ralph",
+        phase: "verifying",
+        session_id: currentSessionId,
+        initialized_mode: "ralph",
+        initialized_state_path: ".omx/state/sessions/sess-old-ralph/ralph-state.json",
+        active_skills: [{ skill: "ralph", phase: "verifying", active: true, session_id: currentSessionId }],
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: currentSessionId,
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("blocks same-session Ralph Stop continuation when ownership identifiers match", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-ralph-owned-session-"));
     const previousTmuxPane = process.env.TMUX_PANE;
