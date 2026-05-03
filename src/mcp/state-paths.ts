@@ -162,17 +162,20 @@ function enforceWorkingDirectoryPolicy(resolvedWorkingDirectory: string): void {
 }
 
 export function getBaseStateDir(workingDirectory?: string): string {
+  const teamStateRootOverride = process.env.OMX_TEAM_STATE_ROOT?.trim();
+  if (typeof teamStateRootOverride === 'string' && teamStateRootOverride !== '') {
+    try {
+      return resolveWorkingDirectoryForState(teamStateRootOverride);
+    } catch {}
+  }
+
   const omxRootOverride = process.env[OMX_ROOT_ENV]?.trim() || process.env[OMX_STATE_ROOT_ENV]?.trim();
   if (typeof omxRootOverride === 'string' && omxRootOverride !== '') {
     try {
       return join(resolveWorkingDirectoryForState(omxRootOverride), '.omx', 'state');
     } catch {}
   }
-  if ((workingDirectory == null || workingDirectory === '') && typeof process.env.OMX_TEAM_STATE_ROOT === 'string' && process.env.OMX_TEAM_STATE_ROOT.trim() !== '') {
-    try {
-      return resolveWorkingDirectoryForState(process.env.OMX_TEAM_STATE_ROOT.trim());
-    } catch {}
-  }
+
   return join(resolveWorkingDirectoryForState(workingDirectory), '.omx', 'state');
 }
 
