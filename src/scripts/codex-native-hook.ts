@@ -1327,6 +1327,9 @@ function buildAdditionalContextMessage(
   const ultraworkPromptActivationNote = skillState?.initialized_mode === "ultrawork"
     ? "Ultrawork protocol: ground the task before editing, define pass/fail acceptance criteria, keep shared-file work local, and use direct-tool plus background evidence lanes only for truly independent work. Direct ultrawork provides lightweight verification only; Ralph owns persistence and the full verified-completion promise."
     : null;
+  const ultragoalPromptActivationNote = match.skill === "ultragoal"
+    ? "Ultragoal protocol: use `omx ultragoal create-goals` / `complete-goals` / `checkpoint` for `.omx/ultragoal` artifacts, then use Codex goal model tools only from the active agent handoff (`get_goal`, `create_goal`, `update_goal`) and never overwrite a different active Codex goal."
+    : null;
   const combinedTransitionMessage = (() => {
     if (!skillState?.transition_message) return null;
     if (matches.length <= 1 || activeSkills.length <= 1) return skillState.transition_message;
@@ -1353,6 +1356,7 @@ function buildAdditionalContextMessage(
         ? `planning preserved over simultaneous execution follow-up; deferred skills: ${deferredSkills.join(", ")}.`
         : null,
       promptPriorityMessage,
+      ultragoalPromptActivationNote,
       skillState.initialized_mode && skillState.initialized_state_path
         ? `skill: ${skillState.initialized_mode} activated and initial state initialized at ${skillState.initialized_state_path}; write subsequent updates via omx_state MCP.`
         : null,
@@ -1378,6 +1382,7 @@ function buildAdditionalContextMessage(
       initializedStateMessage,
       deepInterviewPromptActivationNote,
       ultraworkPromptActivationNote,
+      ultragoalPromptActivationNote,
       buildTeamRuntimeInstruction(cwd, payload),
       buildTeamHelpInstruction(cwd, payload),
       "Follow AGENTS.md routing and preserve workflow transition and planning-safety rules.",
@@ -1395,12 +1400,13 @@ function buildAdditionalContextMessage(
       `skill: ${skillState.initialized_mode} activated and initial state initialized at ${skillState.initialized_state_path}; write subsequent updates via omx_state MCP.`,
       deepInterviewPromptActivationNote,
       ultraworkPromptActivationNote,
+      ultragoalPromptActivationNote,
       ralphPromptActivationNote,
       "Follow AGENTS.md routing and preserve workflow transition and planning-safety rules.",
     ].join(" ");
   }
 
-  return [detectedKeywordMessage, promptPriorityMessage, "Follow AGENTS.md routing and preserve workflow transition and planning-safety rules."].filter(Boolean).join(" ");
+  return [detectedKeywordMessage, promptPriorityMessage, ultragoalPromptActivationNote, "Follow AGENTS.md routing and preserve workflow transition and planning-safety rules."].filter(Boolean).join(" ");
 }
 
 function parseTeamWorkerEnv(rawValue: string): { teamName: string; workerName: string } | null {
@@ -1593,6 +1599,81 @@ async function buildModeBasedStopOutput(
     reason: `OMX ${mode} is still active (phase: ${phase}); continue the task and gather fresh verification evidence before stopping.`,
     stopReason: `${mode}_${phase}`,
     systemMessage: `OMX ${mode} is still active (phase: ${phase}).`,
+  };
+}
+
+function looksLikeGoalCompletionPrompt(text: string): boolean {
+  return /\b(?:complete|checkpoint|finish|close|mark)\b.{0,80}\b(?:goal|ultragoal|performance-goal|autoresearch-goal)\b/i.test(text)
+    || /\bupdate_goal\s*\(/i.test(text)
+    || /\bomx\s+(?:ultragoal|performance-goal|autoresearch-goal)\s+(?:checkpoint|complete)\b/i.test(text);
+}
+
+async function findActiveGoalWorkflowReconciliationRequirement(cwd: string): Promise<{ workflow: string; command: string } | null> {
+  const ultragoal = await readJsonIfExists(join(cwd, ".omx", "ultragoal", "goals.json"));
+  const ultragoals = Array.isArray(ultragoal?.goals) ? ultragoal.goals.map(safeObject) : [];
+  const activeUltragoal = ultragoals.find((goal) => safeString(goal.status) === "in_progress" || safeString(goal.id) === safeString(ultragoal?.activeGoalId));
+  if (activeUltragoal) {
+    return {
+      workflow: "ultragoal",
+      command: `omx ultragoal checkpoint --goal-id ${safeString(activeUltragoal.id) || "<goal-id>"} --status complete --codex-goal-json '<get_goal JSON or path>' --evidence '<evidence>'`,
+    };
+  }
+
+  const performanceRoot = join(cwd, ".omx", "goals", "performance");
+  for (const entry of await readdir(performanceRoot, { withFileTypes: true }).catch(() => [])) {
+    if (!entry.isDirectory()) continue;
+    const state = await readJsonIfExists(join(performanceRoot, entry.name, "state.json"));
+    const status = safeString(state?.status);
+    if (state?.workflow === "performance-goal" && status && status !== "complete") {
+      return {
+        workflow: "performance-goal",
+        command: `omx performance-goal complete --slug ${safeString(state.slug) || entry.name} --codex-goal-json '<get_goal JSON or path>' --evidence '<evidence>'`,
+      };
+    }
+  }
+
+  const autoresearchRoot = join(cwd, ".omx", "goals", "autoresearch");
+  for (const entry of await readdir(autoresearchRoot, { withFileTypes: true }).catch(() => [])) {
+    if (!entry.isDirectory()) continue;
+    const mission = await readJsonIfExists(join(autoresearchRoot, entry.name, "mission.json"));
+    const status = safeString(mission?.status);
+    if (mission?.workflow === "autoresearch-goal" && status && status !== "complete") {
+      return {
+        workflow: "autoresearch-goal",
+        command: `omx autoresearch-goal complete --slug ${safeString(mission.slug) || entry.name} --codex-goal-json '<get_goal JSON or path>'`,
+      };
+    }
+  }
+
+  return null;
+}
+
+async function buildGoalWorkflowReconciliationPromptWarning(cwd: string, prompt: string): Promise<string | null> {
+  if (!looksLikeGoalCompletionPrompt(prompt)) return null;
+  const requirement = await findActiveGoalWorkflowReconciliationRequirement(cwd);
+  if (!requirement) return null;
+  return [
+    `OMX ${requirement.workflow} goal workflow requires Codex goal snapshot reconciliation before completion.`,
+    "Call get_goal, pass the resulting JSON or a path with --codex-goal-json, and do not rely on hooks or shell commands to mutate Codex-owned goal state.",
+    `Required command shape: ${requirement.command}.`,
+  ].join(" ");
+}
+
+async function buildGoalWorkflowReconciliationStopOutput(
+  payload: CodexHookPayload,
+  cwd: string,
+): Promise<Record<string, unknown> | null> {
+  const lastAssistantMessage = safeString(payload.last_assistant_message ?? payload.lastAssistantMessage);
+  if (!looksLikeGoalCompletionPrompt(lastAssistantMessage)) return null;
+  const requirement = await findActiveGoalWorkflowReconciliationRequirement(cwd);
+  if (!requirement) return null;
+  const systemMessage =
+    `OMX ${requirement.workflow} requires get_goal snapshot reconciliation before completion; call get_goal and pass --codex-goal-json to ${requirement.command}. Hooks must not mutate Codex goal state.`;
+  return {
+    decision: "block",
+    reason: systemMessage,
+    stopReason: `${requirement.workflow}_codex_goal_snapshot_required`,
+    systemMessage,
   };
 }
 
@@ -1987,7 +2068,8 @@ function resolveRepeatableStopSessionId(
   payload: CodexHookPayload,
   canonicalSessionId?: string,
 ): string {
-  return canonicalSessionId?.trim() || readPayloadSessionId(payload) || "";
+  const inheritedSessionId = safeString(process.env.OMX_SESSION_ID || process.env.CODEX_SESSION_ID).trim();
+  return canonicalSessionId?.trim() || readPayloadSessionId(payload) || inheritedSessionId || "";
 }
 
 function isStateLevelStopSignatureKind(kind: string): boolean {
@@ -2532,6 +2614,18 @@ async function buildStopHookOutput(
     const lastAssistantMessage = safeString(
       payload.last_assistant_message ?? payload.lastAssistantMessage,
     );
+    const goalWorkflowStopOutput = await buildGoalWorkflowReconciliationStopOutput(payload, cwd);
+    if (goalWorkflowStopOutput) {
+      return await returnPersistentStopBlock(
+        payload,
+        stateDir,
+        "goal-workflow-reconciliation-stop",
+        safeString(goalWorkflowStopOutput.stopReason),
+        goalWorkflowStopOutput,
+        canonicalSessionId,
+        { allowRepeatDuringStopHook: true },
+      );
+    }
     const autoNudgeConfig = await loadAutoNudgeConfig();
     const autoNudgePhase = await readStopAutoNudgePhase(cwd, canonicalSessionId, threadId);
 
@@ -2625,6 +2719,7 @@ export async function dispatchCodexNativeHook(
   const omxEventName = mapCodexHookEventToOmxEvent(hookEventName);
   let skillState: SkillActiveState | null = null;
   let triageAdditionalContext: string | null = null;
+  let goalWorkflowAdditionalContext: string | null = null;
 
   const nativeSessionId = safeString(payload.session_id ?? payload.sessionId).trim();
   const threadId = safeString(payload.thread_id ?? payload.threadId).trim();
@@ -2677,9 +2772,10 @@ export async function dispatchCodexNativeHook(
   }
 
   if (hookEventName === "Stop") {
+    const inheritedSessionId = safeString(process.env.OMX_SESSION_ID || process.env.CODEX_SESSION_ID).trim();
     const stopCanonicalSessionId = await resolveInternalSessionIdForPayload(
       cwd,
-      readPayloadSessionId(payload),
+      readPayloadSessionId(payload) || inheritedSessionId,
     );
     if (stopCanonicalSessionId) {
       canonicalSessionId = stopCanonicalSessionId;
@@ -2708,6 +2804,7 @@ export async function dispatchCodexNativeHook(
 
   if (hookEventName === "UserPromptSubmit") {
     const prompt = readPromptText(payload);
+    goalWorkflowAdditionalContext = await buildGoalWorkflowReconciliationPromptWarning(cwd, prompt).catch(() => null);
     if (prompt && !isSubagentPromptSubmit) {
       skillState = buildNativeOutsideTmuxTeamPromptBlockState(
         prompt,
@@ -2834,7 +2931,7 @@ export async function dispatchCodexNativeHook(
       })
       : isSubagentPromptSubmit
         ? null
-        : (buildAdditionalContextMessage(readPromptText(payload), skillState, cwd, payload) ?? triageAdditionalContext);
+        : (buildAdditionalContextMessage(readPromptText(payload), skillState, cwd, payload) ?? goalWorkflowAdditionalContext ?? triageAdditionalContext);
     if (additionalContext) {
       outputJson = {
         hookSpecificOutput: {

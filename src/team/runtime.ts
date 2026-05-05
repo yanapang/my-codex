@@ -109,6 +109,7 @@ import {
   buildLeaderMailboxTriggerDirective,
   writeWorkerRoleInstructionsFile,
 } from './worker-bootstrap.js';
+import { buildTeamWorkerGoalInstruction } from './goal-workflow.js';
 import { synthesizeDelegationPlan } from './delegation-policy.js';
 import { loadRolePrompt } from './role-router.js';
 import { composeRoleInstructionsForRole } from '../agents/native-config.js';
@@ -131,6 +132,14 @@ import { hasStructuredVerificationEvidence } from '../verification/verifier.js';
 import { buildRebalanceDecisions } from './rebalance-policy.js';
 import { getStatePath } from '../mcp/state-paths.js';
 import { readModeState, updateModeState } from '../modes/base.js';
+import {
+  buildApprovedTeamExecutionBinding,
+  normalizeApprovedTeamExecutionBinding,
+  readApprovedTeamExecutionHintFromBinding,
+  resolvePersistedApprovedTeamExecutionContinuityState,
+  writePersistedApprovedTeamExecutionBinding,
+  type ApprovedTeamExecutionBinding,
+} from './approved-execution.js';
 import {
   appendTeamCommitHygieneEntries,
   buildTeamCommitHygieneContext,
@@ -1258,6 +1267,7 @@ export interface TeamStartOptions {
   confirmStaleCleanup?: (summary: StaleTeamSummary) => Promise<boolean>;
   cleanupLaunchOrphanedMcpProcesses?: () => Promise<CleanupResult>;
   writeCleanupWarning?: (message: string) => void;
+  approvedExecution?: ApprovedTeamExecutionBinding | null;
 }
 
 interface ShutdownGateCounts {
@@ -2049,13 +2059,20 @@ function spawnPromptWorker(
     initialPrompt,
     workerRole,
   );
+  const childEnv = { ...process.env, ...processSpec.env };
+  // Prompt workers are external CLI processes, not in-process runtime code.
+  // Keeping c8's NODE_V8_COVERAGE in their environment makes coverage runs
+  // track long-lived fake worker descendants and can keep node --test alive
+  // after the runtime test itself has completed.
+  delete childEnv.NODE_V8_COVERAGE;
+
   const child = spawn(
     processSpec.command,
     processSpec.args,
     {
       cwd: workerCwd,
       detached: process.platform !== 'win32',
-      env: { ...process.env, ...processSpec.env },
+      env: childEnv,
       stdio: ['pipe', 'ignore', 'ignore'],
     },
   );
@@ -2230,6 +2247,18 @@ export async function startTeam(
   }
 
   const teamStateRoot = resolveCanonicalTeamStateRoot(leaderCwd);
+  const requestedApprovedExecution = normalizeApprovedTeamExecutionBinding(options.approvedExecution);
+  const selectedApprovedExecutionHint = requestedApprovedExecution
+    ? readApprovedTeamExecutionHintFromBinding(leaderCwd, requestedApprovedExecution)
+    : null;
+  if (requestedApprovedExecution && !selectedApprovedExecutionHint) {
+    throw new Error(
+      `approved_execution_binding_stale:${requestedApprovedExecution.prd_path}:${requestedApprovedExecution.task}`,
+    );
+  }
+  const approvedExecution = selectedApprovedExecutionHint
+    ? buildApprovedTeamExecutionBinding(selectedApprovedExecutionHint)
+    : null;
   const activeWorktreeMode: 'detached' | 'named' | null =
     effectiveWorktreeMode.enabled
       ? (effectiveWorktreeMode.detached ? 'detached' : 'named')
@@ -2337,6 +2366,12 @@ export async function startTeam(
     config.requested_name = displayName;
     config.identity_source = identityScope.source;
     config.worktree_mode = effectiveWorktreeMode;
+    await writePersistedApprovedTeamExecutionBinding(
+      sanitized,
+      leaderCwd,
+      approvedExecution,
+      teamStateRoot,
+    );
 
     // 4. Create tasks. Repo-aware DAG dependencies are symbolic until the
     // state layer returns concrete task IDs, so create those tasks dependency
@@ -2461,6 +2496,7 @@ export async function startTeam(
         worktreeRootAgentsCanonical: Boolean(workerWorkspace.worktreePath),
         taskHints: effectiveDecompositionMetadata?.task_hints,
         approvedContextSummary: effectiveDecompositionMetadata?.approved_context_summary,
+        workerGoalInstruction: buildTeamWorkerGoalInstruction(sanitized, workerName, workerTasks, { teamStateRoot }),
       });
       const triggerDirective = buildTriggerDirective(
         workerName,
@@ -3699,6 +3735,20 @@ export async function resumeTeam(teamName: string, cwd: string): Promise<TeamRun
   const config = await readTeamConfig(sanitized, cwd);
   if (!config) return null;
   config.lifecycle_profile = 'default';
+  const leaderCwd = config.leader_cwd ?? cwd;
+  const approvedExecutionState = await resolvePersistedApprovedTeamExecutionContinuityState(
+    sanitized,
+    leaderCwd,
+    config.team_state_root ?? resolveCanonicalTeamStateRoot(leaderCwd),
+  );
+  if (approvedExecutionState.status === 'malformed') {
+    throw new Error(`approved_execution_binding_malformed:${sanitized}`);
+  }
+  if (approvedExecutionState.status === 'stale') {
+    throw new Error(
+      `approved_execution_binding_stale:${approvedExecutionState.binding.prd_path}:${approvedExecutionState.binding.task}`,
+    );
+  }
 
   if (config.worker_launch_mode === 'prompt') {
     const handleTeamConfig = { ...config, name: sanitized };
