@@ -1,5 +1,11 @@
 import { readFile } from 'node:fs/promises';
 import {
+  CodexGoalSnapshotError,
+  formatCodexGoalReconciliation,
+  readCodexGoalSnapshotInput,
+  reconcileCodexGoalSnapshot,
+} from '../goal-workflows/codex-goal-snapshot.js';
+import {
   buildPerformanceGoalInstruction,
   checkpointPerformanceGoal,
   completePerformanceGoal,
@@ -17,8 +23,8 @@ Usage:
   omx performance-goal create --objective <text> --evaluator-command <cmd> --evaluator-contract <text> [--slug <slug>] [--force] [--json]
   omx performance-goal start --slug <slug> [--json]
   omx performance-goal checkpoint --slug <slug> --status <pass|fail|blocked> --evidence <text> [--json]
-  omx performance-goal complete --slug <slug> [--evidence <text>] [--json]
-  omx performance-goal status --slug <slug> [--json]
+  omx performance-goal complete --slug <slug> [--evidence <text>] --codex-goal-json <json-or-path> [--json]
+  omx performance-goal status --slug <slug> [--codex-goal-json <json-or-path>] [--json]
 
 Aliases:
   create/start/checkpoint/complete/status may be used as shown above.
@@ -51,7 +57,7 @@ function readValue(args: readonly string[], flag: string): string | undefined {
 }
 
 function positionalText(args: readonly string[]): string {
-  const valueTaking = new Set(['--objective', '--objective-file', '--evaluator-command', '--evaluator-contract', '--evaluator-contract-file', '--slug', '--status', '--evidence']);
+  const valueTaking = new Set(['--objective', '--objective-file', '--evaluator-command', '--evaluator-contract', '--evaluator-contract-file', '--slug', '--status', '--evidence', '--codex-goal-json']);
   const words: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
@@ -147,7 +153,11 @@ export async function performanceGoalCommand(args: string[]): Promise<void> {
     if (command === 'complete') {
       const slug = readValue(rest, '--slug');
       if (!slug) throw new PerformanceGoalError('Missing --slug.');
-      const state = await completePerformanceGoal(cwd, { slug, evidence: readValue(rest, '--evidence') });
+      const state = await completePerformanceGoal(cwd, {
+        slug,
+        evidence: readValue(rest, '--evidence'),
+        codexGoal: await readCodexGoalSnapshotInput(readValue(rest, '--codex-goal-json'), cwd),
+      });
       if (json) printJson({ ok: true, state, instruction: buildPerformanceGoalInstruction(state) });
       else printStatus(state);
       return;
@@ -157,14 +167,23 @@ export async function performanceGoalCommand(args: string[]): Promise<void> {
       const slug = readValue(rest, '--slug');
       if (!slug) throw new PerformanceGoalError('Missing --slug.');
       const state = await readPerformanceGoal(cwd, slug);
-      if (json) printJson({ state });
-      else printStatus(state);
+      const snapshot = await readCodexGoalSnapshotInput(readValue(rest, '--codex-goal-json'), cwd);
+      const reconciliation = reconcileCodexGoalSnapshot(snapshot, {
+        expectedObjective: state.objective,
+        allowedStatuses: state.status === 'complete' ? ['complete'] : ['active', 'complete'],
+        requireSnapshot: false,
+      });
+      if (json) printJson({ state, reconciliation });
+      else {
+        printStatus(state);
+        if (!reconciliation.ok || reconciliation.warnings.length) console.log(`codex goal warning: ${formatCodexGoalReconciliation(reconciliation)}`);
+      }
       return;
     }
 
     throw new PerformanceGoalError(`Unknown performance-goal command: ${command}\n\n${PERFORMANCE_GOAL_HELP}`);
   } catch (error) {
-    if (error instanceof PerformanceGoalError) {
+    if (error instanceof PerformanceGoalError || error instanceof CodexGoalSnapshotError) {
       console.error(`[performance-goal] ${error.message}`);
       process.exitCode = 1;
       return;

@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import {
   AutoresearchGoalError,
   buildAutoresearchGoalHandoff,
+  reconcileAutoresearchCodexGoalSnapshot,
   completeAutoresearchGoal,
   createAutoresearchGoal,
   readAutoresearchGoal,
@@ -9,6 +10,11 @@ import {
   recordAutoresearchGoalVerdict,
   type AutoresearchGoalVerdict,
 } from '../autoresearch/goal.js';
+import {
+  CodexGoalSnapshotError,
+  formatCodexGoalReconciliation,
+  readCodexGoalSnapshotInput,
+} from '../goal-workflows/codex-goal-snapshot.js';
 
 export const AUTORESEARCH_GOAL_HELP = `omx autoresearch-goal - Durable professor-critic research workflow over Codex goal mode
 
@@ -16,8 +22,8 @@ Usage:
   omx autoresearch-goal create --topic <text> --rubric <text|path> [--critic-command <cmd>] [--slug <slug>] [--force] [--json]
   omx autoresearch-goal handoff --slug <slug> [--json]
   omx autoresearch-goal verdict --slug <slug> --verdict <pass|fail|blocked> --evidence <text> [--summary <text>] [--artifact <path>] [--json]
-  omx autoresearch-goal complete --slug <slug> [--json]
-  omx autoresearch-goal status --slug <slug> [--json]
+  omx autoresearch-goal complete --slug <slug> --codex-goal-json <json-or-path> [--json]
+  omx autoresearch-goal status --slug <slug> [--codex-goal-json <json-or-path>] [--json]
 
 Artifacts:
   .omx/goals/autoresearch/<slug>/mission.json
@@ -53,7 +59,7 @@ async function readMaybeFile(value: string | undefined): Promise<string | undefi
 }
 
 function positionalText(args: readonly string[]): string {
-  const valueTaking = new Set(['--topic', '--rubric', '--critic-command', '--slug', '--verdict', '--evidence', '--summary', '--artifact']);
+  const valueTaking = new Set(['--topic', '--rubric', '--critic-command', '--slug', '--verdict', '--evidence', '--summary', '--artifact', '--codex-goal-json']);
   const words: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -132,11 +138,13 @@ export async function autoresearchGoalCommand(args: string[]): Promise<void> {
     if (command === 'complete') {
       const slug = readValue(rest, '--slug');
       if (!slug) throw new AutoresearchGoalError('Missing --slug.');
-      const result = await completeAutoresearchGoal(cwd, slug);
+      const result = await completeAutoresearchGoal(cwd, slug, {
+        codexGoal: await readCodexGoalSnapshotInput(readValue(rest, '--codex-goal-json'), cwd),
+      });
       if (json) printJson({ ok: true, ...result });
       else {
         console.log(`autoresearch-goal complete: ${result.mission.slug}`);
-        console.log('Codex goal completion: after auditing the active objective, call update_goal({status: "complete"}) in the Codex thread if this handoff owns the active goal.');
+        console.log('Codex goal reconciliation: matched a fresh complete get_goal snapshot; OMX mission completion is now durable.');
       }
       return;
     }
@@ -146,17 +154,23 @@ export async function autoresearchGoalCommand(args: string[]): Promise<void> {
       if (!slug) throw new AutoresearchGoalError('Missing --slug.');
       const mission = await readAutoresearchGoal(cwd, slug);
       const completion = await readAutoresearchGoalCompletion(cwd, slug);
-      if (json) printJson({ mission, completion });
+      const snapshot = await readCodexGoalSnapshotInput(readValue(rest, '--codex-goal-json'), cwd);
+      const reconciliation = reconcileAutoresearchCodexGoalSnapshot(snapshot, mission, {
+        requireSnapshot: false,
+        requireComplete: mission.status === 'complete',
+      });
+      if (json) printJson({ mission, completion, reconciliation });
       else {
         console.log(`autoresearch-goal: ${mission.slug} [${mission.status}] ${mission.topic}`);
         console.log(`completion: ${completion ? `${completion.verdict} (${completion.recorded_at})` : 'missing'}`);
+        if (!reconciliation.ok || reconciliation.warnings.length) console.log(`codex goal warning: ${formatCodexGoalReconciliation(reconciliation)}`);
       }
       return;
     }
 
     throw new AutoresearchGoalError(`Unknown autoresearch-goal command: ${command}\n\n${AUTORESEARCH_GOAL_HELP}`);
   } catch (error) {
-    if (error instanceof AutoresearchGoalError) {
+    if (error instanceof AutoresearchGoalError || error instanceof CodexGoalSnapshotError) {
       console.error(`[autoresearch-goal] ${error.message}`);
       process.exitCode = 1;
       return;

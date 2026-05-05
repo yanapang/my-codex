@@ -62,7 +62,8 @@ describe('cli/performance-goal', () => {
       assert.match(output, /call create_goal/);
       assert.match(output, /Do not treat this shell command as hidden Codex goal mutation/);
       assert.match(output, /update_goal\(\{status: "complete"\}\)/);
-      assert.ok(output.indexOf('omx performance-goal complete --slug startup-latency') < output.indexOf('update_goal({status: "complete"})'));
+      assert.ok(output.indexOf('update_goal({status: "complete"})') < output.indexOf('omx performance-goal complete --slug startup-latency'));
+      assert.match(output, /--codex-goal-json/);
       assert.match(output, /npm run perf:startup/);
 
       const state = JSON.parse(await readFile(join(cwd, '.omx/goals/performance/startup-latency/state.json'), 'utf-8')) as { status: string; artifactPaths: { evaluator: string } };
@@ -107,7 +108,12 @@ describe('cli/performance-goal', () => {
 
       const passed = await capture(() => performanceGoalCommand(['checkpoint', '--slug', 'throughput', '--status', 'pass', '--evidence', 'benchmark and tests passed']));
       assert.equal(passed.exitCode, undefined);
-      const completed = await capture(() => performanceGoalCommand(['complete', '--slug', 'throughput', '--json']));
+      const completed = await capture(() => performanceGoalCommand([
+        'complete',
+        '--slug', 'throughput',
+        '--codex-goal-json', '{"goal":{"objective":"Improve hot path throughput","status":"complete"}}',
+        '--json',
+      ]));
       assert.equal(completed.exitCode, undefined);
       const parsed = JSON.parse(completed.stdout.join('\n')) as { state: { status: string } };
       assert.equal(parsed.state.status, 'complete');
@@ -115,6 +121,39 @@ describe('cli/performance-goal', () => {
       const afterComplete = await capture(() => performanceGoalCommand(['checkpoint', '--slug', 'throughput', '--status', 'fail', '--evidence', 'late regression']));
       assert.equal(afterComplete.exitCode, 1);
       assert.match(afterComplete.stderr.join('\n'), /already complete/);
+    });
+  });
+
+  it('requires matching complete Codex goal proof for completion', async () => {
+    await withCwd(async () => {
+      await capture(() => performanceGoalCommand([
+        'create',
+        '--objective', 'Reduce allocations',
+        '--evaluator-command', 'node bench.js',
+        '--evaluator-contract', 'PASS when allocations fall and tests pass.',
+        '--slug', 'allocations',
+      ]));
+      await capture(() => performanceGoalCommand(['checkpoint', '--slug', 'allocations', '--status', 'pass', '--evidence', 'bench pass']));
+
+      const missing = await capture(() => performanceGoalCommand(['complete', '--slug', 'allocations']));
+      assert.equal(missing.exitCode, 1);
+      assert.match(missing.stderr.join('\n'), /call get_goal/);
+
+      const incomplete = await capture(() => performanceGoalCommand([
+        'complete',
+        '--slug', 'allocations',
+        '--codex-goal-json', '{"goal":{"objective":"Reduce allocations","status":"active"}}',
+      ]));
+      assert.equal(incomplete.exitCode, 1);
+      assert.match(incomplete.stderr.join('\n'), /not complete/);
+
+      const malformed = await capture(() => performanceGoalCommand([
+        'complete',
+        '--slug', 'allocations',
+        '--codex-goal-json', '{bad-json}',
+      ]));
+      assert.equal(malformed.exitCode, 1);
+      assert.match(malformed.stderr.join('\n'), /neither valid JSON nor a readable path/);
     });
   });
 });

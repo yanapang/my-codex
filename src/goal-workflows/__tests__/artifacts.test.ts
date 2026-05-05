@@ -113,6 +113,7 @@ describe('goal-workflow handoff and validation', () => {
       assert.match(handoff, /call get_goal/i);
       assert.match(handoff, /Call create_goal only if no active goal exists/i);
       assert.match(handoff, /update_goal\(\{status: "complete"\}\) only after/i);
+      assert.match(handoff, /fresh complete snapshot/i);
       assert.match(handoff, /did not mutate hidden Codex goal state/i);
       assert.match(handoff, /Research safe rollout options/);
     });

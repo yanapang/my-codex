@@ -24,8 +24,8 @@ export function buildGoalWorkflowHandoff(options: GoalWorkflowHandoffOptions): s
     '- Call create_goal only if no active goal exists and this handoff is the explicit objective to start.',
     '- If a different active Codex goal exists, finish, checkpoint, or ask the leader before replacing focus.',
     '- Work only this objective until the workflow-specific completion audit passes.',
-    '- Call update_goal({status: "complete"}) only after the OMX completion audit and validation artifacts pass.',
-    options.completionCommand ? `- Then record OMX completion evidence with: ${options.completionCommand}` : '- Then record OMX completion evidence in the workflow ledger/status artifacts.',
+    '- Call update_goal({status: "complete"}) only after the OMX completion audit and validation artifacts pass, then call get_goal again for a fresh complete snapshot.',
+    options.completionCommand ? `- Then record OMX completion evidence with the fresh snapshot: ${options.completionCommand}` : '- Then record OMX completion evidence in the workflow ledger/status artifacts with the fresh get_goal snapshot when the workflow supports --codex-goal-json.',
     '',
     options.degradedMode
       ? 'Degraded-mode warning: this shell-rendered handoff did not mutate hidden Codex goal state; the active agent must use get_goal/create_goal/update_goal when those tools are available.'

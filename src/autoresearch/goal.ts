@@ -2,6 +2,13 @@ import { existsSync } from 'node:fs';
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { slugifyMissionName } from './contracts.js';
+import {
+  formatCodexGoalReconciliation,
+  parseCodexGoalSnapshot,
+  reconcileCodexGoalSnapshot,
+  type CodexGoalSnapshot,
+  type CodexGoalReconciliation,
+} from '../goal-workflows/codex-goal-snapshot.js';
 
 export const AUTORESEARCH_GOAL_ROOT = '.omx/goals/autoresearch';
 export const AUTORESEARCH_GOAL_MISSION = 'mission.json';
@@ -72,6 +79,11 @@ export interface RecordAutoresearchGoalVerdictOptions {
   evidence: string;
   summary?: string;
   artifactPath?: string;
+  now?: Date;
+}
+
+export interface CompleteAutoresearchGoalOptions {
+  codexGoal?: unknown;
   now?: Date;
 }
 
@@ -215,13 +227,19 @@ export async function recordAutoresearchGoalVerdict(
   return { mission, completion };
 }
 
-export async function completeAutoresearchGoal(cwd: string, slug: string, now = new Date()): Promise<{ mission: AutoresearchGoalMission; completion: AutoresearchGoalCompletion }> {
+export async function completeAutoresearchGoal(cwd: string, slug: string, options: CompleteAutoresearchGoalOptions = {}): Promise<{ mission: AutoresearchGoalMission; completion: AutoresearchGoalCompletion }> {
   const mission = await readAutoresearchGoal(cwd, slug);
   const completion = await readAutoresearchGoalCompletion(cwd, mission.slug);
   if (!completion || !completion.passed || completion.verdict !== 'pass') {
     throw new AutoresearchGoalError(`Autoresearch goal ${mission.slug} cannot complete until professor-critic validation records verdict=pass in ${mission.completion_path}.`);
   }
-  const completedAt = iso(now);
+  const reconciliation = reconcileAutoresearchCodexGoalSnapshot(
+    options.codexGoal === undefined ? null : parseCodexGoalSnapshot(options.codexGoal),
+    mission,
+    { requireSnapshot: true, requireComplete: true },
+  );
+  if (!reconciliation.ok) throw new AutoresearchGoalError(formatCodexGoalReconciliation(reconciliation));
+  const completedAt = iso(options.now);
   mission.status = 'complete';
   mission.updated_at = completedAt;
   mission.completed_at = completedAt;
@@ -237,6 +255,54 @@ export async function completeAutoresearchGoal(cwd: string, slug: string, now = 
   return { mission, completion };
 }
 
+export function buildAutoresearchGoalObjective(mission: Pick<AutoresearchGoalMission, 'topic' | 'rubric' | 'slug'>): string {
+  return [
+    `Autoresearch goal: ${mission.topic}`,
+    '',
+    'Research methodology / professor-critic rubric:',
+    mission.rubric,
+    '',
+    `Completion gate: record a passing professor-critic verdict with omx autoresearch-goal verdict --slug ${mission.slug} --verdict pass --evidence "<critic artifact/evidence>". After the objective audit passes, call update_goal({status: "complete"}), call get_goal again, then run omx autoresearch-goal complete --slug ${mission.slug} --codex-goal-json "<fresh get_goal JSON or path>".`,
+  ].join('\n');
+}
+
+export function buildLegacyAutoresearchGoalObjective(mission: Pick<AutoresearchGoalMission, 'topic' | 'rubric' | 'slug'>): string {
+  return [
+    `Autoresearch goal: ${mission.topic}`,
+    '',
+    'Research methodology / professor-critic rubric:',
+    mission.rubric,
+    '',
+    `Completion gate: record a passing professor-critic verdict with omx autoresearch-goal verdict --slug ${mission.slug} --verdict pass --evidence "<critic artifact/evidence>", then run omx autoresearch-goal complete --slug ${mission.slug}.`,
+  ].join('\n');
+}
+
+export function reconcileAutoresearchCodexGoalSnapshot(
+  snapshot: CodexGoalSnapshot | null | undefined,
+  mission: Pick<AutoresearchGoalMission, 'topic' | 'rubric' | 'slug'>,
+  options: { requireSnapshot?: boolean; requireComplete?: boolean } = {},
+): CodexGoalReconciliation {
+  const attempts = [buildAutoresearchGoalObjective(mission), buildLegacyAutoresearchGoalObjective(mission)]
+    .map((expectedObjective) => reconcileCodexGoalSnapshot(snapshot, {
+      expectedObjective,
+      allowedStatuses: options.requireComplete ? ['complete'] : ['active', 'complete'],
+      requireSnapshot: options.requireSnapshot,
+      requireComplete: options.requireComplete,
+    }));
+  const successful = attempts.find((attempt) => attempt.ok);
+  if (successful) return successful;
+  const primary = attempts[0]!;
+  const legacy = attempts[1]!;
+  const legacyOnlyErrors = legacy.errors.filter((error) => !primary.errors.includes(error));
+  return {
+    ...primary,
+    errors: [
+      ...primary.errors,
+      ...(legacyOnlyErrors.length ? [`Legacy autoresearch objective also failed reconciliation: ${legacyOnlyErrors.join(' ')}`] : []),
+    ],
+  };
+}
+
 export async function buildAutoresearchGoalHandoff(cwd: string, slug: string, now = new Date()): Promise<string> {
   const mission = await readAutoresearchGoal(cwd, slug);
   if (mission.status === 'created') {
@@ -246,14 +312,7 @@ export async function buildAutoresearchGoalHandoff(cwd: string, slug: string, no
   }
   await appendLedger(cwd, mission.slug, { ts: iso(now), event: 'goal_handoff_emitted', slug: mission.slug, status: mission.status });
   const createPayload = {
-    objective: [
-      `Autoresearch goal: ${mission.topic}`,
-      '',
-      'Research methodology / professor-critic rubric:',
-      mission.rubric,
-      '',
-      `Completion gate: record a passing professor-critic verdict with omx autoresearch-goal verdict --slug ${mission.slug} --verdict pass --evidence "<critic artifact/evidence>", then run omx autoresearch-goal complete --slug ${mission.slug}.`,
-    ].join('\n'),
+    objective: buildAutoresearchGoalObjective(mission),
   };
 
   return [
@@ -268,7 +327,7 @@ export async function buildAutoresearchGoalHandoff(cwd: string, slug: string, no
     '- First call get_goal. If no active goal exists, call create_goal with the payload below.',
     '- If a different active Codex goal exists, finish/checkpoint that goal before starting this autoresearch goal.',
     '- Iterate research until the professor-critic evaluator records a concrete pass/fail/blocker artifact.',
-    '- Do not call update_goal({status: "complete"}) until the professor-critic verdict is pass and omx autoresearch-goal complete succeeds.',
+    '- Do not call update_goal({status: "complete"}) until the professor-critic verdict is pass and the objective audit proves the mission complete; then call get_goal again and run omx autoresearch-goal complete --codex-goal-json with the fresh snapshot.',
     '- If validation fails or blocks, keep iterating or report the blocker with the recorded evidence; do not revive deprecated omx autoresearch.',
     '',
     'create_goal payload:',

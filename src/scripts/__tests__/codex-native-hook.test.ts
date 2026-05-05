@@ -1048,6 +1048,59 @@ describe("codex native hook dispatch", () => {
     }
   });
 
+  it("warns completion-like prompts when active goal workflows need Codex snapshot reconciliation", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-goal-warning-"));
+    try {
+      await writeJson(join(cwd, ".omx", "ultragoal", "goals.json"), {
+        version: 1,
+        activeGoalId: "G001-demo",
+        goals: [{ id: "G001-demo", status: "in_progress", objective: "Demo goal" }],
+      });
+
+      const result = await dispatchCodexNativeHook({
+        hook_event_name: "UserPromptSubmit",
+        cwd,
+        session_id: "sess-goal-warning",
+        thread_id: "thread-goal-warning",
+        prompt: "complete this goal now",
+      }, { cwd });
+
+      assert.match(JSON.stringify(result.outputJson), /requires Codex goal snapshot reconciliation/);
+      assert.match(JSON.stringify(result.outputJson), /get_goal/);
+      assert.match(JSON.stringify(result.outputJson), /--codex-goal-json/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks Stop when a completion-like final answer skips active goal snapshot reconciliation", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-goal-stop-"));
+    try {
+      await writeJson(join(cwd, ".omx", "goals", "performance", "latency", "state.json"), {
+        version: 1,
+        workflow: "performance-goal",
+        slug: "latency",
+        objective: "Reduce latency",
+        status: "validation_passed",
+      });
+
+      const result = await dispatchCodexNativeHook({
+        hook_event_name: "Stop",
+        cwd,
+        session_id: "sess-goal-stop",
+        thread_id: "thread-goal-stop",
+        last_assistant_message: "Performance goal complete; next call update_goal({status: \"complete\"}).",
+      }, { cwd });
+
+      assert.equal(result.outputJson?.decision, "block");
+      assert.match(JSON.stringify(result.outputJson), /get_goal snapshot reconciliation/);
+      assert.match(JSON.stringify(result.outputJson), /omx performance-goal complete --slug latency/);
+      assert.match(JSON.stringify(result.outputJson), /Hooks must not mutate Codex goal state/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("treats workflow keywords in native subagent prompt text as literal delegation text", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-subagent-keyword-literal-"));
     try {

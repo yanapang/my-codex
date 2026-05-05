@@ -111,10 +111,22 @@ describe('cli/autoresearch-goal', () => {
         '--evidence', 'critic approved report.md with reproduction logs and citations',
         '--artifact', '.omx/specs/autoresearch-flaky-tests/report.md',
       ]));
-      const completed = await capture(() => autoresearchGoalCommand(['complete', '--slug', 'research-flaky-tests']));
+      const expectedObjective = [
+        'Autoresearch goal: Research flaky tests',
+        '',
+        'Research methodology / professor-critic rubric:',
+        'Professor critic requires reproduction evidence and a cited root cause.',
+        '',
+        'Completion gate: record a passing professor-critic verdict with omx autoresearch-goal verdict --slug research-flaky-tests --verdict pass --evidence "<critic artifact/evidence>". After the objective audit passes, call update_goal({status: "complete"}), call get_goal again, then run omx autoresearch-goal complete --slug research-flaky-tests --codex-goal-json "<fresh get_goal JSON or path>".',
+      ].join('\n');
+      const completed = await capture(() => autoresearchGoalCommand([
+        'complete',
+        '--slug', 'research-flaky-tests',
+        '--codex-goal-json', JSON.stringify({ goal: { objective: expectedObjective, status: 'complete' } }),
+      ]));
       assert.equal(completed.exitCode, undefined);
       assert.match(completed.stdout.join('\n'), /autoresearch-goal complete: research-flaky-tests/);
-      assert.match(completed.stdout.join('\n'), /update_goal\(\{status: "complete"\}\)/);
+      assert.match(completed.stdout.join('\n'), /matched a fresh complete get_goal snapshot/);
 
       const completion = JSON.parse(await readFile(join(cwd, '.omx/goals/autoresearch/research-flaky-tests/completion.json'), 'utf-8')) as { verdict: string; passed: boolean };
       assert.equal(completion.verdict, 'pass');
@@ -135,6 +147,68 @@ describe('cli/autoresearch-goal', () => {
       ]));
       assert.equal(afterComplete.exitCode, 1);
       assert.match(afterComplete.stderr.join('\n'), /already complete/);
+    });
+  });
+
+  it('accepts legacy autoresearch goal objective snapshots for in-flight missions', async () => {
+    await withCwd(async () => {
+      await capture(() => autoresearchGoalCommand([
+        'create',
+        '--topic', 'Research legacy handoff',
+        '--rubric', 'Professor critic requires old handoff compatibility.',
+      ]));
+      await capture(() => autoresearchGoalCommand([
+        'verdict',
+        '--slug', 'research-legacy-handoff',
+        '--verdict', 'pass',
+        '--evidence', 'critic approved legacy in-flight mission',
+      ]));
+      const legacyObjective = [
+        'Autoresearch goal: Research legacy handoff',
+        '',
+        'Research methodology / professor-critic rubric:',
+        'Professor critic requires old handoff compatibility.',
+        '',
+        'Completion gate: record a passing professor-critic verdict with omx autoresearch-goal verdict --slug research-legacy-handoff --verdict pass --evidence "<critic artifact/evidence>", then run omx autoresearch-goal complete --slug research-legacy-handoff.',
+      ].join('\n');
+
+      const completed = await capture(() => autoresearchGoalCommand([
+        'complete',
+        '--slug', 'research-legacy-handoff',
+        '--codex-goal-json', JSON.stringify({ goal: { objective: legacyObjective, status: 'complete' } }),
+      ]));
+
+      assert.equal(completed.exitCode, undefined);
+      assert.match(completed.stdout.join('\n'), /autoresearch-goal complete: research-legacy-handoff/);
+    });
+  });
+
+  it('requires matching complete Codex goal proof for completion', async () => {
+    await withCwd(async () => {
+      await capture(() => autoresearchGoalCommand([
+        'create',
+        '--topic', 'Research goal snapshots',
+        '--rubric', 'Professor critic requires concrete citations.',
+      ]));
+      await capture(() => autoresearchGoalCommand([
+        'verdict',
+        '--slug', 'research-goal-snapshots',
+        '--verdict', 'pass',
+        '--evidence', 'critic approved cited report',
+      ]));
+
+      const missing = await capture(() => autoresearchGoalCommand(['complete', '--slug', 'research-goal-snapshots']));
+      assert.equal(missing.exitCode, 1);
+      assert.match(missing.stderr.join('\n'), /call get_goal/);
+
+      const incomplete = await capture(() => autoresearchGoalCommand([
+        'complete',
+        '--slug', 'research-goal-snapshots',
+        '--codex-goal-json', '{"goal":{"objective":"Different","status":"active"}}',
+      ]));
+      assert.equal(incomplete.exitCode, 1);
+      assert.match(incomplete.stderr.join('\n'), /objective mismatch/);
+      assert.match(incomplete.stderr.join('\n'), /not complete/);
     });
   });
 });

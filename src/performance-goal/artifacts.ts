@@ -1,6 +1,11 @@
 import { existsSync } from 'node:fs';
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
+import {
+  formatCodexGoalReconciliation,
+  parseCodexGoalSnapshot,
+  reconcileCodexGoalSnapshot,
+} from '../goal-workflows/codex-goal-snapshot.js';
 
 export const PERFORMANCE_GOAL_ROOT = '.omx/goals/performance';
 export const PERFORMANCE_GOAL_STATE = 'state.json';
@@ -59,6 +64,7 @@ export interface CheckpointPerformanceGoalOptions {
 export interface CompletePerformanceGoalOptions {
   slug: string;
   evidence?: string;
+  codexGoal?: unknown;
   now?: Date;
 }
 
@@ -252,6 +258,16 @@ export async function completePerformanceGoal(cwd: string, options: CompletePerf
   if (state.lastValidation?.status !== 'pass') {
     throw new PerformanceGoalError('Cannot complete performance goal until evaluator validation has a passing checkpoint. Run `omx performance-goal checkpoint --status pass ...` first.');
   }
+  const reconciliation = reconcileCodexGoalSnapshot(
+    options.codexGoal === undefined ? null : parseCodexGoalSnapshot(options.codexGoal),
+    {
+      expectedObjective: state.objective,
+      allowedStatuses: ['complete'],
+      requireSnapshot: true,
+      requireComplete: true,
+    },
+  );
+  if (!reconciliation.ok) throw new PerformanceGoalError(formatCodexGoalReconciliation(reconciliation));
   const now = iso(options.now);
   state.status = 'complete';
   state.completedAt = now;
@@ -280,9 +296,8 @@ export function buildPerformanceGoalInstruction(state: PerformanceGoalState): st
     '- Do not treat this shell command as hidden Codex goal mutation; it only wrote OMX artifacts and this handoff.',
     '- Optimize only against the evaluator command/contract below; do not begin optimization without that evaluator.',
     '- Completion is blocked until evaluator evidence passes and is recorded with `omx performance-goal checkpoint --status pass ...`.',
-    '- After evaluator pass and a completion audit prove the objective is complete, first run the durable OMX completion command:',
-    `  omx performance-goal complete --slug ${state.slug} --evidence "<passing evaluator/tests/files evidence>"`,
-    '- Only after that command succeeds and the active-goal audit still owns this objective, call update_goal({status: "complete"}) in the Codex thread.',
+    '- After evaluator pass and a completion audit prove the objective is complete, call update_goal({status: "complete"}) in the Codex thread, then call get_goal again for a fresh completion snapshot.',
+    `- Finish by running: omx performance-goal complete --slug ${state.slug} --evidence "<passing evaluator/tests/files evidence>" --codex-goal-json "<fresh get_goal JSON or path>"`,
     '- If the evaluator fails or blocks, checkpoint with --status fail or --status blocked and continue iterating.',
     '',
     'create_goal payload:',
