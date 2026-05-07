@@ -36,6 +36,8 @@ jobs:
         with:
           toolchain: stable
           components: clippy
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@v2
       - name: Run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -50,6 +52,8 @@ jobs:
         with:
           toolchain: stable
           components: llvm-tools-preview
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@v2
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Run Rust tests with coverage summaries
@@ -86,7 +90,14 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      - name: Restore node_modules cache
+        id: node-modules-cache
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
       - run: npm ci
+        if: steps.node-modules-cache.outputs.cache-hit != 'true'
       - run: npm run lint
 
   typecheck:
@@ -99,7 +110,14 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      - name: Restore node_modules cache
+        id: node-modules-cache
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
       - run: npm ci
+        if: steps.node-modules-cache.outputs.cache-hit != 'true'
       - run: npx tsc --noEmit
       - run: npm run check:no-unused
 
@@ -113,7 +131,14 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      - name: Restore node_modules cache
+        id: node-modules-cache
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
       - run: npm ci
+        if: steps.node-modules-cache.outputs.cache-hit != 'true'
       - run: npm run build
       - name: Upload prebuilt dist artifact
         uses: actions/upload-artifact@v4
@@ -179,7 +204,14 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
+      - name: Restore node_modules cache
+        id: node-modules-cache
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
       - run: npm ci
+        if: steps.node-modules-cache.outputs.cache-hit != 'true'
       - name: Download prebuilt dist artifact
         uses: actions/download-artifact@v8
         with:
@@ -213,14 +245,21 @@ jobs:
     name: Coverage Gate (Team Critical)
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs: [typecheck, build-dist]
+    needs: [build-dist]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
+      - name: Restore node_modules cache
+        id: node-modules-cache
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
       - run: npm ci
+        if: steps.node-modules-cache.outputs.cache-hit != 'true'
       - name: Download prebuilt dist artifact
         uses: actions/download-artifact@v8
         with:
@@ -256,14 +295,21 @@ jobs:
     name: Ralph Persistence Gate
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [typecheck, build-dist]
+    needs: [build-dist]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
+      - name: Restore node_modules cache
+        id: node-modules-cache
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
       - run: npm ci
+        if: steps.node-modules-cache.outputs.cache-hit != 'true'
       - name: Download prebuilt dist artifact
         uses: actions/download-artifact@v8
         with:
@@ -276,7 +322,7 @@ jobs:
     name: Build (Full Source Build)
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs: [rustfmt, clippy, lint, typecheck, build-dist]
+    needs: [build-dist]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v6
@@ -287,7 +333,16 @@ jobs:
         uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: stable
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@v2
+      - name: Restore node_modules cache
+        id: node-modules-cache
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
       - run: npm ci
+        if: steps.node-modules-cache.outputs.cache-hit != 'true'
       - name: Download prebuilt dist artifact
         uses: actions/download-artifact@v8
         with:
