@@ -51,9 +51,9 @@ describe('CI Rust gates', () => {
     assert.match(workflow, /name:\s*Build dist artifact/);
     assert.match(workflow, /name:\s*Upload prebuilt dist artifact/);
     assert.match(workflow, /name:\s*ci-dist-node20/);
-    assert.match(workflow, /^  coverage-team-critical:\s*\n(?:.*\n)*?^\s+needs:\s*\[typecheck, build-dist\]/m);
-    assert.match(workflow, /^  ralph-persistence-gate:\s*\n(?:.*\n)*?^\s+needs:\s*\[typecheck, build-dist\]/m);
-    assert.match(workflow, /^  build:\s*\n(?:.*\n)*?^\s+needs:\s*\[rustfmt, clippy, lint, typecheck, build-dist\]/m);
+    assert.match(workflow, /^  coverage-team-critical:\s*\n(?:.*\n)*?^\s+needs:\s*\[build-dist\]/m);
+    assert.match(workflow, /^  ralph-persistence-gate:\s*\n(?:.*\n)*?^\s+needs:\s*\[build-dist\]/m);
+    assert.match(workflow, /^  build:\s*\n(?:.*\n)*?^\s+needs:\s*\[build-dist\]/m);
 
     for (const jobName of ['test', 'coverage-team-critical', 'ralph-persistence-gate', 'build']) {
       assert.match(
@@ -68,6 +68,25 @@ describe('CI Rust gates', () => {
     );
     assert.match(testJob, /^\s+- name:\s*Run grouped full-suite lane\s*\n(?:.*\n)*?^\s+run:\s*\|\n\s+node dist\/scripts\/run-test-files\.js/m);
     assert.doesNotMatch(testJob, /^\s+npm run build$/m);
+  });
+
+  it('caches dependency installs without weakening the CI status gate', () => {
+    const workflow = readCiWorkflow();
+
+    for (const jobName of ['lint', 'typecheck', 'build-dist', 'test', 'coverage-team-critical', 'ralph-persistence-gate', 'build']) {
+      const job = jobBlock(workflow, jobName);
+
+      assert.match(job, /uses:\s*actions\/cache@v4/);
+      assert.match(job, /path:\s*node_modules/);
+      assert.match(job, /key:\s*\$\{\{ runner\.os \}\}-node-modules-\$\{\{ hashFiles\('package-lock\.json'\) \}\}/);
+      assert.match(job, /if:\s*steps\.node-modules-cache\.outputs\.cache-hit != 'true'/);
+    }
+
+    for (const jobName of ['clippy', 'rust-tests', 'build']) {
+      assert.match(jobBlock(workflow, jobName), /uses:\s*Swatinem\/rust-cache@v2/);
+    }
+
+    assert.match(workflow, /needs:\s*\[rustfmt, clippy, rust-tests, lint, typecheck, test, coverage-team-critical, ralph-persistence-gate, build\]/);
   });
 
   it('avoids path-filtered CI triggers so required checks cannot be skipped into a pending state', () => {
