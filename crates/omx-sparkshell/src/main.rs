@@ -8,7 +8,7 @@ mod threshold;
 
 use crate::codex_bridge::summarize_output;
 use crate::error::SparkshellError;
-use crate::exec::{execute_command, CommandOutput};
+use crate::exec::{execute_command, execute_shell_command, CommandOutput};
 use crate::threshold::{combined_visible_lines, read_line_threshold};
 use omx_mux::build_capture_pane_args;
 use std::collections::hash_map::DefaultHasher;
@@ -26,6 +26,7 @@ const MAX_TMUX_TAIL_LINES: usize = 1000;
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SparkShellTarget {
     Command(Vec<String>),
+    Shell(String),
     TmuxPane { pane_id: String, tail_lines: usize },
 }
 
@@ -82,6 +83,9 @@ fn run(args: Vec<String>) -> Result<(), SparkshellError> {
     let options = parse_input(&args)?;
     let execution_argv = match &options.target {
         SparkShellTarget::Command(command) => command.clone(),
+        SparkShellTarget::Shell(script) => {
+            vec!["bash".to_string(), "-lc".to_string(), script.clone()]
+        }
         SparkShellTarget::TmuxPane {
             pane_id,
             tail_lines,
@@ -92,7 +96,12 @@ fn run(args: Vec<String>) -> Result<(), SparkshellError> {
         }
     };
 
-    let output = execute_command(&execution_argv)?;
+    let raw_output = match &options.target {
+        SparkShellTarget::Shell(script) => execute_shell_command(script)?,
+        _ => execute_command(&execution_argv)?,
+    };
+    let redacted = redact_output(&raw_output);
+    let output = redacted.output;
     let threshold = read_line_threshold();
     let line_count = combined_visible_lines(&output.stdout, &output.stderr);
     let evidence = build_evidence(&options, &output);
@@ -109,7 +118,14 @@ fn run(args: Vec<String>) -> Result<(), SparkshellError> {
             summarize_output(&execution_argv, &output)
                 .unwrap_or_else(|error| format!("summary unavailable: {error}"))
         };
-        write_json_report(&options, &output, &summary, &evidence, cache_meta)?;
+        write_json_report(
+            &options,
+            &output,
+            &summary,
+            &evidence,
+            cache_meta,
+            redacted.count,
+        )?;
         process::exit(output.exit_code());
     }
 
@@ -177,6 +193,7 @@ fn parse_input(args: &[String]) -> Result<SparkShellOptions, SparkshellError> {
     let mut since_last = false;
     let mut cache = true;
     let mut cache_ttl_ms = DEFAULT_CACHE_TTL_MS;
+    let mut shell = None;
 
     let mut index = 0;
     while index < args.len() {
@@ -206,6 +223,26 @@ fn parse_input(args: &[String]) -> Result<SparkShellOptions, SparkshellError> {
         }
         if let Some(value) = token.strip_prefix("--budget=") {
             budget = parse_positive_usize(value, "--budget")?;
+            index += 1;
+            continue;
+        }
+        if token == "--shell" {
+            let Some(next) = args.get(index + 1) else {
+                return Err(SparkshellError::InvalidArgs(
+                    "--shell requires a command string".to_string(),
+                ));
+            };
+            shell = Some(next.clone());
+            index += 2;
+            continue;
+        }
+        if let Some(value) = token.strip_prefix("--shell=") {
+            if value.trim().is_empty() {
+                return Err(SparkshellError::InvalidArgs(
+                    "--shell requires a command string".to_string(),
+                ));
+            }
+            shell = Some(value.to_string());
             index += 1;
             continue;
         }
@@ -329,7 +366,14 @@ fn parse_input(args: &[String]) -> Result<SparkShellOptions, SparkshellError> {
         index += 1;
     }
 
-    let target = if let Some(pane_id) = pane_id {
+    let target = if let Some(script) = shell {
+        if pane_id.is_some() || !positional.is_empty() {
+            return Err(SparkshellError::InvalidArgs(
+                "--shell does not accept --tmux-pane or additional argv".to_string(),
+            ));
+        }
+        SparkShellTarget::Shell(script)
+    } else if let Some(pane_id) = pane_id {
         if !positional.is_empty() {
             return Err(SparkshellError::InvalidArgs(
                 "tmux pane mode does not accept an additional command".to_string(),
@@ -368,6 +412,66 @@ fn parse_positive_usize(raw: &str, flag: &str) -> Result<usize, SparkshellError>
         .ok_or_else(|| SparkshellError::InvalidArgs(format!("{flag} requires a positive integer")))
 }
 
+#[derive(Debug, Clone)]
+struct RedactedOutput {
+    output: CommandOutput,
+    count: usize,
+}
+
+fn redact_output(output: &CommandOutput) -> RedactedOutput {
+    let (stdout, stdout_count) = redact_bytes(&output.stdout);
+    let (stderr, stderr_count) = redact_bytes(&output.stderr);
+    RedactedOutput {
+        output: CommandOutput {
+            status: output.status,
+            stdout,
+            stderr,
+        },
+        count: stdout_count + stderr_count,
+    }
+}
+
+fn redact_bytes(bytes: &[u8]) -> (Vec<u8>, usize) {
+    let (text, count) = redact_text(&String::from_utf8_lossy(bytes));
+    (text.into_bytes(), count)
+}
+
+fn redact_text(text: &str) -> (String, usize) {
+    let mut count = 0;
+    let mut lines = Vec::new();
+    for line in text.lines() {
+        let mut redacted = line.to_string();
+        let lower = redacted.to_ascii_lowercase();
+        if lower.contains("authorization: bearer ") {
+            redacted = "Authorization: Bearer [REDACTED]".to_string();
+            count += 1;
+        }
+        if let Some(eq) = redacted.find('=') {
+            let key = redacted[..eq].to_ascii_lowercase();
+            if key.contains("token") || key.contains("key") || key.contains("secret") {
+                redacted = format!("{}=[REDACTED]", &redacted[..eq]);
+                count += 1;
+            }
+        }
+        for marker in ["sk-", "ghp_", "xoxb-"] {
+            if let Some(start) = redacted.find(marker) {
+                let end = redacted[start..]
+                    .find(char::is_whitespace)
+                    .map(|offset| start + offset)
+                    .unwrap_or(redacted.len());
+                redacted.replace_range(start..end, "[REDACTED]");
+                count += 1;
+            }
+        }
+        lines.push(redacted);
+    }
+    let mut rendered = lines.join("\n");
+    if text.ends_with('\n') {
+        rendered.push('\n');
+    }
+    (rendered, count)
+}
+
 fn build_evidence(options: &SparkShellOptions, output: &CommandOutput) -> Evidence {
     let text = combined_text(output);
     let lines = text.lines().count();
@@ -376,7 +480,7 @@ fn build_evidence(options: &SparkShellOptions, output: &CommandOutput) -> Eviden
             pane_id,
             tail_lines,
         } => (Some(pane_id.clone()), Some(*tail_lines)),
-        SparkShellTarget::Command(_) => (None, None),
+        SparkShellTarget::Command(_) | SparkShellTarget::Shell(_) => (None, None),
     };
     Evidence {
         stdout_lines: String::from_utf8_lossy(&output.stdout).lines().count(),
@@ -484,7 +588,7 @@ fn handle_cache(
         SparkShellTarget::TmuxPane { pane_id, .. } => {
             format!("pane-{}", pane_id.replace('%', "pct"))
         }
-        SparkShellTarget::Command(_) => return Ok(None),
+        SparkShellTarget::Command(_) | SparkShellTarget::Shell(_) => return Ok(None),
     };
     let dir = cache_dir();
     fs::create_dir_all(&dir)?;
@@ -769,9 +873,11 @@ fn write_json_report(
     summary: &str,
     evidence: &Evidence,
     cache: Option<CacheMeta>,
+    redaction_count: usize,
 ) -> Result<(), SparkshellError> {
     let mode = match options.target {
         SparkShellTarget::Command(_) => "command",
+        SparkShellTarget::Shell(_) => "shell",
         SparkShellTarget::TmuxPane { .. } => "tmux-pane",
     };
     let status = if output.status.success() {
@@ -814,7 +920,8 @@ fn write_json_report(
             "  \"next_action\": {},\n",
             "  \"confidence\": {:.2},\n",
             "  \"classification\": {},\n",
-            "  \"cache\": {}\n",
+            "  \"cache\": {},\n",
+            "  \"redactions\": {{\"count\": {}}}\n",
             "}}\n"
         ),
         output.status.success(),
@@ -834,6 +941,7 @@ fn write_json_report(
         diagnostics.confidence,
         json_str(&diagnostics.classification),
         cache_json,
+        redaction_count,
     );
     io::stdout().write_all(json.as_bytes())?;
     Ok(())

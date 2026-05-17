@@ -690,3 +690,20 @@ fn pane_json_cache_reports_hits_and_since_last_changes() {
 
     let _ = fs::remove_dir_all(temp);
 }
+
+#[test]
+fn shell_mode_executes_explicit_shell_and_redacts_json_output() {
+    let output = Command::new(sparkshell_bin())
+        .arg("--json")
+        .arg("--shell")
+        .arg("printf 'left && right\n'; printf 'Authorization: Bearer secret-token\n' >&2")
+        .output()
+        .expect("run sparkshell");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"mode\": \"shell\""));
+    assert!(stdout.contains("left && right"));
+    assert!(stdout.contains("Authorization: Bearer [REDACTED]"));
+    assert!(stdout.contains("\"redactions\": {\"count\": 1}"));
+}
