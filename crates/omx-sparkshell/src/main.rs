@@ -8,9 +8,11 @@ mod threshold;
 
 use crate::codex_bridge::summarize_output;
 use crate::error::SparkshellError;
-use crate::exec::execute_command;
+use crate::exec::{execute_command, CommandOutput};
 use crate::threshold::{combined_visible_lines, read_line_threshold};
 use omx_mux::build_capture_pane_args;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
 use std::process;
 
@@ -19,10 +21,29 @@ const MIN_TMUX_TAIL_LINES: usize = 100;
 const MAX_TMUX_TAIL_LINES: usize = 1000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum SparkShellInput {
+enum SparkShellTarget {
     Command(Vec<String>),
     TmuxPane { pane_id: String, tail_lines: usize },
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SparkShellOptions {
+    target: SparkShellTarget,
+    json: bool,
+    budget: usize,
+}
+
+#[derive(Debug, Clone)]
+struct Evidence {
+    stdout_lines: usize,
+    stderr_lines: usize,
+    raw_hash: String,
+    pane_id: Option<String>,
+    tail_lines: Option<usize>,
+    line_range: Option<String>,
+}
+
+const DEFAULT_BUDGET: usize = 1000;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -40,14 +61,15 @@ fn main() {
 }
 
 fn run(args: Vec<String>) -> Result<(), SparkshellError> {
-    let execution_argv = match parse_input(&args)? {
-        SparkShellInput::Command(command) => command,
-        SparkShellInput::TmuxPane {
+    let options = parse_input(&args)?;
+    let execution_argv = match &options.target {
+        SparkShellTarget::Command(command) => command.clone(),
+        SparkShellTarget::TmuxPane {
             pane_id,
             tail_lines,
         } => {
             let mut argv = vec!["tmux".to_string()];
-            argv.extend(build_capture_pane_args(&pane_id, tail_lines));
+            argv.extend(build_capture_pane_args(pane_id, *tail_lines));
             argv
         }
     };
@@ -55,6 +77,18 @@ fn run(args: Vec<String>) -> Result<(), SparkshellError> {
     let output = execute_command(&execution_argv)?;
     let threshold = read_line_threshold();
     let line_count = combined_visible_lines(&output.stdout, &output.stderr);
+
+    if options.json {
+        let summary = if line_count <= threshold {
+            compact_text(&combined_text(&output), options.budget)
+        } else {
+            summarize_output(&execution_argv, &output)
+                .unwrap_or_else(|error| format!("summary unavailable: {error}"))
+        };
+        let evidence = build_evidence(&options, &output);
+        write_json_report(&options, &output, &summary, &evidence)?;
+        process::exit(output.exit_code());
+    }
 
     if line_count <= threshold {
         write_raw_output(&output.stdout, &output.stderr)?;
@@ -64,7 +98,7 @@ fn run(args: Vec<String>) -> Result<(), SparkshellError> {
     match summarize_output(&execution_argv, &output) {
         Ok(summary) => {
             let mut stdout = io::stdout().lock();
-            stdout.write_all(summary.as_bytes())?;
+            stdout.write_all(compact_text(&summary, options.budget).as_bytes())?;
             if !summary.ends_with('\n') {
                 stdout.write_all(b"\n")?;
             }
@@ -104,7 +138,7 @@ fn usage_text() -> String {
     )
 }
 
-fn parse_input(args: &[String]) -> Result<SparkShellInput, SparkshellError> {
+fn parse_input(args: &[String]) -> Result<SparkShellOptions, SparkshellError> {
     if args.is_empty() {
         return Err(SparkshellError::InvalidArgs(usage_text()));
     }
@@ -113,10 +147,32 @@ fn parse_input(args: &[String]) -> Result<SparkShellInput, SparkshellError> {
     let mut tail_lines = DEFAULT_TMUX_TAIL_LINES;
     let mut explicit_tail_lines = false;
     let mut positional = Vec::new();
+    let mut json = false;
+    let mut budget = DEFAULT_BUDGET;
 
     let mut index = 0;
     while index < args.len() {
         let token = &args[index];
+        if token == "--json" {
+            json = true;
+            index += 1;
+            continue;
+        }
+        if token == "--budget" {
+            let Some(next) = args.get(index + 1) else {
+                return Err(SparkshellError::InvalidArgs(
+                    "--budget requires a numeric value".to_string(),
+                ));
+            };
+            budget = parse_positive_usize(next, "--budget")?;
+            index += 2;
+            continue;
+        }
+        if let Some(value) = token.strip_prefix("--budget=") {
+            budget = parse_positive_usize(value, "--budget")?;
+            index += 1;
+            continue;
+        }
         if token == "--tmux-pane" {
             let Some(next) = args.get(index + 1) else {
                 return Err(SparkshellError::InvalidArgs(
@@ -164,25 +220,191 @@ fn parse_input(args: &[String]) -> Result<SparkShellInput, SparkshellError> {
         index += 1;
     }
 
-    if let Some(pane_id) = pane_id {
+    let target = if let Some(pane_id) = pane_id {
         if !positional.is_empty() {
             return Err(SparkshellError::InvalidArgs(
                 "tmux pane mode does not accept an additional command".to_string(),
             ));
         }
-        return Ok(SparkShellInput::TmuxPane {
+        SparkShellTarget::TmuxPane {
             pane_id,
             tail_lines,
-        });
-    }
+        }
+    } else {
+        if explicit_tail_lines {
+            return Err(SparkshellError::InvalidArgs(
+                "--tail-lines requires --tmux-pane".to_string(),
+            ));
+        }
+        SparkShellTarget::Command(positional)
+    };
 
-    if explicit_tail_lines {
-        return Err(SparkshellError::InvalidArgs(
-            "--tail-lines requires --tmux-pane".to_string(),
-        ));
-    }
+    Ok(SparkShellOptions {
+        target,
+        json,
+        budget,
+    })
+}
 
-    Ok(SparkShellInput::Command(positional))
+fn parse_positive_usize(raw: &str, flag: &str) -> Result<usize, SparkshellError> {
+    raw.trim()
+        .parse::<usize>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or_else(|| SparkshellError::InvalidArgs(format!("{flag} requires a positive integer")))
+}
+
+fn build_evidence(options: &SparkShellOptions, output: &CommandOutput) -> Evidence {
+    let text = combined_text(output);
+    let lines = text.lines().count();
+    let (pane_id, tail_lines) = match &options.target {
+        SparkShellTarget::TmuxPane {
+            pane_id,
+            tail_lines,
+        } => (Some(pane_id.clone()), Some(*tail_lines)),
+        SparkShellTarget::Command(_) => (None, None),
+    };
+    Evidence {
+        stdout_lines: String::from_utf8_lossy(&output.stdout).lines().count(),
+        stderr_lines: String::from_utf8_lossy(&output.stderr).lines().count(),
+        raw_hash: hash_text(&text),
+        pane_id,
+        tail_lines,
+        line_range: (lines > 0).then(|| format!("1-{lines}")),
+    }
+}
+
+fn combined_text(output: &CommandOutput) -> String {
+    format!("{}{}", output.stdout_text(), output.stderr_text())
+}
+
+fn hash_text(text: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    text.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn compact_text(text: &str, budget: usize) -> String {
+    if text.len() <= budget {
+        return text.to_string();
+    }
+    let end = safe_boundary(text, budget);
+    format!(
+        "{}\n[truncated: {} chars omitted]",
+        &text[..end],
+        text.len().saturating_sub(end)
+    )
+}
+
+fn safe_boundary(text: &str, max: usize) -> usize {
+    let mut end = 0;
+    for (index, ch) in text.char_indices() {
+        let next = index + ch.len_utf8();
+        if next > max {
+            break;
+        }
+        end = next;
+    }
+    end
+}
+
+fn json_escape(value: &str) -> String {
+    let mut escaped = String::new();
+    for ch in value.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            '\u{08}' => escaped.push_str("\\b"),
+            '\u{0c}' => escaped.push_str("\\f"),
+            ch if ch <= '\u{1f}' => escaped.push_str(&format!("\\u{:04x}", ch as u32)),
+            ch => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+fn json_str(value: &str) -> String {
+    format!("\"{}\"", json_escape(value))
+}
+
+fn json_string_array(values: &[String]) -> String {
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(|value| json_str(value))
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+}
+
+fn optional_json_string(value: &Option<String>) -> String {
+    value
+        .as_ref()
+        .map(|value| json_str(value))
+        .unwrap_or_else(|| "null".to_string())
+}
+
+fn write_json_report(
+    options: &SparkShellOptions,
+    output: &CommandOutput,
+    summary: &str,
+    evidence: &Evidence,
+) -> Result<(), SparkshellError> {
+    let mode = match options.target {
+        SparkShellTarget::Command(_) => "command",
+        SparkShellTarget::TmuxPane { .. } => "tmux-pane",
+    };
+    let status = if output.status.success() {
+        "ok"
+    } else {
+        "failed"
+    };
+    let errors = if output.status.success() {
+        Vec::new()
+    } else {
+        vec![compact_text(&output.stderr_text(), options.budget)]
+    };
+    let warnings: Vec<String> = Vec::new();
+    let tail_lines = evidence
+        .tail_lines
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "null".to_string());
+    let json = format!(
+        concat!(
+            "{{\n",
+            "  \"ok\": {},\n",
+            "  \"mode\": {},\n",
+            "  \"status\": {},\n",
+            "  \"exit_code\": {},\n",
+            "  \"summary\": {},\n",
+            "  \"errors\": {},\n",
+            "  \"warnings\": {},\n",
+            "  \"evidence\": {{\"stdout_lines\":{},\"stderr_lines\":{},\"raw_hash\":{},\"pane_id\":{},\"tail_lines\":{},\"line_range\":{}}},\n",
+            "  \"next_action\": {},\n",
+            "  \"confidence\": 0.80\n",
+            "}}\n"
+        ),
+        output.status.success(),
+        json_str(mode),
+        json_str(status),
+        output.exit_code(),
+        json_str(&compact_text(summary, options.budget)),
+        json_string_array(&errors),
+        json_string_array(&warnings),
+        evidence.stdout_lines,
+        evidence.stderr_lines,
+        json_str(&evidence.raw_hash),
+        optional_json_string(&evidence.pane_id),
+        tail_lines,
+        optional_json_string(&evidence.line_range),
+        json_str(if output.status.success() { "none" } else { "inspect raw output" }),
+    );
+    io::stdout().write_all(json.as_bytes())?;
+    Ok(())
 }
 
 fn parse_tail_lines(raw: &str) -> Result<usize, SparkshellError> {
@@ -201,7 +423,7 @@ fn parse_tail_lines(raw: &str) -> Result<usize, SparkshellError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_input, SparkShellInput};
+    use super::{parse_input, SparkShellTarget};
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| value.to_string()).collect()
@@ -211,8 +433,8 @@ mod tests {
     fn parses_direct_command_mode() {
         let parsed = parse_input(&strings(&["git", "status"])).expect("parsed");
         assert_eq!(
-            parsed,
-            SparkShellInput::Command(strings(&["git", "status"]))
+            parsed.target,
+            SparkShellTarget::Command(strings(&["git", "status"]))
         );
     }
 
@@ -220,8 +442,8 @@ mod tests {
     fn parses_tmux_pane_mode_with_default_tail_lines() {
         let parsed = parse_input(&strings(&["--tmux-pane", "%11"])).expect("parsed");
         assert_eq!(
-            parsed,
-            SparkShellInput::TmuxPane {
+            parsed.target,
+            SparkShellTarget::TmuxPane {
                 pane_id: "%11".to_string(),
                 tail_lines: 200,
             }
@@ -233,8 +455,8 @@ mod tests {
         let parsed =
             parse_input(&strings(&["--tmux-pane=%22", "--tail-lines=400"])).expect("parsed");
         assert_eq!(
-            parsed,
-            SparkShellInput::TmuxPane {
+            parsed.target,
+            SparkShellTarget::TmuxPane {
                 pane_id: "%22".to_string(),
                 tail_lines: 400,
             }
@@ -301,15 +523,15 @@ mod tests {
         let max = parse_input(&strings(&["--tmux-pane", "%11", "--tail-lines", "1000"]))
             .expect("max parsed");
         assert_eq!(
-            min,
-            SparkShellInput::TmuxPane {
+            min.target,
+            SparkShellTarget::TmuxPane {
                 pane_id: "%11".to_string(),
                 tail_lines: 100
             }
         );
         assert_eq!(
-            max,
-            SparkShellInput::TmuxPane {
+            max.target,
+            SparkShellTarget::TmuxPane {
                 pane_id: "%11".to_string(),
                 tail_lines: 1000
             }

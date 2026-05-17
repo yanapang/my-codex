@@ -496,3 +496,41 @@ fn summary_module_does_not_shell_out_to_codex() {
     assert!(!source.contains(".arg(\"exec\")"));
     assert!(!source.contains("codex exec"));
 }
+
+#[test]
+fn json_mode_emits_machine_readable_contract() {
+    let output = Command::new(sparkshell_bin())
+        .arg("--json")
+        .arg("sh")
+        .arg("-c")
+        .arg("printf 'ok\n'")
+        .output()
+        .expect("run sparkshell");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"ok\": true"));
+    assert!(stdout.contains("\"mode\": \"command\""));
+    assert!(stdout.contains("\"status\": \"ok\""));
+    assert!(stdout.contains("\"summary\":"));
+    assert!(stdout.contains("\"evidence\":"));
+    assert!(stdout.contains("\"raw_hash\":"));
+}
+
+#[test]
+fn json_mode_reports_failed_command_details() {
+    let output = Command::new(sparkshell_bin())
+        .arg("--json")
+        .arg("sh")
+        .arg("-c")
+        .arg("printf 'bad\n' >&2; exit 9")
+        .output()
+        .expect("run sparkshell");
+
+    assert_eq!(output.status.code(), Some(9));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"ok\": false"));
+    assert!(stdout.contains("\"status\": \"failed\""));
+    assert!(stdout.contains("\"exit_code\": 9"));
+    assert!(stdout.contains("bad"));
+}
