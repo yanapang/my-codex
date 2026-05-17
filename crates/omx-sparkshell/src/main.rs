@@ -17,6 +17,7 @@ use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_TMUX_TAIL_LINES: usize = 200;
 const MIN_TMUX_TAIL_LINES: usize = 100;
@@ -160,6 +161,14 @@ fn parse_input(args: &[String]) -> Result<SparkShellOptions, SparkshellError> {
     let mut index = 0;
     while index < args.len() {
         let token = &args[index];
+        if !positional.is_empty() {
+            positional.extend(args[index..].iter().cloned());
+            break;
+        }
+        if token == "--" {
+            positional.extend(args[index + 1..].iter().cloned());
+            break;
+        }
         if token == "--json" {
             json = true;
             index += 1;
@@ -471,9 +480,7 @@ fn classify_team(team: &str, worker: &str) -> Option<Diagnostics> {
     }
 
     if let Ok(heartbeat) = fs::read_to_string(base.join("heartbeat.json")) {
-        if let Some(timestamp) = extract_number_after(&heartbeat, "timestamp")
-            .or_else(|| extract_number_after(&heartbeat, "updated_at_ms"))
-        {
+        if let Some(timestamp) = extract_heartbeat_ms(&heartbeat) {
             if now_ms().saturating_sub(timestamp) > STALE_HEARTBEAT_MS {
                 return Some(Diagnostics {
                     classification: "stale_heartbeat".to_string(),
@@ -511,19 +518,70 @@ fn classify_team(team: &str, worker: &str) -> Option<Diagnostics> {
     None
 }
 
-fn extract_number_after(text: &str, key: &str) -> Option<u64> {
-    let start = text.find(key)?;
-    let digits: String = text[start + key.len()..]
+fn extract_heartbeat_ms(text: &str) -> Option<u64> {
+    extract_json_number(text, "updated_at_ms")
+        .or_else(|| extract_json_number(text, "timestamp"))
+        .or_else(|| {
+            extract_json_string(text, "last_turn_at")
+                .and_then(|value| parse_iso_timestamp_ms(&value))
+        })
+}
+
+fn extract_json_number(text: &str, key: &str) -> Option<u64> {
+    let key_pattern = format!("\"{key}\"");
+    let start = text.find(&key_pattern)? + key_pattern.len();
+    let after_colon = text[start..].split_once(':')?.1.trim_start();
+    let digits: String = after_colon
         .chars()
-        .skip_while(|ch| !ch.is_ascii_digit())
         .take_while(|ch| ch.is_ascii_digit())
         .collect();
+    if digits.is_empty() {
+        return None;
+    }
     digits.parse().ok()
 }
 
+fn extract_json_string(text: &str, key: &str) -> Option<String> {
+    let key_pattern = format!("\"{key}\"");
+    let start = text.find(&key_pattern)? + key_pattern.len();
+    let after_colon = text[start..].split_once(':')?.1.trim_start();
+    let after_quote = after_colon.strip_prefix('"')?;
+    let value = after_quote.split('"').next()?;
+    Some(value.to_string())
+}
+
+fn parse_iso_timestamp_ms(value: &str) -> Option<u64> {
+    let trimmed = value.strip_suffix('Z').unwrap_or(value);
+    let (date, time) = trimmed.split_once('T')?;
+    let mut date_parts = date.split('-').map(|part| part.parse::<i64>().ok());
+    let year = date_parts.next()??;
+    let month = date_parts.next()??;
+    let day = date_parts.next()??;
+    let mut time_parts = time.split(':');
+    let hour = time_parts.next()?.parse::<i64>().ok()?;
+    let minute = time_parts.next()?.parse::<i64>().ok()?;
+    let second_part = time_parts.next()?;
+    let second = second_part.split('.').next()?.parse::<i64>().ok()?;
+    let days = days_from_civil(year, month, day)?;
+    Some(((days * 86_400 + hour * 3_600 + minute * 60 + second) as u64) * 1000)
+}
+
+fn days_from_civil(year: i64, month: i64, day: i64) -> Option<i64> {
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let year = year - i64::from(month <= 2);
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let yoe = year - era * 400;
+    let mp = month + if month > 2 { -3 } else { 9 };
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146_097 + doe - 719_468)
+}
+
 fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
 }

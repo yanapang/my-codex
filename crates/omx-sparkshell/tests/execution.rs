@@ -552,6 +552,59 @@ fn json_mode_classifies_auth_errors() {
 }
 
 #[test]
+fn direct_command_preserves_child_json_flag() {
+    let temp = unique_temp_dir("child-json-flag");
+    let script = temp.join("echo-argv");
+    write_executable(
+        &script,
+        r#"#!/usr/bin/env bash
+printf '%s\n' "$@"
+"#,
+    );
+
+    let output = Command::new(sparkshell_bin())
+        .arg(script)
+        .arg("--json")
+        .arg("value")
+        .output()
+        .expect("run sparkshell");
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "--json\nvalue\n");
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn team_diagnostics_reads_last_turn_at_heartbeat() {
+    let temp = unique_temp_dir("last-turn-heartbeat");
+    let worker_dir = temp.join("team/demo/workers/worker-1");
+    fs::create_dir_all(&worker_dir).expect("worker dir");
+    fs::write(
+        worker_dir.join("heartbeat.json"),
+        r#"{"last_turn_at":"1970-01-01T00:00:00.000Z"}"#,
+    )
+    .expect("heartbeat");
+
+    let output = Command::new(sparkshell_bin())
+        .env("OMX_TEAM_STATE_ROOT", temp.display().to_string())
+        .arg("--json")
+        .arg("--team")
+        .arg("demo")
+        .arg("--worker")
+        .arg("worker-1")
+        .arg("printf")
+        .arg("ok\n")
+        .output()
+        .expect("run sparkshell");
+
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("\"classification\": \"stale_heartbeat\"")
+    );
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn json_mode_reads_team_state_from_env_root() {
     let temp = unique_temp_dir("team-state");
     let worker_dir = temp.join("team/demo/workers/worker-1");
