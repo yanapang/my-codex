@@ -164,6 +164,38 @@ fn summary_mode_uses_local_api_and_model_override() {
 }
 
 #[test]
+fn summary_mode_redacts_secret_like_output_before_prompt_request() {
+    let request_log = Arc::new(Mutex::new(String::new()));
+    let request_log_for_server = Arc::clone(&request_log);
+    let (base_url, server) = start_api_server(1, move |request| {
+        *request_log_for_server.lock().expect("request log") = request;
+        (200, response_json("- summary: redacted output summarized"))
+    });
+
+    let output = Command::new(sparkshell_bin())
+        .env("OMX_API_BASE_URL", base_url)
+        .env("OMX_SPARKSHELL_LINES", "1")
+        .env("CHILD_API_TOKEN", "super-secret-token")
+        .env("CHILD_BEARER", "bearer-secret-token")
+        .arg("sh")
+        .arg("-c")
+        .arg("printf 'API_TOKEN=%s\\nline-2\\n' \"$CHILD_API_TOKEN\"; printf 'Authorization: Bearer %s\\n' \"$CHILD_BEARER\" >&2")
+        .output()
+        .expect("run sparkshell");
+    server.join().expect("api server");
+
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("redacted output summarized"));
+
+    let request = request_log.lock().expect("request log");
+    assert!(request.contains("API_TOKEN=[REDACTED]"));
+    assert!(request.contains("Authorization: Bearer [REDACTED]"));
+    assert!(request.contains("line-2"));
+    assert!(!request.contains("super-secret-token"));
+    assert!(!request.contains("bearer-secret-token"));
+}
+
+#[test]
 fn summary_mode_injects_model_instructions_file_override() {
     let temp = unique_temp_dir("api-instructions-file");
     let instructions_file = temp.join("sparkshell-lightweight-AGENTS.md");

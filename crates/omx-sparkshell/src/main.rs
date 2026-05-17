@@ -2,6 +2,7 @@ mod codex_bridge;
 mod error;
 mod exec;
 mod prompt;
+mod redaction;
 #[cfg(test)]
 mod test_support;
 mod threshold;
@@ -9,6 +10,7 @@ mod threshold;
 use crate::codex_bridge::summarize_output;
 use crate::error::SparkshellError;
 use crate::exec::{execute_command, execute_shell_command, CommandOutput};
+use crate::redaction::redact_output;
 use crate::threshold::{combined_visible_lines, read_line_threshold};
 use omx_mux::build_capture_pane_args;
 use std::collections::hash_map::DefaultHasher;
@@ -106,6 +108,7 @@ fn run(args: Vec<String>) -> Result<(), SparkshellError> {
     } else {
         &raw_output
     };
+    let summary_output = &redacted.output;
     let threshold = read_line_threshold();
     let line_count = combined_visible_lines(&output.stdout, &output.stderr);
     let evidence = build_evidence(&options, output);
@@ -138,7 +141,7 @@ fn run(args: Vec<String>) -> Result<(), SparkshellError> {
         process::exit(output.exit_code());
     }
 
-    match summarize_output(&execution_argv, output) {
+    match summarize_output(&execution_argv, summary_output) {
         Ok(summary) => {
             let mut stdout = io::stdout().lock();
             stdout.write_all(compact_text(&summary, options.budget).as_bytes())?;
@@ -414,66 +417,6 @@ fn parse_positive_usize(raw: &str, flag: &str) -> Result<usize, SparkshellError>
         .ok()
         .filter(|value| *value > 0)
         .ok_or_else(|| SparkshellError::InvalidArgs(format!("{flag} requires a positive integer")))
-}
-
-#[derive(Debug, Clone)]
-struct RedactedOutput {
-    output: CommandOutput,
-    count: usize,
-}
-
-fn redact_output(output: &CommandOutput) -> RedactedOutput {
-    let (stdout, stdout_count) = redact_bytes(&output.stdout);
-    let (stderr, stderr_count) = redact_bytes(&output.stderr);
-    RedactedOutput {
-        output: CommandOutput {
-            status: output.status,
-            stdout,
-            stderr,
-        },
-        count: stdout_count + stderr_count,
-    }
-}
-
-fn redact_bytes(bytes: &[u8]) -> (Vec<u8>, usize) {
-    let (text, count) = redact_text(&String::from_utf8_lossy(bytes));
-    (text.into_bytes(), count)
-}
-
-fn redact_text(text: &str) -> (String, usize) {
-    let mut count = 0;
-    let mut lines = Vec::new();
-    for line in text.lines() {
-        let mut redacted = line.to_string();
-        let lower = redacted.to_ascii_lowercase();
-        if lower.contains("authorization: bearer ") {
-            redacted = "Authorization: Bearer [REDACTED]".to_string();
-            count += 1;
-        }
-        if let Some(eq) = redacted.find('=') {
-            let key = redacted[..eq].to_ascii_lowercase();
-            if key.contains("token") || key.contains("key") || key.contains("secret") {
-                redacted = format!("{}=[REDACTED]", &redacted[..eq]);
-                count += 1;
-            }
-        }
-        for marker in ["sk-", "ghp_", "xoxb-"] {
-            if let Some(start) = redacted.find(marker) {
-                let end = redacted[start..]
-                    .find(char::is_whitespace)
-                    .map(|offset| start + offset)
-                    .unwrap_or(redacted.len());
-                redacted.replace_range(start..end, "[REDACTED]");
-                count += 1;
-            }
-        }
-        lines.push(redacted);
-    }
-    let mut rendered = lines.join("\n");
-    if text.ends_with('\n') {
-        rendered.push('\n');
-    }
-    (rendered, count)
 }
 
 fn build_evidence(options: &SparkShellOptions, output: &CommandOutput) -> Evidence {
