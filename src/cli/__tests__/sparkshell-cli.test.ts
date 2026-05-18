@@ -448,6 +448,8 @@ describe('omx sparkshell', () => {
       assert.equal(result.status, 0, result.stderr || result.stdout);
       assert.match(result.stdout, /Usage: omx sparkshell <command> \[args\.\.\.\]/);
       assert.match(result.stdout, /or: omx sparkshell --tmux-pane <pane-id> \[--tail-lines <100-1000>\]/);
+      assert.match(result.stdout, /OMX_SPARKSHELL_BIN overrides the native binary/);
+      assert.match(result.stdout, /OMX_SPARKSHELL_MODEL_INSTRUCTIONS_FILE overrides packaged summary instructions/);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

@@ -29,6 +29,8 @@ export const SPARKSHELL_USAGE = [
   'Runs the native omx-sparkshell sidecar with direct argv execution, explicit shell execution, or explicit tmux pane summarization.',
   'Shell metacharacters are interpreted only with explicit --shell opt-in.',
   'Tmux pane mode is explicit opt-in and captures a larger pane tail before applying raw-vs-summary behavior.',
+  'Environment: OMX_SPARKSHELL_BIN overrides the native binary; OMX_SPARKSHELL_MODEL selects the summary model; OMX_SPARKSHELL_FALLBACK_MODEL selects the retry model.',
+  'Environment: OMX_SPARKSHELL_MODEL_INSTRUCTIONS_FILE overrides packaged summary instructions; OMX_SPARKSHELL_SUMMARY_TIMEOUT_MS controls local API summary timeout.',
 ].join('\n');
 
 export interface ResolveSparkShellBinaryPathOptions {

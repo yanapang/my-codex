@@ -267,6 +267,7 @@ If `Shift+Enter` still submits instead of inserting a newline inside an OMX-mana
 - `omx sparkshell <command>` is for shell-native inspection and bounded verification
 - when `omx_wiki/` exists, `omx explore` can inject wiki-first context before falling back to broader repository search
 - fallback boundaries are explicit: sparkshell-backend fallback is reported on stderr, and spark-model fallback emits stderr metadata plus an `## OMX Explore fallback` notice in stdout so users can see when cost/behavior may differ from the low-cost path
+- sparkshell env overrides are intentionally narrow: `OMX_SPARKSHELL_BIN` selects a native sidecar path, `OMX_SPARKSHELL_MODEL` selects the primary summary model, `OMX_SPARKSHELL_FALLBACK_MODEL` selects the retry model, `OMX_SPARKSHELL_MODEL_INSTRUCTIONS_FILE` selects summary instructions, and `OMX_SPARKSHELL_SUMMARY_TIMEOUT_MS` controls the local API summary timeout
 
 Examples:
 
