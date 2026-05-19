@@ -74,16 +74,19 @@ Minor release after `0.17.3` that ships the OMX API gateway, SparkShell summary/
 
 ## CI / publication evidence
 
-- Pending — push release-collateral commit to `dev`.
-- Pending — `dev` CI for the release candidate.
-- Pending — main promotion and `main` CI.
-- Pending — annotated `v0.18.0` tag push.
-- Pending — tag-triggered release workflow.
-- Pending — GitHub release, native assets, and npm publication proof.
-- Pending — fast-forward `dev` to shipped `main` and final `dev` CI.
+- PASS — release-collateral commit `fd7e4779` pushed to `dev`.
+- PASS — `dev` CI run [26071952665](https://github.com/Yeachan-Heo/oh-my-codex/actions/runs/26071952665) completed successfully for `fd7e4779`.
+- PASS — `main` fast-forwarded to `fd7e4779`.
+- PASS — `main` CI run [26071975871](https://github.com/Yeachan-Heo/oh-my-codex/actions/runs/26071975871) completed successfully for `fd7e4779`.
+- PASS — annotated tag `v0.18.0` pushed at `fd7e4779`.
+- PASS — release workflow run [26072175376](https://github.com/Yeachan-Heo/oh-my-codex/actions/runs/26072175376) completed successfully.
+- PASS — GitHub release published: <https://github.com/Yeachan-Heo/oh-my-codex/releases/tag/v0.18.0>.
+- PASS — GitHub release contains 57 assets, including `native-release-manifest.json` and per-target archives/checksums for `omx-api`, `omx-explore-harness`, `omx-runtime`, and `omx-sparkshell`.
+- PASS — npm registry reports `oh-my-codex@0.18.0` via `npm view oh-my-codex version`.
+- PASS — `dev` and `main` both point at shipped commit `fd7e4779`; the pre-tag `dev` CI run for that commit is green.
 
 ## Known gaps
 
 - Full `npm run test:ci:compiled` was attempted during release-blocker resolution but stopped after existing attached-OMX/tmux environment-sensitive failures unrelated to the 0.18.0 fixes. The release is covered by targeted compiled tests, full build/lint/no-unused gates, native/plugin verification, packed-install smoke, and Cargo fmt/clippy/test gates.
 - Lifecycle-notification grouping remains open as [#2353](https://github.com/Yeachan-Heo/oh-my-codex/issues/2353); this release focuses on preventing recursive notification process storms rather than grouping benign child-agent lifecycle messages.
-- Final CI, GitHub release, asset, and npm evidence must be filled after publication workflows complete.
+- GitHub Actions emitted the repository's Node.js 20 deprecation annotation for `actions/checkout@v4`; it did not fail CI or the release workflow.
