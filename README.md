@@ -58,10 +58,24 @@ It keeps Codex as the execution engine and makes it easier to:
 
 If you want the default OMX experience, start here:
 
+Choose one install path. If Codex CLI is already installed (Homebrew, npm, or another supported method):
+
 ```bash
-npm install -g @openai/codex oh-my-codex
+codex --version
+npm install -g oh-my-codex
+omx setup
 omx --madmax --high
 ```
+
+If you do not have Codex CLI yet and want npm to manage it:
+
+```bash
+npm install -g @openai/codex
+npm install -g oh-my-codex
+omx setup
+```
+
+Do not run a combined `npm install -g @openai/codex oh-my-codex` over an existing Homebrew-owned `codex` binary such as `/opt/homebrew/bin/codex`; npm may fail with `EEXIST` when `@openai/codex` tries to create the same binary. OMX only needs a working, authenticated `codex` command on `PATH`; it does not require Codex to be installed through npm.
 
 On a real `oh-my-codex` version bump, the global npm install now prints an explicit reminder instead of launching `omx setup` automatically. When you're ready, run `omx setup` manually or use `omx update` to check npm and then run the same setup refresh path.
 
@@ -97,7 +111,7 @@ If you want plain Codex with no extra workflow layer, you probably do not need O
 ### Requirements
 
 - Node.js 20+
-- Codex CLI installed: `npm install -g @openai/codex`
+- Codex CLI installed, verified with `codex --version`, and authenticated (Homebrew or npm are both fine; do not reinstall `@openai/codex` with npm if Homebrew already owns `codex`)
 - Codex auth configured and visible in the same shell/profile that will run OMX
 - `tmux` on macOS/Linux if you want the recommended durable team runtime
 - `psmux` on native Windows only if you intentionally want the less-supported Windows team path
@@ -179,7 +193,7 @@ Most users should think of OMX as **better task routing + better workflow + bett
 
 ## Start here if you are new
 
-1. Install or update OMX with `npm install -g @openai/codex oh-my-codex`
+1. If Codex CLI already exists, verify it with `codex --version` and install or update OMX with `npm install -g oh-my-codex`; otherwise install `@openai/codex` separately first if you want npm to manage Codex
 2. After install or real OMX version bumps, run `omx setup` yourself when you're ready, or use `omx update` when you also want npm to check for and install the latest build before refreshing setup
 3. Run `omx doctor`
 4. Run a real execution smoke test: `codex login status` and `omx exec --skip-git-repo-check -C . "Reply with exactly OMX-EXEC-OK"`
