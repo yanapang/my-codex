@@ -26,7 +26,7 @@ Codex zostaje silnikiem, który wykonuje pracę. OMX daje mu lepszy kontekst, go
 
 Jeśli chcesz po prostu zacząć:
 
-Choose one install path. If Codex CLI is already installed (for example with Homebrew):
+Wybierz jedną ścieżkę instalacji. Jeśli Codex CLI jest już zainstalowany (na przykład przez Homebrew):
 
 ```bash
 codex --version
@@ -35,7 +35,7 @@ omx setup
 omx --madmax --high
 ```
 
-If Codex CLI is not installed and you want npm to manage it:
+Jeśli Codex CLI nie jest zainstalowany i chcesz, aby zarządzał nim npm:
 
 ```bash
 npm install -g @openai/codex

@@ -26,7 +26,7 @@
 
 Αν θέλετε την προεπιλεγμένη εμπειρία OMX, ξεκινήστε εδώ:
 
-Choose one install path. If Codex CLI is already installed (for example with Homebrew):
+Επιλέξτε μία διαδρομή εγκατάστασης. Αν το Codex CLI είναι ήδη εγκατεστημένο (για παράδειγμα με Homebrew):
 
 ```bash
 codex --version
@@ -35,7 +35,7 @@ omx setup
 omx --madmax --high
 ```
 
-If Codex CLI is not installed and you want npm to manage it:
+Αν το Codex CLI δεν είναι εγκατεστημένο και θέλετε να το διαχειρίζεται το npm:
 
 ```bash
 npm install -g @openai/codex

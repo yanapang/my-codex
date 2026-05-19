@@ -50,7 +50,7 @@ OMX — це шар робочих процесів для [OpenAI Codex CLI](ht
 
 Якщо ви хочете отримати стандартний досвід OMX, почніть тут:
 
-Choose one install path. If Codex CLI is already installed (for example with Homebrew):
+Оберіть один шлях інсталяції. Якщо Codex CLI вже встановлено (наприклад, через Homebrew):
 
 ```bash
 codex --version
@@ -59,7 +59,7 @@ omx setup
 omx --madmax --high
 ```
 
-If Codex CLI is not installed and you want npm to manage it:
+Якщо Codex CLI ще не встановлено й ви хочете, щоб ним керував npm:
 
 ```bash
 npm install -g @openai/codex
