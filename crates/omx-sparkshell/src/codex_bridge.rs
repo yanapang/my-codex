@@ -440,7 +440,7 @@ fn extract_json_string_field_in_range(
             search_start = index;
             continue;
         }
-        return parse_json_string_at(body, index).map(|(value, value_end)| (value, value_end));
+        return parse_json_string_at(body, index);
     }
     None
 }

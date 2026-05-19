@@ -14,6 +14,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub type Result<T> = std::result::Result<T, OmxApiError>;
 
 pub const DEFAULT_API_PORT: u16 = 14510;
+pub const MAX_HTTP_HEADER_BYTES: usize = 64 * 1024;
+pub const MAX_HTTP_BODY_BYTES: usize = 4 * 1024 * 1024;
 const CODEX_RESPONSES_PATH: &str = "/responses";
 const CODEX_IMAGES_GENERATIONS_PATH: &str = "/images/generations";
 const CODEX_DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
@@ -284,7 +286,9 @@ pub fn redact_secrets(input: &str) -> String {
             redact_next = false;
         }
     }
-    redact_json_secret_values(&out)
+    redact_secret_markers(&redact_key_value_secret_fragments(
+        &redact_json_secret_values(&out),
+    ))
 }
 
 fn redact_json_secret_values(input: &str) -> String {
@@ -294,6 +298,121 @@ fn redact_json_secret_values(input: &str) -> String {
     };
     redact_value(&mut value);
     serde_json::to_string(&value).unwrap_or_else(|_| input.to_string())
+}
+
+fn redact_key_value_secret_fragments(input: &str) -> String {
+    let mut output = input.to_string();
+    let secret_keys = [
+        "access_token",
+        "api_key",
+        "apikey",
+        "auth_token",
+        "authorization",
+        "password",
+        "secret",
+        "token",
+    ];
+    let mut search_start = 0;
+    loop {
+        if search_start >= output.len() {
+            break;
+        }
+        let lower = output[search_start..].to_ascii_lowercase();
+        let Some((relative_key_start, key)) = secret_keys
+            .iter()
+            .filter_map(|key| lower.find(key).map(|index| (index, *key)))
+            .min_by_key(|(index, _)| *index)
+        else {
+            break;
+        };
+        let key_start = search_start + relative_key_start;
+        let key_end = key_start + key.len();
+        let after_key = &output[key_end..];
+        let Some(delimiter_offset) = after_key.char_indices().find_map(|(offset, ch)| match ch {
+            '=' | ':' => Some(offset),
+            '"' | '\'' | ' ' | '\t' => None,
+            _ => Some(usize::MAX),
+        }) else {
+            break;
+        };
+        if delimiter_offset == usize::MAX {
+            search_start = key_end;
+            continue;
+        }
+        let delimiter = key_end + delimiter_offset;
+        let mut value_start = delimiter + 1;
+        while output
+            .as_bytes()
+            .get(value_start)
+            .is_some_and(u8::is_ascii_whitespace)
+        {
+            value_start += 1;
+        }
+        let quote = output
+            .as_bytes()
+            .get(value_start)
+            .copied()
+            .filter(|byte| *byte == b'"' || *byte == b'\'');
+        if quote.is_some() {
+            value_start += 1;
+        }
+        let mut value_end = if let Some(quote) = quote {
+            output
+                .as_bytes()
+                .get(value_start..)
+                .and_then(|tail| tail.iter().position(|byte| *byte == quote))
+                .map(|offset| value_start + offset)
+                .unwrap_or_else(|| find_secret_end(&output, value_start))
+        } else {
+            find_secret_end(&output, value_start)
+        };
+        if value_end <= value_start {
+            search_start = key_end;
+            continue;
+        }
+        if quote.is_none() {
+            value_end = value_end
+                .min(
+                    output[value_start..]
+                        .find(',')
+                        .map(|offset| value_start + offset)
+                        .unwrap_or(output.len()),
+                )
+                .min(
+                    output[value_start..]
+                        .find('}')
+                        .map(|offset| value_start + offset)
+                        .unwrap_or(output.len()),
+                );
+        }
+        output.replace_range(value_start..value_end, "[REDACTED]");
+        search_start = value_start + "[REDACTED]".len();
+    }
+    output
+}
+
+fn redact_secret_markers(input: &str) -> String {
+    let mut output = input.to_string();
+    for marker in ["sk-", "ghp_", "xoxb-"] {
+        while let Some(start) = output.find(marker) {
+            let end = find_secret_end(&output, start);
+            output.replace_range(start..end, "[REDACTED]");
+        }
+    }
+    output
+}
+
+fn find_secret_end(text: &str, start: usize) -> usize {
+    text[start..]
+        .char_indices()
+        .find_map(|(offset, ch)| {
+            if ch.is_whitespace() || matches!(ch, ',' | ';' | ')' | ']' | '}') {
+                Some(start + offset)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(text.len())
 }
 
 fn redact_value(value: &mut Value) {
@@ -1533,7 +1652,26 @@ fn handle_connection(
 ) -> Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
-    let request = read_http_request(&mut stream)?;
+    let request = match read_http_request(&mut stream) {
+        Ok(request) => request,
+        Err(OmxApiError::Message(message)) if message.contains("too large") => {
+            write_http_response(
+                &mut stream,
+                Response::json(
+                    413,
+                    json!({
+                        "error": {
+                            "message": message,
+                            "type": "request_too_large"
+                        }
+                    }),
+                ),
+            )?;
+            let _ = stream.shutdown(Shutdown::Both);
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
     let response = route_request(
         &request,
         backend,
@@ -1550,6 +1688,12 @@ pub fn read_http_request(stream: &mut TcpStream) -> Result<Request> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut request_line = String::new();
     reader.read_line(&mut request_line)?;
+    let mut header_bytes = request_line.len();
+    if header_bytes > MAX_HTTP_HEADER_BYTES {
+        return Err(OmxApiError::Message(
+            "HTTP request headers too large".to_string(),
+        ));
+    }
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or_default().to_string();
     let path = parts
@@ -1564,6 +1708,12 @@ pub fn read_http_request(stream: &mut TcpStream) -> Result<Request> {
     loop {
         let mut line = String::new();
         reader.read_line(&mut line)?;
+        header_bytes += line.len();
+        if header_bytes > MAX_HTTP_HEADER_BYTES {
+            return Err(OmxApiError::Message(
+                "HTTP request headers too large".to_string(),
+            ));
+        }
         let trimmed = line.trim_end_matches(['\r', '\n']);
         if trimmed.is_empty() {
             break;
@@ -1577,6 +1727,11 @@ pub fn read_http_request(stream: &mut TcpStream) -> Result<Request> {
         .get("content-length")
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(0);
+    if length > MAX_HTTP_BODY_BYTES {
+        return Err(OmxApiError::Message(format!(
+            "HTTP request body too large: {length} bytes exceeds {MAX_HTTP_BODY_BYTES}"
+        )));
+    }
     let mut body = vec![0; length];
     reader.read_exact(&mut body)?;
 
@@ -1613,6 +1768,7 @@ fn reason_phrase(status: u16) -> &'static str {
         400 => "Bad Request",
         401 => "Unauthorized",
         404 => "Not Found",
+        413 => "Payload Too Large",
         503 => "Service Unavailable",
         _ => "OK",
     }
@@ -2038,6 +2194,9 @@ fn parse_server_config(args: &[String]) -> Result<ServerConfig> {
         index += 1;
     }
     validate_loopback_host(&config.host)?;
+    if config.backend == BackendMode::RealPrivate && config.local_bearer_token.is_none() {
+        config.local_bearer_token = Some(generate_local_bearer_token());
+    }
     Ok(config)
 }
 
@@ -2088,7 +2247,7 @@ fn required_value<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'
 }
 
 fn help_text() -> &'static str {
-    "omx-api serve [--daemon] [--system --dry-run]|status|stop|generate text|generate image|smoke text"
+    "omx-api serve [--daemon] [--system --dry-run]|status|stop|generate text|generate image|smoke text\nNote: real-private backend mode is experimental and requires local bearer auth."
 }
 
 fn now_unix() -> u64 {
@@ -2190,6 +2349,35 @@ mod tests {
         assert!(!redacted.contains("abc123"));
         assert!(!redacted.contains("def456"));
         assert!(redacted.contains("[REDACTED] [REDACTED]"));
+    }
+
+    #[test]
+    fn redact_secrets_handles_embedded_json_and_key_value_forms() {
+        let raw = r#"error body {"access_token":"tok-1","api_key":"sk-json"} password: hunter2 sk-one sk-two"#;
+        let redacted = redact_secrets(raw);
+        for secret in ["tok-1", "sk-json", "hunter2", "sk-one", "sk-two"] {
+            assert!(!redacted.contains(secret), "leaked {secret}: {redacted}");
+        }
+        assert!(redacted.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn read_http_request_rejects_oversized_body_before_allocation() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind listener");
+        let port = listener.local_addr().expect("addr").port();
+        let handle = std::thread::spawn(move || {
+            let (mut server, _) = listener.accept().expect("accept");
+            read_http_request(&mut server).expect_err("oversized request should fail")
+        });
+        let mut client = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        write!(
+            client,
+            "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\n\r\n",
+            MAX_HTTP_BODY_BYTES + 1
+        )
+        .expect("write request");
+        let error = handle.join().expect("reader thread");
+        assert!(error.to_string().contains("body too large"), "{error}");
     }
 
     #[test]

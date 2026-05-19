@@ -103,8 +103,21 @@ fn real_private_once_request(
         .expect("spawn real-private omx-api serve");
 
     let state = wait_for_daemon_state(&state_file, &mut child);
+    let token = state
+        .local_bearer_token_file
+        .as_ref()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .expect("real-private serve should write a local bearer token");
     let payload = serde_json::to_vec(&body).expect("request JSON");
-    let response = http_request(&state.host, state.port, "POST", path, Some(&payload)).unwrap();
+    let response = http_request_with_bearer(
+        &state.host,
+        state.port,
+        "POST",
+        path,
+        Some(&payload),
+        Some(token.trim()),
+    )
+    .unwrap();
 
     let exit = child
         .wait_timeout(Duration::from_secs(2))
@@ -385,6 +398,46 @@ fn binary_local_bearer_gate_rejects_missing_authorization() {
     assert!(response.contains("401 Unauthorized"), "{response}");
     assert!(
         response.contains("local bearer token required"),
+        "{response}"
+    );
+
+    let exit = child
+        .wait_timeout(Duration::from_secs(2))
+        .expect("wait for child");
+    assert!(exit.is_some(), "server did not exit after --once request");
+}
+
+#[test]
+fn binary_real_private_serve_generates_bearer_and_rejects_missing_authorization() {
+    let bin = env!("CARGO_BIN_EXE_omx-api");
+    let state_file = temp_state_file("real-private-bearer-default");
+    let mut child = Command::new(bin)
+        .args([
+            "serve",
+            "--backend",
+            "real-private",
+            "--port",
+            "0",
+            "--once",
+            "--state-file",
+            state_file.to_str().unwrap(),
+        ])
+        .env("OMX_API_REAL_PRIVATE_RESPONSE_TEXT", "fixture")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn omx-api real-private serve");
+
+    let state = wait_for_daemon_state(&state_file, &mut child);
+    assert!(
+        state.local_bearer_token_file.is_some(),
+        "real-private direct serve should persist a bearer token file"
+    );
+
+    let response = http_request(&state.host, state.port, "GET", "/v1/models", None).unwrap();
+    assert!(response.contains("401 Unauthorized"), "{response}");
+    assert!(
+        response.contains("matching local bearer token required"),
         "{response}"
     );
 
