@@ -3768,7 +3768,7 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-slop-git-priority",
-          tool_input: { command: 'git commit -m "quick hack fallback if it fails"' },
+          tool_input: { command: 'OMX_LORE_COMMIT_GUARD=1 git commit -m "quick hack fallback if it fails"' },
         },
         { cwd },
       );
@@ -3791,7 +3791,7 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-git-commit-invalid",
-          tool_input: { command: 'git commit -m "fix tests"' },
+          tool_input: { command: 'OMX_LORE_COMMIT_GUARD=1 git commit -m "fix tests"' },
         },
         { cwd },
       );
@@ -3820,11 +3820,38 @@ exit 0
     }
   });
 
-  it("allows non-Lore git commit messages when the Lore commit guard is explicitly disabled", async () => {
+
+  it("blocks PreToolUse git commit when process env explicitly enables the Lore commit guard", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-git-commit-lore-env-enabled-"));
+    const original = process.env.OMX_LORE_COMMIT_GUARD;
+    try {
+      process.env.OMX_LORE_COMMIT_GUARD = "1";
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-git-commit-lore-env-enabled",
+          tool_input: { command: 'git commit -m "fix tests"' },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal((result.outputJson as { decision?: string } | null)?.decision, "block");
+      assert.match(JSON.stringify(result.outputJson), /Lore protocol/);
+    } finally {
+      if (original === undefined) delete process.env.OMX_LORE_COMMIT_GUARD;
+      else process.env.OMX_LORE_COMMIT_GUARD = original;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("allows non-Lore git commit messages when the Lore commit guard is disabled by default", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-git-commit-lore-disabled-"));
     const original = process.env.OMX_LORE_COMMIT_GUARD;
     try {
-      process.env.OMX_LORE_COMMIT_GUARD = "0";
+      delete process.env.OMX_LORE_COMMIT_GUARD;
       const result = await dispatchCodexNativeHook(
         {
           hook_event_name: "PreToolUse",
@@ -3866,7 +3893,33 @@ exit 0
     }
   });
 
-  it("does not treat newline-separated Lore guard assignment as inline git commit env", async () => {
+
+  it("allows inline disabled guard to override an enabled process env", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-git-commit-lore-inline-override-disabled-"));
+    const original = process.env.OMX_LORE_COMMIT_GUARD;
+    try {
+      process.env.OMX_LORE_COMMIT_GUARD = "1";
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-git-commit-lore-inline-override-disabled",
+          tool_input: { command: 'OMX_LORE_COMMIT_GUARD=0 git commit -m "fix: conventional"' },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal(result.outputJson, null);
+    } finally {
+      if (original === undefined) delete process.env.OMX_LORE_COMMIT_GUARD;
+      else process.env.OMX_LORE_COMMIT_GUARD = original;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat newline-separated Lore guard assignment as inline git commit opt-in", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-git-commit-lore-newline-assignment-"));
     try {
       const result = await dispatchCodexNativeHook(
@@ -3875,24 +3928,23 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-git-commit-lore-newline-assignment",
-          tool_input: { command: 'OMX_LORE_COMMIT_GUARD=0\ngit commit -m "fix: conventional"' },
+          tool_input: { command: 'OMX_LORE_COMMIT_GUARD=1\ngit commit -m "fix: conventional"' },
         },
         { cwd },
       );
 
       assert.equal(result.omxEventName, "pre-tool-use");
-      assert.equal((result.outputJson as { decision?: string } | null)?.decision, "block");
-      assert.match(JSON.stringify(result.outputJson), /Lore protocol/);
+      assert.equal(result.outputJson, null);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
   });
 
-  it("restores default-on Lore guard when env -u unsets a disabled process env", async () => {
+  it("restores default-off Lore guard when env -u unsets an enabled process env", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-git-commit-lore-env-unset-"));
     const original = process.env.OMX_LORE_COMMIT_GUARD;
     try {
-      process.env.OMX_LORE_COMMIT_GUARD = "0";
+      process.env.OMX_LORE_COMMIT_GUARD = "1";
       const result = await dispatchCodexNativeHook(
         {
           hook_event_name: "PreToolUse",
@@ -3905,8 +3957,7 @@ exit 0
       );
 
       assert.equal(result.omxEventName, "pre-tool-use");
-      assert.equal((result.outputJson as { decision?: string } | null)?.decision, "block");
-      assert.match(JSON.stringify(result.outputJson), /Lore protocol/);
+      assert.equal(result.outputJson, null);
     } finally {
       if (original === undefined) delete process.env.OMX_LORE_COMMIT_GUARD;
       else process.env.OMX_LORE_COMMIT_GUARD = original;
@@ -3914,11 +3965,11 @@ exit 0
     }
   });
 
-  it("restores default-on Lore guard when env -i clears a disabled process env", async () => {
+  it("restores default-off Lore guard when env -i clears an enabled process env", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-git-commit-lore-env-ignore-"));
     const original = process.env.OMX_LORE_COMMIT_GUARD;
     try {
-      process.env.OMX_LORE_COMMIT_GUARD = "0";
+      process.env.OMX_LORE_COMMIT_GUARD = "1";
       const result = await dispatchCodexNativeHook(
         {
           hook_event_name: "PreToolUse",
@@ -3931,8 +3982,7 @@ exit 0
       );
 
       assert.equal(result.omxEventName, "pre-tool-use");
-      assert.equal((result.outputJson as { decision?: string } | null)?.decision, "block");
-      assert.match(JSON.stringify(result.outputJson), /Lore protocol/);
+      assert.equal(result.outputJson, null);
     } finally {
       if (original === undefined) delete process.env.OMX_LORE_COMMIT_GUARD;
       else process.env.OMX_LORE_COMMIT_GUARD = original;
@@ -3940,7 +3990,7 @@ exit 0
     }
   });
 
-  it("keeps Lore commit enforcement enabled for unknown inline guard values", async () => {
+  it("keeps Lore commit enforcement disabled for unknown inline guard values", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-git-commit-lore-inline-unknown-"));
     try {
       const result = await dispatchCodexNativeHook(
@@ -3955,8 +4005,7 @@ exit 0
       );
 
       assert.equal(result.omxEventName, "pre-tool-use");
-      assert.equal((result.outputJson as { decision?: string } | null)?.decision, "block");
-      assert.match(JSON.stringify(result.outputJson), /Lore protocol/);
+      assert.equal(result.outputJson, null);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
@@ -3987,7 +4036,7 @@ exit 0
     }
   });
 
-  it("keeps Lore commit enforcement enabled for unknown guard values", async () => {
+  it("keeps Lore commit enforcement disabled for unknown guard values", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-git-commit-lore-unknown-"));
     const original = process.env.OMX_LORE_COMMIT_GUARD;
     try {
@@ -4004,8 +4053,7 @@ exit 0
       );
 
       assert.equal(result.omxEventName, "pre-tool-use");
-      assert.equal((result.outputJson as { decision?: string } | null)?.decision, "block");
-      assert.match(JSON.stringify(result.outputJson), /Lore protocol/);
+      assert.equal(result.outputJson, null);
     } finally {
       if (original === undefined) delete process.env.OMX_LORE_COMMIT_GUARD;
       else process.env.OMX_LORE_COMMIT_GUARD = original;
@@ -4111,7 +4159,7 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-git-commit-env-invalid",
-          tool_input: { command: 'HUSKY=0 git commit -m "fix tests"' },
+          tool_input: { command: 'OMX_LORE_COMMIT_GUARD=1 HUSKY=0 git commit -m "fix tests"' },
         },
         { cwd },
       );
@@ -4146,7 +4194,7 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-git-commit-option-invalid",
-          tool_input: { command: 'git -c core.editor=true commit -m "fix tests"' },
+          tool_input: { command: 'OMX_LORE_COMMIT_GUARD=1 git -c core.editor=true commit -m "fix tests"' },
         },
         { cwd },
       );
@@ -4181,7 +4229,7 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-git-exe-commit-env-wrapper-invalid",
-          tool_input: { command: 'env git.exe commit -m "fix tests"' },
+          tool_input: { command: 'env OMX_LORE_COMMIT_GUARD=1 git.exe commit -m "fix tests"' },
         },
         { cwd },
       );
@@ -4216,7 +4264,7 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-git-exe-commit-invalid",
-          tool_input: { command: 'git.exe commit -m "fix tests"' },
+          tool_input: { command: 'OMX_LORE_COMMIT_GUARD=1 git.exe commit -m "fix tests"' },
         },
         { cwd },
       );
@@ -4251,7 +4299,7 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-git-exe-commit-env-flag-wrapper-invalid",
-          tool_input: { command: 'env -i PATH=/usr/bin git.exe commit -m "fix tests"' },
+          tool_input: { command: 'env -i PATH=/usr/bin OMX_LORE_COMMIT_GUARD=1 git.exe commit -m "fix tests"' },
         },
         { cwd },
       );
@@ -4286,7 +4334,7 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-git-exe-commit-env-value-wrapper-invalid",
-          tool_input: { command: 'env -u FOO git.exe commit -m "fix tests"' },
+          tool_input: { command: 'env -u FOO OMX_LORE_COMMIT_GUARD=1 git.exe commit -m "fix tests"' },
         },
         { cwd },
       );
@@ -4321,7 +4369,7 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-git-exe-commit-windows-path-invalid",
-          tool_input: { command: '"C:/Program Files/Git/cmd/git.exe" commit -m "fix tests"' },
+          tool_input: { command: 'OMX_LORE_COMMIT_GUARD=1 "C:/Program Files/Git/cmd/git.exe" commit -m "fix tests"' },
         },
         { cwd },
       );
@@ -4356,7 +4404,7 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-git-exe-commit-windows-backslash-path-invalid",
-          tool_input: { command: '"C:\\Program Files\\Git\\cmd\\git.exe" commit -m "fix tests"' },
+          tool_input: { command: 'OMX_LORE_COMMIT_GUARD=1 "C:\\Program Files\\Git\\cmd\\git.exe" commit -m "fix tests"' },
         },
         { cwd },
       );
@@ -4391,7 +4439,7 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-git-commit-path-invalid",
-          tool_input: { command: '/usr/bin/git commit -m "fix tests"' },
+          tool_input: { command: 'OMX_LORE_COMMIT_GUARD=1 /usr/bin/git commit -m "fix tests"' },
         },
         { cwd },
       );
@@ -4426,7 +4474,7 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-git-commit-file",
-          tool_input: { command: "git commit -F .git/COMMIT_EDITMSG" },
+          tool_input: { command: "OMX_LORE_COMMIT_GUARD=1 git commit -F .git/COMMIT_EDITMSG" },
         },
         { cwd },
       );
@@ -4460,7 +4508,7 @@ exit 0
           tool_use_id: "tool-git-commit-missing-omx-coauthor",
           tool_input: {
             command: [
-              'git commit',
+              'OMX_LORE_COMMIT_GUARD=1 git commit',
               '-m "Prevent invalid history from bypassing Lore enforcement"',
               '-m "The native pre-tool-use hook now blocks inline git commit messages that skip Lore trailers or the required OmX co-author trailer."',
               '-m "Constraint: Native PreToolUse can only inspect the Bash command text"',
@@ -4500,7 +4548,7 @@ exit 0
           tool_use_id: "tool-git-commit-valid",
           tool_input: {
             command: [
-              'git commit',
+              'OMX_LORE_COMMIT_GUARD=1 git commit',
               '-m "Prevent invalid history from bypassing Lore enforcement"',
               '-m "The native pre-tool-use hook now blocks inline git commit messages that skip Lore trailers or the required OmX co-author trailer."',
               '-m "Constraint: Native PreToolUse can only inspect the Bash command text"',
@@ -4530,7 +4578,7 @@ exit 0
           tool_use_id: "tool-git-commit-compact-coauthor",
           tool_input: {
             command: [
-              'git commit',
+              'OMX_LORE_COMMIT_GUARD=1 git commit',
               '-m "Launch lvisai.xyz intro site"',
               '-m "Co-authored-by: OmX <omx@oh-my-codex.dev>"',
             ].join(" "),
@@ -4557,7 +4605,7 @@ exit 0
           tool_use_id: "tool-git-commit-compact-trailers",
           tool_input: {
             command: [
-              'git commit',
+              'OMX_LORE_COMMIT_GUARD=1 git commit',
               '-m "Launch lvisai.xyz intro site"',
               '-m "Constraint: Native PreToolUse can only inspect inline Bash command text\nTested: node --test dist/scripts/__tests__/codex-native-hook.test.js\n\nCo-authored-by: OmX <omx@oh-my-codex.dev>"',
             ].join(" "),
@@ -4584,7 +4632,7 @@ exit 0
           tool_use_id: "tool-git-commit-compact-no-separator",
           tool_input: {
             command: [
-              'git commit',
+              'OMX_LORE_COMMIT_GUARD=1 git commit',
               '--message="Launch lvisai.xyz intro site\nCo-authored-by: OmX <omx@oh-my-codex.dev>"',
             ].join(" "),
           },
