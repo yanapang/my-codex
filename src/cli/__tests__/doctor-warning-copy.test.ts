@@ -631,7 +631,7 @@ USE_OMX_EXPLORE_CMD = "off"
 		}
 	});
 
-	it("warns when Lore commit guard is explicitly disabled in config.toml", async () => {
+	it("reports when Lore commit guard is explicitly disabled in config.toml", async () => {
 		const wd = await mkdtemp(join(tmpdir(), "omx-doctor-lore-commit-guard-"));
 		try {
 			const home = join(wd, "home");
@@ -653,7 +653,62 @@ OMX_LORE_COMMIT_GUARD = "off"
 			assert.equal(res.status, 0, res.stderr || res.stdout);
 			assert.match(
 				res.stdout,
-				/Lore commit guard: disabled in config\.toml; set OMX_LORE_COMMIT_GUARD = "1" under \[shell_environment_policy\.set\] to restore default Lore commit enforcement/,
+				/Lore commit guard: disabled in config\.toml\/default opt-out; set OMX_LORE_COMMIT_GUARD = "1" under \[shell_environment_policy\.set\] to enable Lore commit enforcement/,
+			);
+		} finally {
+			await rm(wd, { recursive: true, force: true });
+		}
+	});
+
+	it("reports when Lore commit guard is explicitly enabled in config.toml", async () => {
+		const wd = await mkdtemp(join(tmpdir(), "omx-doctor-lore-commit-guard-enabled-"));
+		try {
+			const home = join(wd, "home");
+			const codexDir = join(home, ".codex");
+			await mkdir(codexDir, { recursive: true });
+			await writeFile(
+				join(codexDir, "config.toml"),
+				`
+[shell_environment_policy.set]
+OMX_LORE_COMMIT_GUARD = "1"
+`.trimStart(),
+			);
+
+			const res = runOmx(wd, ["doctor"], {
+				HOME: home,
+				CODEX_HOME: join(home, ".codex"),
+			});
+			if (shouldSkipForSpawnPermissions(res.error)) return;
+			assert.equal(res.status, 0, res.stderr || res.stdout);
+			assert.match(res.stdout, /Lore commit guard: enabled by config\.toml opt-in/);
+		} finally {
+			await rm(wd, { recursive: true, force: true });
+		}
+	});
+
+	it("warns when Lore commit guard has an invalid config.toml value", async () => {
+		const wd = await mkdtemp(join(tmpdir(), "omx-doctor-lore-commit-guard-invalid-"));
+		try {
+			const home = join(wd, "home");
+			const codexDir = join(home, ".codex");
+			await mkdir(codexDir, { recursive: true });
+			await writeFile(
+				join(codexDir, "config.toml"),
+				`
+[shell_environment_policy.set]
+OMX_LORE_COMMIT_GUARD = "truee"
+`.trimStart(),
+			);
+
+			const res = runOmx(wd, ["doctor"], {
+				HOME: home,
+				CODEX_HOME: join(home, ".codex"),
+			});
+			if (shouldSkipForSpawnPermissions(res.error)) return;
+			assert.equal(res.status, 0, res.stderr || res.stdout);
+			assert.match(
+				res.stdout,
+				/Lore commit guard: invalid config\.toml value; Lore commit enforcement is disabled until OMX_LORE_COMMIT_GUARD = "1" \(or true\/yes\/on\) is set under \[shell_environment_policy\.set\]/,
 			);
 		} finally {
 			await rm(wd, { recursive: true, force: true });

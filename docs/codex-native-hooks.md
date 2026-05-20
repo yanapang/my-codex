@@ -37,7 +37,7 @@ Setup-owned trust state is limited to those generated wrapper identities; user h
 | wiki startup context | `SessionStart` | `session-start` | native | Wiki session-start context can append a compact `omx_wiki/` summary when wiki pages exist; startup writes stay config-gated |
 | `keyword-detector` | `UserPromptSubmit` | `keyword-detector` | native | Persists skill activation state and can add prompt-side developer context for top-level prompts; native subagent prompt text is treated as delegated task text, so literal workflow keywords inside a child prompt do not activate nested workflow state; `$ralph` prompt routing seeds workflow state only and does not launch `omx ralph --prd ...` |
 | ultragoal bounded steering | `UserPromptSubmit` | `ultragoal` artifacts | native | Only explicit structured directives such as `OMX_ULTRAGOAL_STEER: { ... }`, `omx.ultragoal.steer: { ... }`, or `omx ultragoal steer: { ... }` are parsed; accepted/rejected/deduped attempts route through `steerUltragoal`, append `.omx/ultragoal/ledger.jsonl`, and add advisory context without changing keyword precedence |
-| `pre-tool-use` | `PreToolUse` (`Bash`) | `pre-tool-use` | native-partial | Current native scope is Bash-only; built-in native behavior cautions on `rm -rf dist`, blocks inspectable inline `git commit` commands until Lore-format structure + the required `Co-authored-by: OmX <omx@oh-my-codex.dev>` trailer are present unless explicitly opted out with `OMX_LORE_COMMIT_GUARD=0`, and emits non-blocking document-refresh warnings for mapped staged commit changes that lack rule-scoped docs/spec refresh evidence |
+| `pre-tool-use` | `PreToolUse` (`Bash`) | `pre-tool-use` | native-partial | Current native scope is Bash-only; built-in native behavior cautions on `rm -rf dist`, blocks inspectable inline `git commit` commands until Lore-format structure + the required `Co-authored-by: OmX <omx@oh-my-codex.dev>` trailer are present only when explicitly opted in with `OMX_LORE_COMMIT_GUARD=1`, and emits non-blocking document-refresh warnings for mapped staged commit changes that lack rule-scoped docs/spec refresh evidence |
 | `post-tool-use` | `PostToolUse` (`Bash`) | `post-tool-use` | native-partial | Current native scope is Bash-only; built-in native behavior covers command-not-found / permission-denied / missing-path guidance only from stderr or non-zero Bash results, ignores failure-looking strings from successful source/log reads, and keeps MCP transport-death guidance scoped to MCP-like tool calls; document-refresh commit warnings use PreToolUse advisory output, with PostToolUse reserved as a future fallback if Codex advisory semantics change |
 | Ralph/persistence stop handling | `Stop` | `stop` | native-partial | Native adapter uses the documented native Stop continuation contract (`decision: "block"` + `reason`) for active Ralph runs, emits a single JSON object on Stop stdout even for no-op Stop decisions, and emits deterministic JSON continuation output if Stop dispatch fails before normal handling |
 | imagegen continuation helper | `Stop` | `stop` | native-partial | `omx imagegen continuation <session-id> --artifact <name>` records `.omx/state/sessions/<session>/imagegen-pending.json` and queues an audited exec follow-up so built-in `image_gen` turns that must end immediately can resume Ralph visual QA/recovery at the next Stop checkpoint |
@@ -65,26 +65,27 @@ The native hook adapter includes an agent-only document-refresh warning MVP for
 spec-driven development hygiene. It does **not** install a generic CI gate, does
 **not** add a repo-wide pre-commit framework, and must not hard-block `git
 commit` for document-refresh reasons. Existing Lore commit blocking remains
-separate and still wins when an inline commit message is not Lore-compliant,
-unless the Lore commit guard is explicitly disabled.
+separate and still wins when the Lore commit guard is explicitly enabled and an
+inline commit message is not Lore-compliant.
 
-## Lore commit guard opt-out
+## Lore commit guard opt-in
 
-Lore commit enforcement is enabled by default. To use conventional commits or
-another local commit policy while keeping OMX-managed native hooks installed,
-set `OMX_LORE_COMMIT_GUARD` to `0`, `false`, `no`, or `off`.
+Lore commit enforcement is disabled by default. To require Lore-format inline
+commit messages and the OmX co-author trailer while keeping OMX-managed native
+hooks installed, set `OMX_LORE_COMMIT_GUARD` to `1`, `true`, `yes`, or `on`.
 
-For persistent Codex CLI usage, place the opt-out in `config.toml`:
+For persistent Codex CLI usage, place the opt-in in `config.toml`:
 
 ```toml
 [shell_environment_policy.set]
-OMX_LORE_COMMIT_GUARD = "0"
+OMX_LORE_COMMIT_GUARD = "1"
 ```
 
-The opt-out disables only the Lore-style `git commit` blocking guard. Other
+The opt-in controls only the Lore-style `git commit` blocking guard. Other
 native `PreToolUse` checks, including document-refresh warnings and command
-safety checks, still run. `omx doctor` reports when the guard is explicitly
-disabled by environment or config.
+safety checks, still run. `omx doctor` reports whether the guard is enabled by
+explicit opt-in, disabled by default/config/environment, or disabled because an
+explicit value is invalid.
 
 Warning scope is intentionally narrow and rule-scoped:
 

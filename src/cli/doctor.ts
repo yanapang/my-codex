@@ -958,17 +958,35 @@ async function checkExploreRouting(configPath: string): Promise<Check> {
 	}
 }
 
+const LORE_COMMIT_GUARD_EXPLICIT_OPT_OUT_VALUES = new Set([
+	"0",
+	"false",
+	"no",
+	"off",
+]);
+
 async function checkLoreCommitGuard(configPath: string): Promise<Check> {
 	const envValue = process.env[OMX_LORE_COMMIT_GUARD_ENV];
-	if (
-		typeof envValue === "string" &&
-		!isLoreCommitGuardEnabled(process.env)
-	) {
+	if (typeof envValue === "string") {
+		if (isLoreCommitGuardEnabled(process.env)) {
+			return {
+				name: "Lore commit guard",
+				status: "pass",
+				message: "enabled by environment opt-in",
+			};
+		}
+		if (!isExplicitLoreCommitGuardOptOut(envValue)) {
+			return {
+				name: "Lore commit guard",
+				status: "warn",
+				message:
+					"invalid environment value; Lore commit enforcement is disabled until OMX_LORE_COMMIT_GUARD is set to 1, true, yes, or on",
+			};
+		}
 		return {
 			name: "Lore commit guard",
-			status: "warn",
-			message:
-				"disabled by environment override; enable with OMX_LORE_COMMIT_GUARD=1 (or remove the explicit opt-out)",
+			status: "pass",
+			message: "disabled by environment/default opt-out; enable with OMX_LORE_COMMIT_GUARD=1",
 		};
 	}
 
@@ -976,7 +994,7 @@ async function checkLoreCommitGuard(configPath: string): Promise<Check> {
 		return {
 			name: "Lore commit guard",
 			status: "pass",
-			message: "enabled by default (config.toml not found yet)",
+			message: "disabled by default (config.toml not found yet)",
 		};
 	}
 
@@ -990,24 +1008,36 @@ async function checkLoreCommitGuard(configPath: string): Promise<Check> {
 			parsed?.shell_environment_policy?.set?.[OMX_LORE_COMMIT_GUARD_ENV] ??
 			parsed?.env?.[OMX_LORE_COMMIT_GUARD_ENV];
 
-		if (
-			typeof configuredValue === "string" &&
-			!isLoreCommitGuardEnabled({
+		if (typeof configuredValue === "string") {
+			if (isLoreCommitGuardEnabled({
 				[OMX_LORE_COMMIT_GUARD_ENV]: configuredValue,
-			})
-		) {
+			})) {
+				return {
+					name: "Lore commit guard",
+					status: "pass",
+					message: "enabled by config.toml opt-in",
+				};
+			}
+			if (!isExplicitLoreCommitGuardOptOut(configuredValue)) {
+				return {
+					name: "Lore commit guard",
+					status: "warn",
+					message:
+						'invalid config.toml value; Lore commit enforcement is disabled until OMX_LORE_COMMIT_GUARD = "1" (or true/yes/on) is set under [shell_environment_policy.set]',
+				};
+			}
 			return {
 				name: "Lore commit guard",
-				status: "warn",
+				status: "pass",
 				message:
-					'disabled in config.toml; set OMX_LORE_COMMIT_GUARD = "1" under [shell_environment_policy.set] to restore default Lore commit enforcement',
+					'disabled in config.toml/default opt-out; set OMX_LORE_COMMIT_GUARD = "1" under [shell_environment_policy.set] to enable Lore commit enforcement',
 			};
 		}
 
 		return {
 			name: "Lore commit guard",
 			status: "pass",
-			message: "enabled by default",
+			message: "disabled by default",
 		};
 	} catch {
 		return {
@@ -1016,6 +1046,12 @@ async function checkLoreCommitGuard(configPath: string): Promise<Check> {
 			message: "cannot read config.toml for Lore commit guard check",
 		};
 	}
+}
+
+function isExplicitLoreCommitGuardOptOut(value: string): boolean {
+	return LORE_COMMIT_GUARD_EXPLICIT_OPT_OUT_VALUES.has(
+		value.trim().toLowerCase(),
+	);
 }
 
 async function checkNativeHooks(
