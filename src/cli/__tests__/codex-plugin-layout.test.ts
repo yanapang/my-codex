@@ -56,6 +56,7 @@ const pluginRoot = join(root, 'plugins', pluginName);
 const pluginManifestPath = join(pluginRoot, '.codex-plugin', 'plugin.json');
 const pluginMcpPath = join(pluginRoot, '.mcp.json');
 const pluginAppsPath = join(pluginRoot, '.app.json');
+const pluginHooksPath = join(pluginRoot, 'hooks', 'hooks.json');
 const marketplacePath = join(root, '.agents', 'plugins', 'marketplace.json');
 const omxBin = join(root, 'dist', 'cli', 'omx.js');
 
@@ -159,18 +160,27 @@ describe('official Codex plugin layout', () => {
     assert.ok(manifest.interface?.developerName, 'expected developerName');
   });
 
-  it('ships disabled-by-default plugin-scoped MCP compatibility metadata while hooks stay setup-owned', async () => {
-    const [mcpManifest, appsManifest] = await Promise.all([
+  it('ships plugin-scoped hooks and disabled-by-default MCP compatibility metadata', async () => {
+    const [mcpManifest, appsManifest, hooksManifest] = await Promise.all([
       readJson<PluginMcpManifest>(pluginMcpPath),
       readJson<PluginAppsManifest>(pluginAppsPath),
+      readJson<{ hooks?: Record<string, Array<{ hooks?: Array<{ command?: string }> }>> }>(pluginHooksPath),
     ]);
     const expectedPluginMcpManifest = buildOmxPluginMcpManifest();
 
     const pluginManifest = await readJson<PluginManifest>(pluginManifestPath);
     assert.equal(pluginManifest.agents, undefined);
     assert.equal(pluginManifest.prompts, undefined);
-    assert.equal(pluginManifest.hooks, undefined);
+    assert.equal(pluginManifest.hooks, './hooks/hooks.json');
     assert.deepEqual(appsManifest, { apps: {} });
+    const hookCommands = Object.values(hooksManifest.hooks ?? {})
+      .flatMap((entries) => entries)
+      .flatMap((entry) => entry.hooks ?? [])
+      .map((hook) => hook.command);
+    assert.ok(
+      hookCommands.every((command) => command === 'node "${PLUGIN_ROOT}/hooks/codex-native-hook.mjs"'),
+      'plugin hooks should use Codex PLUGIN_ROOT instead of setup-owned .codex/hooks.json',
+    );
     assert.deepEqual(mcpManifest, expectedPluginMcpManifest);
 
     for (const [serverName, server] of Object.entries(mcpManifest.mcpServers ?? {})) {
@@ -229,12 +239,13 @@ describe('official Codex plugin layout', () => {
     }
   });
 
-  it('does not stage plugin-scoped hook manifests or runtime hook directories', async () => {
+  it('does not stage setup-owned hook or runtime directories inside the plugin', async () => {
     const pluginEntries = await readdir(pluginRoot);
 
     assert.equal(pluginEntries.includes('.codex'), false, 'official plugin should not ship setup-owned .codex hook assets');
     assert.equal(pluginEntries.includes('.omx'), false, 'official plugin should not ship runtime hook directories');
-    assert.equal(pluginEntries.includes('hooks.json'), false, 'official plugin should not ship a plugin-scoped hooks manifest');
+    assert.equal(pluginEntries.includes('hooks.json'), false, 'official plugin hook metadata should stay under hooks/');
+    assert.equal(pluginEntries.includes('hooks'), true, 'official plugin should ship plugin-scoped lifecycle hooks');
   });
 
   it('registers the plugin in the repo marketplace with explicit source, policy, and category', async () => {
@@ -315,7 +326,7 @@ describe('official Codex plugin layout', () => {
     assert.match(combined, /plugins\/cache\/\$MARKETPLACE_NAME\/oh-my-codex\/\$VERSION\//);
     assert.match(combined, /not a replacement for `npm install -g oh-my-codex` plus `omx setup`/);
     assert.match(combined, /legacy setup mode installs native agents(?:\/| and )prompts|plugin setup mode archives stale legacy prompt\/native-agent files/);
-    assert.match(combined, /plugin-scoped companion metadata for optional MCP compatibility servers and apps/i);
-    assert.match(combined, /hooks stay setup-owned|hooks remain setup-owned|native \.codex\/hooks\.json coverage/i);
+    assert.match(combined, /plugin-scoped companion metadata for official Codex lifecycle hooks/i);
+    assert.match(combined, /legacy\/fallback native Codex hook registrations|legacy setup mode installs prompts\/native agents and \.codex\/hooks\.json/i);
   });
 });

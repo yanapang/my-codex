@@ -87,7 +87,7 @@ On a real `oh-my-codex` version bump, the global npm install now prints an expli
 
 OMX also checks for npm updates at launch on a throttled cadence and prompts before scheduling the update after the current session exits. Set `OMX_AUTO_UPDATE=0` to disable the launch-time check, or set `OMX_AUTO_UPDATE=defer` to schedule the same deferred update without prompting.
 
-**Codex plugin install note:** this repo also ships an official Codex plugin layout at `plugins/oh-my-codex` with marketplace metadata in `.agents/plugins/marketplace.json`. That plugin bundles the mirrored skill surface plus plugin-scoped companion metadata for optional MCP compatibility servers and apps, disabled by default. Native/runtime hooks still stay on the setup/runtime side rather than the installable plugin manifest. It is still **not** a replacement for `npm install -g oh-my-codex` plus `omx setup`: legacy setup mode installs native agents and prompts, while plugin setup mode relies on plugin discovery for bundled skills and archives/removes legacy OMX-managed prompts/native-agent TOMLs so stale role files cannot shadow plugin behavior.
+**Codex plugin install note:** this repo also ships an official Codex plugin layout at `plugins/oh-my-codex` with marketplace metadata in `.agents/plugins/marketplace.json`. That plugin bundles the mirrored skill surface plus plugin-scoped companion metadata for official Codex lifecycle hooks, optional MCP compatibility servers, and apps. It is still **not** a replacement for `npm install -g oh-my-codex` plus `omx setup`: plugin-scoped hooks launch the installed `omx` CLI, legacy setup mode installs native agents and prompts, and plugin setup mode relies on plugin discovery for bundled skills while archiving/removing legacy OMX-managed prompts/native-agent TOMLs so stale role files cannot shadow plugin behavior.
 
 Then work normally inside Codex:
 
@@ -245,8 +245,8 @@ omx team shutdown <team-name>
 ### Setup, doctor, and HUD
 
 These are operator/support surfaces:
-- Codex plugin marketplace install/discovery can cache the plugin under `${CODEX_HOME:-~/.codex}/plugins/cache/$MARKETPLACE_NAME/oh-my-codex/$VERSION/` (local installs may use `local` as the version identifier); that packaged plugin includes plugin-scoped companion metadata for optional MCP compatibility servers and apps (disabled by default), while native/runtime hooks remain setup-owned, so it is still not the full OMX runtime setup
-- `omx setup` installs prompts, skills, AGENTS scaffolding, `.codex/config.toml`, and OMX-managed native Codex hooks in `.codex/hooks.json`
+- Codex plugin marketplace install/discovery can cache the plugin under `${CODEX_HOME:-~/.codex}/plugins/cache/$MARKETPLACE_NAME/oh-my-codex/$VERSION/` (local installs may use `local` as the version identifier); that packaged plugin includes plugin-scoped companion metadata for official Codex lifecycle hooks, optional MCP compatibility servers, and apps (MCP/apps disabled by default), so it is still paired with the installed `omx` CLI for runtime execution
+- `omx setup` installs prompts, skills, AGENTS scaffolding, `.codex/config.toml`, and (for legacy installs or older Codex without `plugin_hooks`) OMX-managed native Codex hooks in `.codex/hooks.json`
   - setup refresh preserves non-OMX hook entries in `.codex/hooks.json` and only rewrites OMX-managed wrappers
   - `omx setup --merge-agents` preserves existing `AGENTS.md` guidance while inserting or refreshing generated OMX sections between `<!-- OMX:AGENTS:START -->` / `<!-- OMX:AGENTS:END -->`; without `--merge-agents` or `--force`, non-interactive setup keeps skipping existing `AGENTS.md` files
   - `omx uninstall` removes OMX-managed wrappers from `.codex/hooks.json` but keeps the file when user hooks remain
@@ -258,7 +258,8 @@ These are operator/support surfaces:
 - `omx hud --watch` is a monitoring/status surface, not the primary user workflow
 
 For non-team sessions, native Codex hooks are now the canonical lifecycle surface:
-- `.codex/hooks.json` = native Codex hook registrations
+- `plugins/oh-my-codex/hooks/hooks.json` = official plugin-scoped hook registrations for plugin installs
+- `.codex/hooks.json` = legacy/fallback native Codex hook registrations preserved for legacy installs and older Codex versions
 - `.omx/hooks/*.mjs` = OMX plugin hooks
 - `omx tmux-hook` / notify-hook / derived watcher = tmux + runtime fallback paths
 

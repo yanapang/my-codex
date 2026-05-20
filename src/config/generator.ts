@@ -20,6 +20,7 @@ import type { UnifiedMcpRegistryServer } from "./mcp-registry.js";
 import {
   DEFAULT_CODEX_HOOK_FEATURE_FLAG,
   CODEX_HOOK_FEATURE_FLAGS,
+  CODEX_PLUGIN_SCOPED_HOOKS_FEATURE_FLAG,
   formatCodexHookFeatureFlagLine,
   normalizeCodexHookFeatureFlag,
   type CodexHookFeatureFlag,
@@ -639,20 +640,25 @@ function isAnyCodexHookFeatureFlagLine(line: string): boolean {
   return CODEX_HOOK_FEATURE_FLAGS.some((flag) => isFeatureFlagLine(line, flag));
 }
 
-function upsertCodexHookFeatureFlagInSection(
+function isAnyPluginModeHookFeatureFlagLine(line: string): boolean {
+  return isAnyCodexHookFeatureFlagLine(line)
+    || isFeatureFlagLine(line, CODEX_PLUGIN_SCOPED_HOOKS_FEATURE_FLAG);
+}
+
+function upsertFeatureFlagLineInSection(
   lines: string[],
   featuresStart: number,
   sectionEnd: number,
-  codexHookFeatureFlag: CodexHookFeatureFlag,
+  featureFlag: string,
+  aliases: (line: string) => boolean,
 ): { sectionEnd: number; featureFlagIndex: number } {
-  const featureFlag = normalizeCodexHookFeatureFlag(codexHookFeatureFlag);
   let featureFlagIdx = -1;
   let fallbackAliasIdx = -1;
 
   for (let i = featuresStart + 1; i < sectionEnd; i++) {
     if (isFeatureFlagLine(lines[i], featureFlag)) {
       featureFlagIdx = i;
-    } else if (isAnyCodexHookFeatureFlagLine(lines[i]) && fallbackAliasIdx < 0) {
+    } else if (aliases(lines[i]) && fallbackAliasIdx < 0) {
       fallbackAliasIdx = i;
     }
   }
@@ -662,15 +668,15 @@ function upsertCodexHookFeatureFlagInSection(
   }
 
   if (featureFlagIdx >= 0) {
-    lines[featureFlagIdx] = formatCodexHookFeatureFlagLine(featureFlag);
+    lines[featureFlagIdx] = `${featureFlag} = true`;
   } else {
-    lines.splice(sectionEnd, 0, formatCodexHookFeatureFlagLine(featureFlag));
+    lines.splice(sectionEnd, 0, `${featureFlag} = true`);
     featureFlagIdx = sectionEnd;
     sectionEnd += 1;
   }
 
   for (let i = sectionEnd - 1; i > featuresStart; i--) {
-    if (i !== featureFlagIdx && isAnyCodexHookFeatureFlagLine(lines[i])) {
+    if (i !== featureFlagIdx && aliases(lines[i])) {
       lines.splice(i, 1);
       sectionEnd -= 1;
       if (featureFlagIdx > i) featureFlagIdx -= 1;
@@ -678,6 +684,36 @@ function upsertCodexHookFeatureFlagInSection(
   }
 
   return { sectionEnd, featureFlagIndex: featureFlagIdx };
+}
+
+function upsertCodexHookFeatureFlagInSection(
+  lines: string[],
+  featuresStart: number,
+  sectionEnd: number,
+  codexHookFeatureFlag: CodexHookFeatureFlag,
+): { sectionEnd: number; featureFlagIndex: number } {
+  const featureFlag = normalizeCodexHookFeatureFlag(codexHookFeatureFlag);
+  return upsertFeatureFlagLineInSection(
+    lines,
+    featuresStart,
+    sectionEnd,
+    featureFlag,
+    isAnyCodexHookFeatureFlagLine,
+  );
+}
+
+function upsertPluginScopedHookFeatureFlagInSection(
+  lines: string[],
+  featuresStart: number,
+  sectionEnd: number,
+): { sectionEnd: number; featureFlagIndex: number } {
+  return upsertFeatureFlagLineInSection(
+    lines,
+    featuresStart,
+    sectionEnd,
+    CODEX_PLUGIN_SCOPED_HOOKS_FEATURE_FLAG,
+    isAnyPluginModeHookFeatureFlagLine,
+  );
 }
 
 function upsertFeatureFlags(
@@ -870,14 +906,15 @@ export function upsertManagedCodexHookTrustState(
 export function upsertPluginModeRuntimeFeatureFlags(
   config: string,
   codexHookFeatureFlag: CodexHookFeatureFlag = DEFAULT_CODEX_HOOK_FEATURE_FLAG,
+  options: { pluginScopedHooks?: boolean } = {},
 ): string {
   const lines = config.split(/\r?\n/);
   const featuresStart = lines.findIndex((line) =>
     /^\s*\[features\]\s*$/.test(line),
   );
-  const hookFeatureFlagLine = formatCodexHookFeatureFlagLine(
-    codexHookFeatureFlag,
-  );
+  const hookFeatureFlagLine = options.pluginScopedHooks
+    ? `${CODEX_PLUGIN_SCOPED_HOOKS_FEATURE_FLAG} = true`
+    : formatCodexHookFeatureFlagLine(codexHookFeatureFlag);
 
   if (featuresStart < 0) {
     const base = config.trimEnd();
@@ -910,12 +947,14 @@ export function upsertPluginModeRuntimeFeatureFlags(
     }
   }
 
-  ({ sectionEnd } = upsertCodexHookFeatureFlagInSection(
-    lines,
-    featuresStart,
-    sectionEnd,
-    codexHookFeatureFlag,
-  ));
+  ({ sectionEnd } = options.pluginScopedHooks
+    ? upsertPluginScopedHookFeatureFlagInSection(lines, featuresStart, sectionEnd)
+    : upsertCodexHookFeatureFlagInSection(
+        lines,
+        featuresStart,
+        sectionEnd,
+        codexHookFeatureFlag,
+      ));
 
   let goalsIdx = -1;
   for (let i = featuresStart + 1; i < sectionEnd; i++) {

@@ -446,10 +446,10 @@ approval_policy = "on-failure"
 });
 
 async function assertProjectPluginModeArtifacts(wd: string): Promise<void> {
-	const hooks = await readFile(join(wd, ".codex", "hooks.json"), "utf-8");
-	assert.match(hooks, /codex-native-hook\.js/);
+	assert.equal(existsSync(join(wd, ".codex", "hooks.json")), false);
 	const config = await readFile(join(wd, ".codex", "config.toml"), "utf-8");
-	assert.match(config, /^hooks = true$/m);
+	assert.match(config, /^plugin_hooks = true$/m);
+	assert.doesNotMatch(config, /^hooks = true$/m);
 	assert.match(config, /^goals = true$/m);
 	assert.doesNotMatch(config, /developer_instructions|notify-hook/g);
 	assert.equal(
@@ -1025,11 +1025,7 @@ describe("omx setup install mode behavior", () => {
 						existsSync(join(codexHomeDir, "skills", "ask", "SKILL.md")),
 						false,
 					);
-					const hooks = await readFile(
-						join(codexHomeDir, "hooks.json"),
-						"utf-8",
-					);
-					assert.match(hooks, /codex-native-hook\.js/);
+					assert.equal(existsSync(join(codexHomeDir, "hooks.json")), false);
 				});
 			});
 		} finally {
@@ -1275,7 +1271,8 @@ describe("omx setup install mode behavior", () => {
 						existsSync(join(cacheDir, "skills", "ask", "SKILL.md")),
 						true,
 					);
-					assert.match(config, /^hooks = true$/m);
+					assert.match(config, /^plugin_hooks = true$/m);
+					assert.doesNotMatch(config, /^hooks = true$/m);
 					assert.doesNotMatch(config, /^codex_hooks = true$/m);
 					assert.doesNotMatch(config, /\[mcp_servers\./);
 					assert.equal(
@@ -1499,7 +1496,7 @@ describe("omx setup install mode behavior", () => {
 		}
 	});
 
-	it("installs user-scoped native hooks when plugin mode is selected", async () => {
+	it("uses plugin-scoped hooks when plugin mode is selected", async () => {
 		const wd = await mkdtemp(join(tmpdir(), "omx-setup-install-mode-"));
 		try {
 			await withIsolatedUserHome(wd, async (codexHomeDir) => {
@@ -1507,38 +1504,16 @@ describe("omx setup install mode behavior", () => {
 					await setup({ scope: "user", installMode: "plugin" });
 					await setup({ scope: "user", installMode: "plugin" });
 
-					const hooks = await readFile(
-						join(codexHomeDir, "hooks.json"),
-						"utf-8",
-					);
-					assert.match(hooks, /codex-native-hook\.js/);
+					assert.equal(existsSync(join(codexHomeDir, "hooks.json")), false);
 					const config = await readFile(
 						join(codexHomeDir, "config.toml"),
 						"utf-8",
 					);
-					const parsed = parseToml(config) as {
-						hooks?: { state?: Record<string, unknown> };
-					};
-					const managedHookStateKeys = Object.keys(
-						parsed.hooks?.state ?? {},
-					).filter((key) => key.includes(`${codexHomeDir}/hooks.json:`));
-					assert.equal(managedHookStateKeys.length, 7);
-					assert.match(config, /^hooks = true$/m);
+					assert.match(config, /^plugin_hooks = true$/m);
+					assert.doesNotMatch(config, /^hooks = true$/m);
 					assert.doesNotMatch(config, /^codex_hooks = true$/m);
 					assert.match(config, /^goals = true$/m);
-					assert.match(
-						config,
-						/^\[hooks\.state\.".*hooks\.json:pre_tool_use:0:0"\]$/m,
-					);
-					assert.equal(
-						(
-							config.match(
-								/^\[hooks\.state\.".*hooks\.json:pre_tool_use:0:0"\]$/gm,
-							) ?? []
-						).length,
-						1,
-					);
-					assert.match(config, /^trusted_hash = "sha256:[a-f0-9]{64}"$/m);
+					assert.doesNotMatch(config, /\[hooks\.state\./);
 					assert.doesNotMatch(
 						config,
 						/developer_instructions|notify-hook/g,
@@ -1575,11 +1550,7 @@ describe("omx setup install mode behavior", () => {
 						pluginDeveloperInstructionsPrompt: async () => true,
 					});
 
-					const hooks = await readFile(
-						join(codexHomeDir, "hooks.json"),
-						"utf-8",
-					);
-					assert.match(hooks, /codex-native-hook\.js/);
+					assert.equal(existsSync(join(codexHomeDir, "hooks.json")), false);
 					assert.equal(
 						existsSync(join(codexHomeDir, "skills", "ask", "SKILL.md")),
 						false,
@@ -1609,7 +1580,7 @@ describe("omx setup install mode behavior", () => {
 					);
 					assert.doesNotMatch(config, /Native subagents live in \.codex\/agents/);
 					assert.doesNotMatch(config, /Treat installed prompts as narrower execution surfaces/);
-					assert.match(config, /^hooks = true$/m);
+					assert.match(config, /^plugin_hooks = true$/m);
 					assert.doesNotMatch(config, /notify-hook/);
 					assert.doesNotMatch(config, /^\s*\[mcp_servers[.\]]/m);
 					assert.doesNotMatch(config, /mcp_servers\.omx_state/);
@@ -1697,7 +1668,7 @@ describe("omx setup install mode behavior", () => {
 
 					const config = await readFile(configPath, "utf-8");
 					assert.match(config, /^developer_instructions = "custom"$/m);
-					assert.match(config, /^hooks = true$/m);
+					assert.match(config, /^plugin_hooks = true$/m);
 					assert.equal(
 						(config.match(/^developer_instructions\s*=/gm) ?? []).length,
 						1,
@@ -1731,8 +1702,8 @@ describe("omx setup install mode behavior", () => {
 						(config.match(/^developer_instructions\s*=/gm) ?? []).length,
 						1,
 					);
-					assert.match(config, /^hooks = true$/m);
-					assert.match(config, /^\[hooks\.state\.".*hooks\.json:pre_tool_use:0:0"\]$/m);
+					assert.match(config, /^plugin_hooks = true$/m);
+					assert.doesNotMatch(config, /\[hooks\.state\./);
 				});
 			});
 		} finally {
@@ -1766,7 +1737,48 @@ describe("omx setup install mode behavior", () => {
 		}
 	});
 
-	it("preserves existing user hooks while installing plugin-mode native hooks", async () => {
+	it("removes legacy setup-managed hook wrappers when plugin-scoped hooks are supported", async () => {
+		const wd = await mkdtemp(join(tmpdir(), "omx-setup-install-mode-"));
+		try {
+			await withIsolatedUserHome(wd, async (codexHomeDir) => {
+				await withTempCwd(wd, async () => {
+					await setup({
+						scope: "user",
+						installMode: "plugin",
+						codexFeaturesProbe: () =>
+							"hooks                                   stable             true\n",
+					});
+
+					const hooksPath = join(codexHomeDir, "hooks.json");
+					assert.equal(existsSync(hooksPath), true);
+
+					await setup({
+						scope: "user",
+						installMode: "plugin",
+						codexFeaturesProbe: () =>
+							[
+								"hooks                                   stable             true",
+								"plugin_hooks                            experimental       true",
+								"",
+							].join("\n"),
+					});
+
+					assert.equal(existsSync(hooksPath), false);
+					const config = await readFile(
+						join(codexHomeDir, "config.toml"),
+						"utf-8",
+					);
+					assert.match(config, /^plugin_hooks = true$/m);
+					assert.doesNotMatch(config, /^hooks = true$/m);
+					assert.doesNotMatch(config, /\[hooks\.state\./);
+				});
+			});
+		} finally {
+			await rm(wd, { recursive: true, force: true });
+		}
+	});
+
+	it("preserves existing user hooks while using plugin-scoped hooks", async () => {
 		const wd = await mkdtemp(join(tmpdir(), "omx-setup-install-mode-"));
 		try {
 			await withIsolatedUserHome(wd, async (codexHomeDir) => {
@@ -1780,12 +1792,12 @@ describe("omx setup install mode behavior", () => {
 
 					const hooks = await readFile(hooksPath, "utf-8");
 					assert.match(hooks, /"UserPromptSubmit"/);
-					assert.match(hooks, /codex-native-hook\.js/);
+					assert.doesNotMatch(hooks, /codex-native-hook\.js/);
 					const config = await readFile(
 						join(codexHomeDir, "config.toml"),
 						"utf-8",
 					);
-					assert.match(config, /^hooks = true$/m);
+					assert.match(config, /^plugin_hooks = true$/m);
 				});
 			});
 		} finally {
@@ -1822,8 +1834,7 @@ describe("omx setup install mode behavior", () => {
 					existsSync(join(wd, ".codex", "prompts", "executor.md")),
 					false,
 				);
-				const hooks = await readFile(join(wd, ".codex", "hooks.json"), "utf-8");
-				assert.match(hooks, /codex-native-hook\.js/);
+				assert.equal(existsSync(join(wd, ".codex", "hooks.json")), false);
 			});
 		} finally {
 			await rm(wd, { recursive: true, force: true });
@@ -1960,7 +1971,7 @@ describe("omx setup install mode behavior", () => {
 		}
 	});
 
-	it("installs project-scoped native hooks when plugin mode is explicitly requested", async () => {
+	it("uses project-scoped plugin hooks when plugin mode is explicitly requested", async () => {
 		const wd = await mkdtemp(join(tmpdir(), "omx-setup-install-mode-"));
 		try {
 			await withTempCwd(wd, async () => {
@@ -1998,7 +2009,7 @@ describe("omx setup install mode behavior", () => {
 					assert.match(pluginOutput, /Using setup install mode: plugin/);
 					assert.match(
 						pluginOutput,
-						/Native Codex hooks and runtime feature flags refresh complete .*hooks, goals/,
+						/Plugin-scoped Codex hooks and runtime feature flags refresh complete .*plugin_hooks, goals/,
 					);
 					assert.doesNotMatch(pluginOutput, /user-scope skill delivery mode/);
 					assert.doesNotMatch(
@@ -2090,12 +2101,10 @@ describe("omx setup install mode behavior", () => {
 					assert.equal(existsSync(askSkillPath), false);
 					assert.equal(existsSync(promptPath), false);
 					assert.equal(existsSync(agentPath), false);
-					assert.equal(existsSync(hooksPath), true);
+					assert.equal(existsSync(hooksPath), false);
 					assert.equal(existsSync(agentsMdPath), false);
-					const hooks = await readFile(hooksPath, "utf-8");
-					assert.match(hooks, /codex-native-hook\.js/);
 					const config = await readFile(configPath, "utf-8");
-					assert.match(config, /^hooks = true$/m);
+					assert.match(config, /^plugin_hooks = true$/m);
 					assert.doesNotMatch(
 						config,
 						/^\s*(?:notify|developer_instructions)\s*=|^\s*\[mcp_servers[.\]]/m,
