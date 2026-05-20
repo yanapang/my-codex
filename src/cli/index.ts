@@ -373,6 +373,7 @@ type CliCommand =
   | "cancel"
   | "help"
   | "reasoning"
+  | "codex-native-hook"
   | string;
 
 const NESTED_HELP_COMMANDS = new Set<CliCommand>([
@@ -1668,6 +1669,11 @@ export async function main(args: string[]): Promise<void> {
       case "reasoning":
         await reasoningCommand(args.slice(1));
         break;
+      case "codex-native-hook": {
+        const { runCodexNativeHookCli } = await import("../scripts/codex-native-hook.js");
+        await runCodexNativeHookCli();
+        break;
+      }
       case "help":
       case "--help":
       case "-h":

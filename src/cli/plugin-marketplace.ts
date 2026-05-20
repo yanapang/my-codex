@@ -26,6 +26,7 @@ interface PluginManifest {
 	name?: unknown;
 	version?: unknown;
 	skills?: unknown;
+	hooks?: unknown;
 }
 
 export async function resolvePackagedOmxMarketplace(
@@ -177,6 +178,7 @@ export interface OmxPluginCacheState {
 	manifestVersion: string | null;
 	skillsPointer: string | null;
 	skillNames: string[] | null;
+	hooksPointer: string | null;
 }
 
 export async function readOmxPluginCacheState(
@@ -192,6 +194,7 @@ export async function readOmxPluginCacheState(
 			typeof manifest.version === "string" ? manifest.version : null,
 		skillsPointer: typeof manifest.skills === "string" ? manifest.skills : null,
 		skillNames: await listChildDirectoryNames(join(cacheDir, "skills")),
+		hooksPointer: typeof manifest.hooks === "string" ? manifest.hooks : null,
 	};
 }
 
@@ -210,6 +213,9 @@ export async function hasExpectedOmxPluginCache(
 	return (
 		state?.manifestVersion === version &&
 		state.skillsPointer === "./skills/" &&
+		state.hooksPointer === "./hooks/hooks.json" &&
+		existsSync(join(state.cacheDir, "hooks", "hooks.json")) &&
+		existsSync(join(state.cacheDir, "hooks", "codex-native-hook.mjs")) &&
 		JSON.stringify(state.skillNames) === JSON.stringify(expectedSkillNames)
 	);
 }

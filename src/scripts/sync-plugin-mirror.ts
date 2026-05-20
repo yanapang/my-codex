@@ -55,7 +55,6 @@ const PLUGIN_NAME = "oh-my-codex";
 const SETUP_OWNED_PLUGIN_MANIFEST_FIELDS = [
 	"agents",
 	"prompts",
-	"hooks",
 ] as const;
 
 async function readJsonFile<T>(path: string): Promise<T> {
@@ -199,13 +198,14 @@ async function assertPluginManifestPolicy(
 	const pkg = await readJsonFile<PackageJson>(join(root, "package.json"));
 	const expectedFields: Pick<
 		PluginManifest,
-		"name" | "version" | "skills" | "mcpServers" | "apps"
+		"name" | "version" | "skills" | "mcpServers" | "apps" | "hooks"
 	> = {
 		name: PLUGIN_NAME,
 		version: pkg.version,
 		skills: "./skills/",
 		mcpServers: "./.mcp.json",
 		apps: "./.app.json",
+		hooks: "./hooks/hooks.json",
 	};
 
 	for (const [field, expectedValue] of Object.entries(expectedFields)) {
@@ -229,7 +229,7 @@ async function assertPluginManifestPolicy(
 					"plugin_bundle_metadata_out_of_sync",
 					"kind=plugin-manifest",
 					`field=${field}`,
-					"message=setup-owned agents/prompts/hooks must not be plugin-scoped",
+					"message=setup-owned agents/prompts must not be plugin-scoped",
 				].join("\n"),
 			);
 		}
