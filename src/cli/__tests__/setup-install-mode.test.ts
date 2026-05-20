@@ -1,7 +1,8 @@
-import { describe, it } from "node:test";
+import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import {
+	chmod,
 	cp,
 	mkdir,
 	mkdtemp,
@@ -18,6 +19,45 @@ import { uninstall } from "../uninstall.js";
 import { OMX_FIRST_PARTY_MCP_SERVER_NAMES } from "../../config/omx-first-party-mcp.js";
 
 const packageRoot = process.cwd();
+let previousPathForFakeCodex: string | undefined;
+let fakeCodexBinDir: string | null = null;
+
+before(async () => {
+	previousPathForFakeCodex = process.env.PATH;
+	fakeCodexBinDir = await mkdtemp(join(tmpdir(), "omx-fake-codex-"));
+	const fakeCodexPath = join(fakeCodexBinDir, "codex");
+	await writeFile(
+		fakeCodexPath,
+		[
+			"#!/usr/bin/env node",
+			"if (process.argv[2] === 'features' && process.argv[3] === 'list') {",
+			"  console.log('hooks                                   stable             true');",
+			"  console.log('plugin_hooks                            experimental       true');",
+			"  console.log('goals                                   experimental       true');",
+			"  process.exit(0);",
+			"}",
+			"if (process.argv.includes('--version') || process.argv[2] === '--version') {",
+			"  console.log('codex-cli 0.999.0');",
+			"  process.exit(0);",
+			"}",
+			"process.exit(0);",
+			"",
+		].join("\n"),
+	);
+	await chmod(fakeCodexPath, 0o755);
+	process.env.PATH = `${fakeCodexBinDir}${process.env.PATH ? `:${process.env.PATH}` : ""}`;
+});
+
+after(async () => {
+	if (previousPathForFakeCodex === undefined) {
+		delete process.env.PATH;
+	} else {
+		process.env.PATH = previousPathForFakeCodex;
+	}
+	if (fakeCodexBinDir !== null) {
+		await rm(fakeCodexBinDir, { recursive: true, force: true });
+	}
+});
 
 async function withTempCwd(wd: string, fn: () => Promise<void>): Promise<void> {
 	const previousCwd = process.cwd();
