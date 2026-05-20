@@ -10,112 +10,102 @@ Clean-room OMX planning workflow inspired by the high-level OMO Prometheus conce
 
 Credit: Inspired by OMO Prometheus (`code-yeongyu/oh-my-openagent`), reimplemented from concept under MIT.
 
-## Purpose
+<Purpose>
+Prometheus Strict creates a rigorous plan before execution when ambiguity is still risky. It separates three planning voices: Metis clarifies requirements, Momus challenges assumptions and validation gaps, and Oracle synthesizes the handoff-ready OMX-native plan.
 
-Use Prometheus Strict when the user needs a rigorous plan before execution and ambiguity is still risky. The workflow separates three planning voices:
+The output is a planning-only artifact for `$ultragoal` and, when independent lanes are justified, `$team`. When a durable artifact is useful, store or request the final plan under `.omx/plans/prometheus-strict/`.
+</Purpose>
 
-1. **Metis** — interviews for hidden requirements, constraints, non-goals, and acceptance criteria.
-2. **Momus** — attacks assumptions, scope creep, missing tests, and execution risks.
-3. **Oracle** — synthesizes the clarified requirements and critique into an executable OMX-native plan.
-
-The output is a handoff-ready plan for `$ultragoal` and, when parallel execution is warranted, `$team`. When a durable artifact is useful, write or request the plan under `.omx/plans/prometheus-strict/` using the output contract below. Prometheus Strict is a planning skill, not an implementation runtime.
-
-## Use When
-
+<Use_When>
 - The task is important enough that a shallow plan could produce wrong work.
 - Requirements are partially known but acceptance criteria, boundaries, risks, or validation are incomplete.
 - The user wants a strict interview before execution.
 - A future `$ultragoal` story needs durable scope, tests, and handoff sequencing.
 - A team split may be needed, but the lanes are not yet safe to assign.
+</Use_When>
 
-## Do Not Use When
-
+<Do_Not_Use_When>
 - The user asks for immediate implementation of a clear, low-risk change; use the normal executor path.
 - The task is only a repository lookup or explanation; use `explore`/`analyze` as appropriate.
 - The user needs adversarial execution QA after code changes; use `$ultraqa`.
 - The user wants hook behavior, Sisyphus behavior, or a `start-work` port. Those are explicit non-goals.
+</Do_Not_Use_When>
 
-## Non-Goals and Boundaries
+<Why_This_Exists>
+OMX already has `$plan`, `$ralplan`, and `$deep-interview`. Prometheus Strict exists for a narrower case: an explicit clean-room strict-planning lane with named clarification, critique, and synthesis roles, plus a durable `.omx/plans/prometheus-strict/` handoff contract. It is not a replacement for execution workflows.
+</Why_This_Exists>
 
-- No hook implementation.
-- No Sisyphus/start-work port.
-- No automatic external-production actions.
-- No direct code edits during the planning interview unless a separate execution workflow is explicitly started afterward.
-- No copying from OMO sources; only the concept-level credit above is allowed.
+<Execution_Policy>
+- Stay planning-only. Do not edit source code during this skill unless the user starts a separate execution workflow afterward.
+- Preserve clean-room boundaries. Do not copy or imitate OMO wording, source, prompts, runtime behavior, or control flow.
+- Keep non-goals visible: No hook implementation. No Sisyphus/start-work port. No automatic external-production actions.
+- Ask one question at a time only when the answer materially changes scope, safety, or validation.
+- If a safe assumption is available, state it and continue.
+- Use repository reads when needed to make paths, tests, and handoff commands concrete.
+- Recommend `$team` only when Oracle identifies independent, bounded, verifiable lanes.
+</Execution_Policy>
 
-## Required Inputs
-
-- A user goal or problem statement.
-- Any known constraints, deadline, target branch, risk tolerance, and validation expectations if already available.
-- Repository context may be gathered read-only when needed to make the plan concrete.
-
-If the user supplies too little information, Metis asks exactly one high-leverage question at a time until the plan can be safely drafted.
-
-## Workflow
-
+<Steps>
 ### 1. Intake and Safety Bounds
 
-Restate the target result, known constraints, expected deliverables, validation expectations, and stop condition. Identify whether this is a planning-only turn or whether the user has also requested downstream execution.
+Restate the target result, known constraints, deliverables, validation expectations, and stop condition. Identify whether this turn is planning-only or whether the user also requested downstream execution.
 
-If the prompt contains destructive, credential-gated, external-production, or materially scope-changing decisions, hold those decisions for explicit user confirmation. Otherwise, continue automatically through the planning loop.
+If the prompt contains destructive, credential-gated, external-production, or materially scope-changing decisions, hold those decisions for explicit user confirmation. Otherwise, continue through the planning loop.
 
 ### 2. Metis Interview
 
 Use `prometheus-strict-metis` as the interview voice. When native subagents are available, invoke the dedicated agent; otherwise run the same role in-context without editing files.
 
-Metis must discover:
-
-- success criteria and measurable acceptance tests;
-- hard constraints and explicit non-goals;
-- current evidence versus assumptions;
-- required artifacts and delivery path, including whether `.omx/plans/prometheus-strict/` should be created;
-- likely owners/lanes if parallel work is needed;
-- missing decisions that materially change scope or risk.
-
-Ask one question per round when the answer is necessary. If the missing detail can be safely assumed, state the assumption and continue.
+Metis discovers success criteria, non-goals, evidence versus assumptions, required artifacts, likely execution lanes, and missing decisions. Ask exactly one high-leverage question only when needed.
 
 ### 3. Momus Challenge
 
 Use `prometheus-strict-momus` as the adversarial critique voice. When native subagents are available, invoke the dedicated agent; otherwise run the same role in-context without editing files.
 
-Momus must challenge:
-
-- underspecified acceptance criteria;
-- hidden destructive or irreversible steps;
-- overbroad scope and unnecessary dependencies;
-- missing regression, lint, typecheck, build, or e2e evidence;
-- ownership conflicts between worker lanes;
-- handoff risks that would make `$ultragoal` or `$team` ambiguous.
-
-Momus does not rewrite the plan alone. It produces objections and required fixes.
+Momus challenges underspecified acceptance criteria, unsafe assumptions, hidden destructive steps, overbroad scope, missing verification, ownership conflicts, and `$ultragoal`/`$team` handoff ambiguity.
 
 ### 4. Oracle Synthesis
 
 Use `prometheus-strict-oracle` as the synthesis voice. When native subagents are available, invoke the dedicated agent; otherwise run the same role in-context without editing files.
 
-Oracle turns Metis + Momus outputs into a concise execution artifact:
-
-- final objective;
-- scope and non-goals;
-- deliverables;
-- assumptions accepted;
-- implementation lanes, including which files or surfaces each lane owns;
-- verification matrix;
-- rollback/escalation conditions;
-- recommended handoff command: `$ultragoal` for durable execution and `$team` only when parallel lanes are justified;
-- artifact path: `.omx/plans/prometheus-strict/<slug>.md` when a durable plan file is warranted.
+Oracle produces the final objective, scope and non-goals, accepted assumptions, resolved critique, sequenced steps or lanes, verification matrix, rollback/escalation conditions, and recommended OMX handoff.
 
 ### 5. Handoff
 
 Prometheus Strict stops with a plan unless the user explicitly invokes or authorizes the next workflow. Prefer this sequence:
 
 ```text
-$ultragoal "<Oracle plan summary>"
+$ultragoal "<Oracle plan summary or .omx/plans/prometheus-strict/<slug>.md>"
 $team <N>:executor "execute the approved Ultragoal story in parallel lanes"  # only when warranted
 ```
+</Steps>
 
-Do not start implementation from this skill by default.
+<Tool_Usage>
+- Use read-only repository inspection to verify referenced files, commands, and existing conventions.
+- Use `prometheus-strict-metis`, `prometheus-strict-momus`, and `prometheus-strict-oracle` sequentially; do not fan out implementation work from this skill.
+- Use `$ultragoal` only as the recommended execution handoff after the plan is ready.
+- Use `$team` only when parallel lanes are independent and verifiable.
+</Tool_Usage>
 
+## State Management
+
+Prometheus Strict does not own a long-running runtime loop. If a durable planning artifact is needed, write the final plan to `.omx/plans/prometheus-strict/<slug>.md`. Draft-only or inline plans may set the artifact path to `N/A - inline plan only`.
+
+Do not create hook state, Sisyphus state, or `start-work` compatibility state for this skill.
+
+<Final_Checklist>
+- [ ] Target result is explicit.
+- [ ] Scope and non-goals are explicit.
+- [ ] Acceptance criteria are measurable.
+- [ ] Metis clarification has no unresolved blocking question.
+- [ ] Momus objections are resolved or carried forward as explicit blockers.
+- [ ] Oracle plan includes a verification matrix.
+- [ ] Handoff recommends `$ultragoal` and `$team` only when warranted.
+- [ ] Clean-room credit is preserved.
+- [ ] No hook implementation or Sisyphus/start-work port was introduced.
+</Final_Checklist>
+
+<Advanced>
 ## Output Contract
 
 If writing a durable plan file, store this markdown at `.omx/plans/prometheus-strict/<slug>.md` and reference that path in the handoff.
@@ -153,15 +143,8 @@ Inspired by OMO Prometheus (`code-yeongyu/oh-my-openagent`), reimplemented from 
 
 ## Failure and Escalation
 
-Escalate instead of planning when:
+Escalate instead of planning when a necessary answer cannot be inferred safely, the next step is destructive or credential-gated, required repository context is unavailable, or the user asks for behavior outside the non-goals.
+</Advanced>
 
-- a necessary answer cannot be inferred safely;
-- the next step is destructive, irreversible, credential-gated, or external-production;
-- required repository context is unavailable;
-- the user asks for behavior outside the non-goals.
-
-When blocked, report the exact missing decision and the smallest safe question that would unblock planning.
-
-## Task
-
-{{ARGUMENTS}}
+Original task:
+{{PROMPT}}

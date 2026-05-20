@@ -14,6 +14,11 @@ const promptNames = [
   'prometheus-strict-momus',
   'prometheus-strict-oracle',
 ] as const;
+const promptRoles = {
+  'prometheus-strict-metis': 'METIS',
+  'prometheus-strict-momus': 'MOMUS',
+  'prometheus-strict-oracle': 'ORACLE',
+} as const;
 
 function readRepoFile(path: string): string {
   return readFileSync(path, 'utf8');
@@ -61,6 +66,24 @@ describe('prometheus-strict clean-room contract', () => {
       assert.match(content, /\.omx\/plans\/prometheus-strict\//i, `${label} must document the durable prometheus-strict plan path`);
       assert.doesNotMatch(content, /@opencode-ai\/plugin|bun:sqlite|\.sisyphus/i, `${label} must not leak OMO runtime details`);
     }
+
+    for (const section of [
+      'Purpose',
+      'Use_When',
+      'Do_Not_Use_When',
+      'Why_This_Exists',
+      'Execution_Policy',
+      'Steps',
+      'Tool_Usage',
+      'Final_Checklist',
+      'Advanced',
+    ]) {
+      assert.match(skill, new RegExp(`<${section}>`), `skill must include <${section}>`);
+      assert.match(skill, new RegExp(`</${section}>`), `skill must close </${section}>`);
+    }
+
+    assert.match(skill, /## State Management/, 'skill must include state management section');
+    assert.match(skill, /Original task:\n\{\{PROMPT\}\}\s*$/, 'skill must end with the canonical prompt footer');
   });
 
   it('ships the Metis, Momus, and Oracle prompts with distinct planning contracts', () => {
@@ -75,6 +98,28 @@ describe('prometheus-strict clean-room contract', () => {
       assert.match(content, /Do not copy or imitate OMO wording, source, prompts, or runtime behavior/i, `${promptName} must block source copying`);
       assert.match(content, /do not implement code|do not implement|Produce a plan, not implementation/i, `${promptName} must not implement`);
       assert.match(content, /output_contract/i, `${promptName} must define an output contract`);
+
+      for (const section of [
+        'identity',
+        'goal',
+        'constraints',
+        'scope_guard',
+        'ask_gate',
+        'execution_loop',
+        'success_criteria',
+        'tools',
+        'style',
+        'output_contract',
+      ]) {
+        assert.match(content, new RegExp(`<${section}>`), `${promptName} must include <${section}>`);
+        assert.match(content, new RegExp(`</${section}>`), `${promptName} must close </${section}>`);
+      }
+
+      const role = promptRoles[promptName];
+      assert.match(content, new RegExp(`OMX:GUIDANCE:${role}:CONSTRAINTS:START`), `${promptName} must include constraints guidance start marker`);
+      assert.match(content, new RegExp(`OMX:GUIDANCE:${role}:CONSTRAINTS:END`), `${promptName} must include constraints guidance end marker`);
+      assert.match(content, new RegExp(`OMX:GUIDANCE:${role}:OUTPUT:START`), `${promptName} must include output guidance start marker`);
+      assert.match(content, new RegExp(`OMX:GUIDANCE:${role}:OUTPUT:END`), `${promptName} must include output guidance end marker`);
     }
 
     assert.match(readRepoFile(join(repoRoot, 'prompts', 'prometheus-strict-metis.md')), /Metis Clarification/i);
