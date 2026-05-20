@@ -2165,6 +2165,8 @@ describe("codex native hook dispatch", () => {
       assert.match(message, /get_goal/);
       assert.match(message, /create_goal/);
       assert.match(message, /update_goal/);
+      assert.match(message, /does not call `\/goal clear`/);
+      assert.match(message, /multiple sequential ultragoal runs/);
       assert.equal(existsSync(join(cwd, ".omx", "state", "sessions", "sess-ultragoal-1", "ultragoal-state.json")), false);
     } finally {
       await rm(cwd, { recursive: true, force: true });

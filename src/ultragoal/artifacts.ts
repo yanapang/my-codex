@@ -1297,6 +1297,7 @@ function buildPerStoryCodexGoalInstruction(goal: UltragoalItem, plan: UltragoalP
     'Codex goal integration constraints:',
     '- First call get_goal. If no active goal exists, call create_goal with the payload below.',
     '- If a different active Codex goal exists, finish/checkpoint that goal before starting this ultragoal.',
+    '- Ultragoal cannot call /goal clear from the model/shell tool surface. For another per-story goal in the same session/thread after a completed Codex goal, manually run /goal clear in the Codex UI or continue in a fresh Codex thread.',
     '- If get_goal returns a different completed legacy/thread goal and create_goal rejects because this thread already has a completed goal, continue this ultragoal in a fresh Codex thread (same repo/worktree) and create the payload there.',
     `- To preserve the durable ledger before switching threads, record the non-terminal blocker without failing this goal: omx ultragoal checkpoint --goal-id ${goal.id} --status blocked --evidence "<completed legacy Codex goal blocks create_goal in this thread>" --codex-goal-json "<get_goal JSON or path>"`,
     '- Work only this goal until its completion audit passes.',
@@ -1344,6 +1345,7 @@ function buildAggregateCodexGoalInstruction(goal: UltragoalItem, plan: Ultragoal
     '- First call get_goal. If no active goal exists, call create_goal with the aggregate payload below.',
     '- If get_goal reports the same aggregate objective as active, continue this OMX story without creating a new Codex goal.',
     '- If a different active or incomplete Codex goal exists, finish/checkpoint that goal before starting this ultragoal; do not replace hidden Codex state from the shell.',
+    '- Ultragoal does not call /goal clear. After a completed aggregate run, manually run /goal clear in the Codex UI or start a fresh Codex thread before starting another ultragoal run in the same session/thread.',
     finalStory
       ? '- This is the final pending story: run the mandatory final ai-slop-cleaner pass, rerun verification, and run $code-review before any update_goal call.'
       : '- This is not the final story: do not call update_goal yet; the aggregate Codex goal must remain active while later OMX stories remain.',

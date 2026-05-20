@@ -50,6 +50,8 @@ describe('cli/ultragoal', () => {
     assert.match(ULTRAGOAL_HELP, /blocked/);
     assert.match(ULTRAGOAL_HELP, /fresh Codex thread/);
     assert.match(ULTRAGOAL_HELP, /get_goal\/create_goal\/update_goal/);
+    assert.match(ULTRAGOAL_HELP, /does not call \/goal clear/);
+    assert.match(ULTRAGOAL_HELP, /multiple sequential ultragoal runs/);
     assert.match(ULTRAGOAL_HELP, /add-goal/);
     assert.match(ULTRAGOAL_HELP, /record-review-blockers/);
     assert.match(ULTRAGOAL_HELP, /quality-gate-json/);
@@ -68,7 +70,8 @@ describe('cli/ultragoal', () => {
       assert.match(output, /Ultragoal aggregate-goal handoff/);
       assert.match(output, /create_goal payload/);
       assert.match(output, /Codex goal = the whole ultragoal run/);
-      assert.doesNotMatch(output, /fresh Codex thread/);
+      assert.match(output, /does not call \/goal clear/);
+      assert.match(output, /After a completed aggregate run/);
       assert.match(output, /omx ultragoal checkpoint --goal-id G001-first-milestone --status complete/);
 
       const goals = JSON.parse(await readFile(join(cwd, '.omx/ultragoal/goals.json'), 'utf-8')) as { activeGoalId?: string; codexGoalMode?: string; codexObjective?: string };
