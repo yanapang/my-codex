@@ -151,39 +151,65 @@ describe("madmax state isolation", () => {
       const env: NodeJS.ProcessEnv = { OMX_RUNS_DIR: runs };
       const runDir = createMadmaxIsolatedRoot(wd, ["--madmax", "--xhigh", "--tmux"], env);
       const metadata = JSON.parse(await readFile(join(runDir, ".omxbox-run.json"), "utf-8"));
-      const expectedContext = buildMadmaxDetachedLaunchContextKey(wd, ["--madmax", "--xhigh", "--tmux"]);
+      const expectedContext = buildMadmaxDetachedLaunchContextKey(wd, ["--madmax", "--xhigh", "--tmux"], runDir);
       assert.equal(metadata.detached_launch_context, expectedContext);
       assert.equal(env.OMX_MADMAX_DETACHED_CONTEXT, expectedContext);
       assert.equal(
-        expectedContext,
-        buildMadmaxDetachedLaunchContextKey(wd, ["--madmax", "--xhigh"]),
+        buildMadmaxDetachedLaunchContextKey(wd, ["--madmax", "--xhigh", "--tmux"], runDir),
+        buildMadmaxDetachedLaunchContextKey(wd, ["--madmax", "--xhigh"], runDir),
         "explicit --tmux is a transport choice and must not create a second context",
       );
       assert.equal(
-        expectedContext,
-        buildMadmaxDetachedLaunchContextKey(wd, ["--xhigh", "--madmax", "--direct"]),
+        buildMadmaxDetachedLaunchContextKey(wd, ["--madmax", "--xhigh", "--tmux"], runDir),
+        buildMadmaxDetachedLaunchContextKey(wd, ["--xhigh", "--madmax", "--direct"], runDir),
         "argument order and transport choices must not create duplicate detached contexts",
       );
       assert.notEqual(
         expectedContext,
-        buildMadmaxDetachedLaunchContextKey(wd, ["--madmax", "--low"]),
+        buildMadmaxDetachedLaunchContextKey(wd, ["--madmax", "--low"], runDir),
         "different launch semantics may run concurrently",
       );
       assert.notEqual(
-        buildMadmaxDetachedLaunchContextKey(wd, ["--madmax", "--high", "--xhigh"]),
-        buildMadmaxDetachedLaunchContextKey(wd, ["--madmax", "--xhigh", "--high"]),
+        buildMadmaxDetachedLaunchContextKey(wd, ["--madmax", "--high", "--xhigh"], runDir),
+        buildMadmaxDetachedLaunchContextKey(wd, ["--madmax", "--xhigh", "--high"], runDir),
         "last reasoning shorthand wins, so reversed reasoning order is a distinct context",
       );
       const otherWd = await mkdtemp(join(tmpdir(), "omx-madmax-other-source-"));
       try {
         assert.notEqual(
           expectedContext,
-          buildMadmaxDetachedLaunchContextKey(otherWd, ["--madmax", "--xhigh"]),
+          buildMadmaxDetachedLaunchContextKey(otherWd, ["--madmax", "--xhigh"], runDir),
           "different work contexts may run concurrently",
         );
       } finally {
         await rm(otherWd, { recursive: true, force: true });
       }
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+      await rm(runs, { recursive: true, force: true });
+    }
+  });
+
+  it("gives independent madmax run roots distinct detached launch context locks", async () => {
+    const wd = await mkdtemp(join(tmpdir(), "omx-madmax-source-"));
+    const runs = await mkdtemp(join(tmpdir(), "omx-madmax-runs-"));
+    try {
+      const firstEnv: NodeJS.ProcessEnv = { OMX_RUNS_DIR: runs };
+      const secondEnv: NodeJS.ProcessEnv = { OMX_RUNS_DIR: runs };
+      const firstRunDir = createMadmaxIsolatedRoot(wd, ["--madmax", "--high"], firstEnv);
+      const secondRunDir = createMadmaxIsolatedRoot(wd, ["--madmax", "--high"], secondEnv);
+
+      assert.notEqual(firstRunDir, secondRunDir);
+      assert.notEqual(
+        firstEnv.OMX_MADMAX_DETACHED_CONTEXT,
+        secondEnv.OMX_MADMAX_DETACHED_CONTEXT,
+        "same cwd and argv from independent boxed runs must not contend on one active-detached lock",
+      );
+      assert.equal(
+        firstEnv.OMX_MADMAX_DETACHED_CONTEXT,
+        buildMadmaxDetachedLaunchContextKey(wd, ["--high", "--madmax", "--tmux"], firstRunDir),
+        "transport and order normalization still deduplicates within the same isolated run",
+      );
     } finally {
       await rm(wd, { recursive: true, force: true });
       await rm(runs, { recursive: true, force: true });
