@@ -178,6 +178,36 @@ describe('prometheus-strict clean-room contract', () => {
     }
   });
 
+  it('enforces the Metis intent-classification, spec-prefill, self-review, and stale-rule cleanup contract', () => {
+    const metis = readRepoFile(join(repoRoot, 'prompts', 'prometheus-strict-metis.md'));
+
+    assert.match(metis, /<intent_classification>[\s\S]+<\/intent_classification>/, 'metis must include an intent_classification block');
+    for (const family of ['trivial', 'simple', 'refactor', 'build-from-scratch', 'research', 'spec-driven', 'test-infra', 'architecture', 'collaboration']) {
+      assert.match(
+        metis,
+        new RegExp(`\\*\\*${family.replace('-', '[-\\s]')}\\*\\*`, 'i'),
+        `metis intent_classification must declare the ${family} family`,
+      );
+    }
+
+    assert.match(metis, /No interview at all|skip the interview entirely/i, 'metis must explicitly skip the interview for trivial tasks');
+    assert.match(metis, /at most 1-2|1-2 targeted questions/i, 'metis must cap simple-intent interviews at 1-2 questions');
+
+    assert.match(metis, /<spec_prefill>[\s\S]+<\/spec_prefill>/, 'metis must include a spec_prefill block');
+    for (const signal of ['PRD', 'RFC', 'issue', 'package\\.json', 'Cargo\\.toml']) {
+      assert.match(metis, new RegExp(signal, 'i'), `metis spec_prefill must recognise ${signal} as a spec signal`);
+    }
+    assert.match(metis, /docs\/specs|docs\/rfcs/, 'metis spec_prefill must mention the canonical repo-local spec directories');
+
+    assert.match(metis, /<self_review>[\s\S]+<\/self_review>/, 'metis must include a self_review block');
+    assert.match(metis, /seven gates of <question_quality>|all seven gates/i, 'metis self_review must re-check the seven question_quality gates');
+    assert.match(metis, /Self-review is a hard prerequisite/i, 'metis self_review must declare itself a hard prerequisite for emitting a round');
+
+    assert.doesNotMatch(metis, /Blocking questions are limited to one at a time/i, 'metis success_criteria must drop the stale single-question rule that contradicted the batch + multi-round contract');
+    assert.match(metis, /Intent family is declared and the round's question slate matches that family/i, 'metis success_criteria must reflect the intent-classification gate');
+    assert.match(metis, /never by subjective[\s\S]{0,30}feels enough/i, 'metis success_criteria must explicitly reject subjective termination');
+  });
+
   it('enforces the strengthened operator contract: iterative interview, rule-clearance, post-plan Metis, Momus bounded retry, and Oracle 2-pass', () => {
     const skill = readRepoFile(skillPath);
     const metis = readRepoFile(join(repoRoot, 'prompts', 'prometheus-strict-metis.md'));
