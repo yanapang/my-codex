@@ -69,6 +69,7 @@ import {
 } from "../hooks/extensibility/events.js";
 import type { HookEventEnvelope } from "../hooks/extensibility/types.js";
 import { dispatchHookEventRuntime } from "../hooks/extensibility/runtime.js";
+import { getNotificationConfig, getVerbosity } from "../notifications/config.js";
 import { reconcileHudForPromptSubmit } from "../hud/reconcile.js";
 import {
   onPreCompact as buildWikiPreCompactContext,
@@ -78,6 +79,11 @@ import { readAutoresearchCompletionStatus, readAutoresearchModeStateForActiveDec
 import { readRunState } from "../runtime/run-state.js";
 import { evaluateRalphCompletionAuditEvidence, isRalphCompletePhase } from "../ralph/completion-audit.js";
 import { getRunContinuationSnapshot, shouldContinueRun } from "../runtime/run-loop.js";
+import {
+  parseUltragoalSteeringDirective,
+  steerUltragoal,
+  type UltragoalSteeringProposal,
+} from "../ultragoal/artifacts.js";
 import { triagePrompt } from "../hooks/triage-heuristic.js";
 import { readTriageConfig } from "../hooks/triage-config.js";
 import {
@@ -305,6 +311,13 @@ async function isNativeSubagentHook(
   return candidateIds.some((id) => summary.allSubagentThreadIds.includes(id));
 }
 
+function shouldSuppressSubagentLifecycleHookDispatch(): boolean {
+  const config = getNotificationConfig();
+  if (config?.includeChildAgents === true) return false;
+  const verbosity = getVerbosity(config);
+  return verbosity !== "agent" && verbosity !== "verbose";
+}
+
 async function recordIgnoredNativeSubagentSessionStart(
   cwd: string,
   canonicalSessionId: string,
@@ -417,6 +430,104 @@ function readPromptText(payload: CodexHookPayload): string {
     if (value) return value;
   }
   return "";
+}
+
+
+function extractBalancedJsonObject(text: string, startIndex: number): string | null {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = startIndex; index < text.length; index++) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === "{") depth += 1;
+    else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return text.slice(startIndex, index + 1);
+    }
+  }
+  return null;
+}
+
+function normalizePromptSteeringProposal(raw: unknown, prompt: string): UltragoalSteeringProposal | null {
+  const candidate = safeObject(raw);
+  const nested = candidate.omx_ultragoal_steer ?? candidate.ultragoal_steer ?? candidate.steering ?? candidate;
+  const proposal = parseUltragoalSteeringDirective(JSON.stringify(nested));
+  if (!proposal) return null;
+  if (proposal.source !== "user_prompt_submit") return null;
+  const normalized = prompt.trim().toLowerCase();
+  return {
+    ...proposal,
+    directiveText: proposal.directiveText ?? safeContextSnippet(prompt, 600),
+    promptSignature: proposal.promptSignature ?? promptSignature(normalized),
+    idempotencyKey: proposal.idempotencyKey ?? `user_prompt_submit:${promptSignature(normalized)}`,
+  };
+}
+
+function parseUserPromptUltragoalSteeringDirective(prompt: string): UltragoalSteeringProposal | null {
+  const trimmed = prompt.trim();
+  if (!trimmed) return null;
+  const fenced = trimmed.match(/```(?:omx-ultragoal-steer|ultragoal-steer)\s*([\s\S]*?)```/i);
+  if (fenced?.[1]) {
+    try {
+      return normalizePromptSteeringProposal(JSON.parse(fenced[1]), prompt);
+    } catch {
+      return null;
+    }
+  }
+
+  const label = trimmed.match(/(?:^|\n)\s*(?:OMX_ULTRAGOAL_STEER|omx\.ultragoal\.steer|omx ultragoal steer)\s*:\s*{/i);
+  if (label?.index !== undefined) {
+    const brace = trimmed.indexOf("{", label.index);
+    const json = brace >= 0 ? extractBalancedJsonObject(trimmed, brace) : null;
+    if (json) {
+      try {
+        return normalizePromptSteeringProposal(JSON.parse(json), prompt);
+      } catch {
+        return null;
+      }
+    }
+  }
+
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      const object = safeObject(parsed);
+      if ("omx_ultragoal_steer" in object || "ultragoal_steer" in object) {
+        return normalizePromptSteeringProposal(parsed, prompt);
+      }
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+async function applyUserPromptUltragoalSteering(cwd: string, prompt: string): Promise<string | null> {
+  const proposal = parseUserPromptUltragoalSteeringDirective(prompt);
+  if (!proposal) return null;
+  try {
+    const result = await steerUltragoal(cwd, proposal);
+    const status = result.deduped ? "deduped" : result.accepted ? "accepted" : "rejected";
+    const reasons = result.rejectedReasons.length > 0 ? ` rejectedReasons=${result.rejectedReasons.join("; ")}` : "";
+    return [
+      `OMX native UserPromptSubmit applied bounded .omx/ultragoal steering for G002-cli-and-prompt-submit-bridge: ${status}.`,
+      `mutation=${result.audit.kind}; source=${result.audit.source}; targets=${result.audit.targetGoalIds.join(",") || "none"}; idempotencyKey=${result.audit.idempotencyKey ?? "none"}.${reasons}`,
+      "Only explicit structured steering directives are parsed; normal prose is ignored and cannot mutate .omx/ultragoal.",
+    ].join(" ");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return `OMX native UserPromptSubmit rejected bounded .omx/ultragoal steering for G002-cli-and-prompt-submit-bridge: ${message}`;
+  }
 }
 
 function sanitizePayloadForHookContext(
@@ -793,13 +904,12 @@ async function reopenRalphCompletionAuditBlock(block: RalphCompletionAuditBlockS
   const nowIso = new Date().toISOString();
   const next: Record<string, unknown> = {
     ...block.state,
-    active: true,
-    current_phase: "verifying",
+    active: false,
+    current_phase: "complete",
     completion_audit_gate: "blocked",
     completion_audit_missing_reason: block.reason,
     completion_audit_blocked_at: nowIso,
   };
-  delete next.completed_at;
   await writeFile(block.path, JSON.stringify(next, null, 2));
 }
 
@@ -1604,7 +1714,7 @@ function buildAdditionalContextMessage(
     ? "Ultrawork protocol: ground the task before editing, define pass/fail acceptance criteria, keep shared-file work local, and use direct-tool plus background evidence lanes only for truly independent work. Direct ultrawork provides lightweight verification only; Ralph owns persistence and the full verified-completion promise."
     : null;
   const ultragoalPromptActivationNote = match.skill === "ultragoal"
-    ? "Ultragoal protocol: use `omx ultragoal create-goals` / `complete-goals` / `checkpoint` for `.omx/ultragoal` artifacts, then use Codex goal model tools only from the active agent handoff (`get_goal`, `create_goal`, `update_goal`) and never overwrite a different active Codex goal."
+    ? "Ultragoal protocol: use `omx ultragoal create-goals` / `complete-goals` / `checkpoint` for `.omx/ultragoal` artifacts, then use Codex goal model tools only from the active agent handoff (`get_goal`, `create_goal`, `update_goal`) and never overwrite a different active Codex goal. Ultragoal does not call `/goal clear`; for multiple sequential ultragoal runs in one Codex session/thread, manually clear the completed Codex goal in the UI before creating the next aggregate goal."
     : null;
   const combinedTransitionMessage = (() => {
     if (!skillState?.transition_message) return null;
@@ -1867,6 +1977,9 @@ async function buildModeBasedStopOutput(
   cwd: string,
   sessionId?: string,
 ): Promise<Record<string, unknown> | null> {
+  if (await readCanonicalTerminalRunStateForStop(cwd, sessionId, mode)) {
+    return null;
+  }
   const state = await readModeStateForActiveDecision(mode, sessionId?.trim() || undefined, cwd);
   if (!state || !shouldContinueRun(state)) return null;
   const phase = formatPhase(state.current_phase);
@@ -1895,6 +2008,22 @@ function reportsAutoresearchGoalObjectiveMismatch(text: string): boolean {
     && /objective mismatch/i.test(text);
 }
 
+function reportsBlockedPerformanceGoalObjectiveMismatch(state: unknown): boolean {
+  const performanceState = safeObject(state);
+  const lastValidation = safeObject(performanceState.lastValidation);
+  if (safeString(performanceState.workflow) !== "performance-goal") return false;
+  if (safeString(performanceState.status) !== "blocked") return false;
+  if (safeString(lastValidation.status) !== "blocked") return false;
+
+  const evidence = [
+    safeString(lastValidation.evidence),
+    safeString(lastValidation.message),
+    safeString(performanceState.evidence),
+    safeString(performanceState.message),
+  ].join(" ");
+  return /objective mismatch/i.test(evidence);
+}
+
 async function findActiveGoalWorkflowReconciliationRequirement(cwd: string): Promise<{ workflow: string; command: string; remediation?: string } | null> {
   const ultragoal = await readJsonIfExists(join(cwd, ".omx", "ultragoal", "goals.json"));
   const aggregateCompletion = safeObject(ultragoal?.aggregateCompletion);
@@ -1912,7 +2041,7 @@ async function findActiveGoalWorkflowReconciliationRequirement(cwd: string): Pro
         `If get_goal returns a completed task-scoped objective for the same aggregate ultragoal plan, checkpoint ${goalId} with evidence naming ${goalId} plus .omx/ultragoal/goals.json or ledger.jsonl and pass final quality-gate JSON; OMX will reconcile the completed planned scope without mutating Codex goal state.`,
         `If get_goal instead returns a different completed legacy objective and complete checkpointing fails, do not repeat --status complete in this thread.`,
         `Record the non-terminal blocker with: omx ultragoal checkpoint --goal-id ${goalId} --status blocked --codex-goal-json '<different completed get_goal JSON or path>' --evidence '<completed legacy Codex goal blocks create_goal in this thread>'.`,
-        "Then continue this ultragoal from a fresh Codex thread in the same repo/worktree and create the intended goal there.",
+        "Then continue only from a Codex goal context with no active/completed conflicting goal in the same repo/worktree and create the intended goal there.",
       ].join(" "),
     };
   }
@@ -1922,6 +2051,9 @@ async function findActiveGoalWorkflowReconciliationRequirement(cwd: string): Pro
     if (!entry.isDirectory()) continue;
     const state = await readJsonIfExists(join(performanceRoot, entry.name, "state.json"));
     const status = safeString(state?.status);
+    if (reportsBlockedPerformanceGoalObjectiveMismatch(state)) {
+      continue;
+    }
     if (state?.workflow === "performance-goal" && status && status !== "complete") {
       return {
         workflow: "performance-goal",
@@ -1948,8 +2080,8 @@ async function findActiveGoalWorkflowReconciliationRequirement(cwd: string): Pro
         workflow: "autoresearch-goal",
         command: `omx autoresearch-goal complete --slug ${safeString(mission.slug) || entry.name} --codex-goal-json '<get_goal JSON or path>'`,
         remediation: [
-          "If that command fails with a Codex goal objective mismatch after a fresh get_goal snapshot, do not repeat the same complete command blindly in this thread.",
-          "Either retry with a correct fresh snapshot or record an explicit blocked verdict for this autoresearch-goal and continue it from a fresh Codex thread.",
+          "If that command fails with a Codex goal objective mismatch after a refreshed get_goal snapshot, do not repeat the same complete command blindly in this thread.",
+          "Either retry with a correct refreshed snapshot or record an explicit blocked verdict for this autoresearch-goal and continue from the explicit blocker path.",
         ].join(" "),
       };
     }
@@ -3040,7 +3172,7 @@ async function buildStopHookOutput(
       `OMX Ralph completion audit is missing required evidence (${ralphCompletionAuditBlock.reason}; state: ${blockingPath}).`,
       "Continue verification and do not report complete yet.",
       "Record machine-readable completion evidence before stopping:",
-      "- either set state.completion_audit = { passed: true, prompt_to_artifact_checklist: [...], verification_evidence: [...] }",
+      '- either set "completion_audit" on the Ralph state object, for example: omx state write --input \'{"mode":"ralph","active":false,"current_phase":"complete","completion_audit":{"passed":true,"prompt_to_artifact_checklist":["..."],"verification_evidence":["..."]}}\' --json',
       "- or set completion_audit_path / completion_audit_evidence_path to a repo-relative JSON file with those same fields.",
       "Markdown artifacts and flat top-level checklist/evidence fields are not accepted by the Ralph Stop gate.",
     ].join(" ");
@@ -3337,6 +3469,7 @@ export async function dispatchCodexNativeHook(
   let skillState: SkillActiveState | null = null;
   let triageAdditionalContext: string | null = null;
   let goalWorkflowAdditionalContext: string | null = null;
+  let ultragoalSteeringAdditionalContext: string | null = null;
 
   const nativeSessionId = safeString(payload.session_id ?? payload.sessionId).trim();
   const threadId = safeString(payload.thread_id ?? payload.threadId).trim();
@@ -3345,11 +3478,13 @@ export async function dispatchCodexNativeHook(
   let canonicalSessionId = safeString(currentSessionState?.session_id).trim();
   let resolvedNativeSessionId = nativeSessionId;
   let skipCanonicalSessionStartContext = false;
+  let isSubagentSessionStart = false;
 
   if (hookEventName === "SessionStart" && nativeSessionId) {
     const transcriptPath = safeString(payload.transcript_path ?? payload.transcriptPath).trim();
     const subagentSessionStart = readNativeSubagentSessionStartMetadata(transcriptPath);
     if (subagentSessionStart && canonicalSessionId) {
+      isSubagentSessionStart = true;
       const belongsToCanonicalSession = await nativeSubagentSessionStartBelongsToCanonicalSession(
         cwd,
         canonicalSessionId,
@@ -3418,10 +3553,16 @@ export async function dispatchCodexNativeHook(
         .map((candidateSessionId) => isNativeSubagentHook(cwd, candidateSessionId, nativeSessionId, threadId)),
     )).some(Boolean)
     : false;
+  const suppressNoisySubagentLifecycleDispatch =
+    (isSubagentSessionStart || isSubagentStop)
+    && shouldSuppressSubagentLifecycleHookDispatch();
 
   if (hookEventName === "UserPromptSubmit") {
     const prompt = readPromptText(payload);
     goalWorkflowAdditionalContext = await buildGoalWorkflowReconciliationPromptWarning(cwd, prompt).catch(() => null);
+    ultragoalSteeringAdditionalContext = prompt && !isSubagentPromptSubmit
+      ? await applyUserPromptUltragoalSteering(cwd, prompt).catch((error) => `OMX native UserPromptSubmit rejected bounded .omx/ultragoal steering for G002-cli-and-prompt-submit-bridge: ${error instanceof Error ? error.message : String(error)}`)
+      : null;
     if (prompt && !isSubagentPromptSubmit) {
       skillState = buildNativeOutsideTmuxTeamPromptBlockState(
         prompt,
@@ -3513,7 +3654,7 @@ export async function dispatchCodexNativeHook(
     await reconcileHudForPromptSubmitFn(cwd, { sessionId: canonicalSessionId || sessionIdForState || undefined }).catch(() => {});
   }
 
-  if (omxEventName && !skipCanonicalSessionStartContext) {
+  if (omxEventName && !skipCanonicalSessionStartContext && !suppressNoisySubagentLifecycleDispatch) {
     const baseContext = buildBaseContext(cwd, payload, hookEventName!, canonicalSessionId);
     if (resolvedNativeSessionId) {
       baseContext.native_session_id = resolvedNativeSessionId;
@@ -3554,7 +3695,12 @@ export async function dispatchCodexNativeHook(
       })
       : isSubagentPromptSubmit
         ? null
-        : (buildAdditionalContextMessage(readPromptText(payload), skillState, cwd, payload) ?? goalWorkflowAdditionalContext ?? triageAdditionalContext);
+        : [
+          buildAdditionalContextMessage(readPromptText(payload), skillState, cwd, payload),
+          ultragoalSteeringAdditionalContext,
+          goalWorkflowAdditionalContext,
+          triageAdditionalContext,
+        ].filter((entry): entry is string => Boolean(entry)).join("\n\n") || null;
     if (additionalContext) {
       outputJson = {
         hookSpecificOutput: {

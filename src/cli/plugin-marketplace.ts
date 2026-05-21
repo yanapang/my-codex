@@ -1,5 +1,5 @@
 import { existsSync } from "fs";
-import { cp, readdir, readFile, rm } from "fs/promises";
+import { cp, readdir, readFile, rm, writeFile } from "fs/promises";
 import { join, resolve } from "path";
 import { OMX_FIRST_PARTY_MCP_SERVER_NAMES } from "../config/omx-first-party-mcp.js";
 
@@ -26,7 +26,10 @@ interface PluginManifest {
 	name?: unknown;
 	version?: unknown;
 	skills?: unknown;
+	hooks?: unknown;
 }
+
+const OMX_PLUGIN_HOOK_LAUNCHER_FILE = "omx-command.json";
 
 export async function resolvePackagedOmxMarketplace(
 	packageRoot: string,
@@ -177,6 +180,8 @@ export interface OmxPluginCacheState {
 	manifestVersion: string | null;
 	skillsPointer: string | null;
 	skillNames: string[] | null;
+	hooksPointer: string | null;
+	hookLauncherPinned: boolean;
 }
 
 export async function readOmxPluginCacheState(
@@ -192,6 +197,10 @@ export async function readOmxPluginCacheState(
 			typeof manifest.version === "string" ? manifest.version : null,
 		skillsPointer: typeof manifest.skills === "string" ? manifest.skills : null,
 		skillNames: await listChildDirectoryNames(join(cacheDir, "skills")),
+		hooksPointer: typeof manifest.hooks === "string" ? manifest.hooks : null,
+		hookLauncherPinned: existsSync(
+			join(cacheDir, "hooks", OMX_PLUGIN_HOOK_LAUNCHER_FILE),
+		),
 	};
 }
 
@@ -210,7 +219,28 @@ export async function hasExpectedOmxPluginCache(
 	return (
 		state?.manifestVersion === version &&
 		state.skillsPointer === "./skills/" &&
+		state.hooksPointer === "./hooks/hooks.json" &&
+		state.hookLauncherPinned &&
+		existsSync(join(state.cacheDir, "hooks", "hooks.json")) &&
+		existsSync(join(state.cacheDir, "hooks", "codex-native-hook.mjs")) &&
 		JSON.stringify(state.skillNames) === JSON.stringify(expectedSkillNames)
+	);
+}
+
+async function writePinnedHookLauncher(
+	cacheDir: string,
+	packagedMarketplace: PackagedOmxMarketplace,
+): Promise<void> {
+	await writeFile(
+		join(cacheDir, "hooks", OMX_PLUGIN_HOOK_LAUNCHER_FILE),
+		`${JSON.stringify(
+			{
+				command: process.execPath,
+				argsPrefix: [join(packagedMarketplace.packageRoot, "dist", "cli", "omx.js")],
+			},
+			null,
+			2,
+		)}\n`,
 	);
 }
 
@@ -235,6 +265,7 @@ export async function materializePackagedOmxPluginCache(
 	if (!options.dryRun) {
 		await rm(cacheDir, { recursive: true, force: true });
 		await cp(packagedMarketplace.pluginRoot, cacheDir, { recursive: true });
+		await writePinnedHookLauncher(cacheDir, packagedMarketplace);
 	}
 	return { status: "materialized", cacheDir, version };
 }

@@ -2,6 +2,7 @@ import { spawnSync } from "child_process";
 import {
   DEFAULT_CODEX_HOOK_FEATURE_FLAG,
   resolveCodexHookFeatureFlag,
+  supportsCodexPluginScopedHooks,
   type CodexHookFeatureFlag,
 } from "../config/codex-feature-flags.js";
 
@@ -26,15 +27,29 @@ export function probeInstalledCodexVersion(): string | null {
   return [result.stdout, result.stderr].filter(Boolean).join("\n") || null;
 }
 
-export function resolveCodexHookFeatureFlagForCli(
+export interface CodexHookFeatureSupport {
+  hookFeatureFlag: CodexHookFeatureFlag;
+  pluginScopedHooks: boolean;
+}
+
+export function resolveCodexHookFeatureSupportForCli(
   options: CodexFeatureProbeOptions = {},
-): CodexHookFeatureFlag {
+): CodexHookFeatureSupport {
   const featuresListOutput =
     options.codexFeaturesProbe?.() ?? probeInstalledCodexFeatureList();
   const versionOutput = options.codexVersionProbe?.() ?? probeInstalledCodexVersion();
-  return resolveCodexHookFeatureFlag({
-    featuresListOutput,
-    versionOutput,
-    fallback: DEFAULT_CODEX_HOOK_FEATURE_FLAG,
-  });
+  return {
+    hookFeatureFlag: resolveCodexHookFeatureFlag({
+      featuresListOutput,
+      versionOutput,
+      fallback: DEFAULT_CODEX_HOOK_FEATURE_FLAG,
+    }),
+    pluginScopedHooks: supportsCodexPluginScopedHooks({ featuresListOutput }),
+  };
+}
+
+export function resolveCodexHookFeatureFlagForCli(
+  options: CodexFeatureProbeOptions = {},
+): CodexHookFeatureFlag {
+  return resolveCodexHookFeatureSupportForCli(options).hookFeatureFlag;
 }

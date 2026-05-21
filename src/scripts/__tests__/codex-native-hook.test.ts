@@ -28,6 +28,7 @@ import { OMX_TMUX_HUD_OWNER_ENV } from "../../hud/reconcile.js";
 import { readAllState } from "../../hud/state.js";
 import { getLegacyWikiDir, serializePage, writePage } from "../../wiki/storage.js";
 import { WIKI_SCHEMA_VERSION } from "../../wiki/types.js";
+import { createUltragoalPlan, readUltragoalPlan } from "../../ultragoal/artifacts.js";
 
 function nativeHookScriptPath(): string {
   return join(process.cwd(), "dist", "scripts", "codex-native-hook.js");
@@ -60,6 +61,40 @@ function runNativeHookCli(
 async function writeJson(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true }).catch(() => {});
   await writeFile(path, JSON.stringify(value, null, 2));
+}
+
+async function withLoreGuardConfig<T>(
+  value: string,
+  prefix: string,
+  run: (cwd: string) => Promise<T>,
+): Promise<T> {
+  const cwd = await mkdtemp(join(tmpdir(), `omx-native-hook-pretool-git-commit-lore-${prefix}-`));
+  const codexHome = await mkdtemp(join(tmpdir(), `omx-native-hook-codex-home-lore-${prefix}-`));
+  const defaultHome = await mkdtemp(join(tmpdir(), `omx-native-hook-home-lore-${prefix}-`));
+  const originalGuard = process.env.OMX_LORE_COMMIT_GUARD;
+  const originalCodexHome = process.env.CODEX_HOME;
+  const originalHome = process.env.HOME;
+  try {
+    delete process.env.OMX_LORE_COMMIT_GUARD;
+    process.env.CODEX_HOME = codexHome;
+    process.env.HOME = defaultHome;
+    await writeFile(
+      join(codexHome, "config.toml"),
+      `[shell_environment_policy.set]\nOMX_LORE_COMMIT_GUARD = "${value}"\n`,
+      "utf-8",
+    );
+    return await run(cwd);
+  } finally {
+    if (originalGuard === undefined) delete process.env.OMX_LORE_COMMIT_GUARD;
+    else process.env.OMX_LORE_COMMIT_GUARD = originalGuard;
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = originalCodexHome;
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    await rm(cwd, { recursive: true, force: true });
+    await rm(codexHome, { recursive: true, force: true });
+    await rm(defaultHome, { recursive: true, force: true });
+  }
 }
 
 function buildWorkerStopFakeTmux(
@@ -729,7 +764,16 @@ describe("codex native hook dispatch", () => {
 
   it("keeps subagent SessionStart from replacing the canonical leader session", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-subagent-session-start-"));
+    const originalCodexHome = process.env.CODEX_HOME;
     try {
+      process.env.CODEX_HOME = join(cwd, "codex-home");
+      await writeJson(join(process.env.CODEX_HOME, ".omx-config.json"), {
+        notifications: {
+          enabled: true,
+          verbosity: "session",
+          telegram: { enabled: true, botToken: "123:abc", chatId: "456" },
+        },
+      });
       const stateDir = join(cwd, ".omx", "state");
       const canonicalSessionId = "omx-leader-session";
       const leaderNativeSessionId = "codex-leader-thread";
@@ -745,6 +789,16 @@ describe("codex native hook dispatch", () => {
         iteration: 1,
         max_iterations: 5,
       });
+      await mkdir(join(cwd, ".omx", "hooks"), { recursive: true });
+      await writeFile(
+        join(cwd, ".omx", "hooks", "record-lifecycle.mjs"),
+        [
+          "import { appendFileSync } from 'node:fs';",
+          "export async function onHookEvent(event) {",
+          "  appendFileSync('hook-events.jsonl', `${JSON.stringify({ event: event.event, context: event.context })}\\n`);",
+          "}",
+        ].join("\n"),
+      );
       const transcriptPath = join(cwd, "subagent-rollout.jsonl");
       await writeFile(
         transcriptPath,
@@ -794,6 +848,11 @@ describe("codex native hook dispatch", () => {
       ) as { active?: boolean; current_phase?: string };
       assert.equal(leaderRalph.active, true);
       assert.equal(leaderRalph.current_phase, "executing");
+      assert.equal(
+        existsSync(join(cwd, "hook-events.jsonl")),
+        false,
+        "subagent SessionStart must not independently dispatch session-start hook notifications",
+      );
 
       const tracking = JSON.parse(
         await readFile(join(stateDir, "subagent-tracking.json"), "utf-8"),
@@ -809,7 +868,257 @@ describe("codex native hook dispatch", () => {
       assert.equal(tracking.sessions?.[leaderNativeSessionId]?.leader_thread_id, leaderNativeSessionId);
       assert.equal(tracking.sessions?.[leaderNativeSessionId]?.threads?.[childNativeSessionId]?.kind, "subagent");
       assert.equal(tracking.sessions?.[leaderNativeSessionId]?.threads?.[childNativeSessionId]?.mode, "critic");
+
+      await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: childNativeSessionId,
+          thread_id: childNativeSessionId,
+          turn_id: "child-stop-turn",
+        },
+        { cwd },
+      );
+      assert.equal(
+        existsSync(join(cwd, "hook-events.jsonl")),
+        false,
+        "subagent Stop must not independently dispatch stop hook notifications",
+      );
     } finally {
+      if (originalCodexHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = originalCodexHome;
+      }
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("suppresses child-agent SessionStart hook dispatch at minimal verbosity", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-subagent-session-minimal-"));
+    const originalCodexHome = process.env.CODEX_HOME;
+    try {
+      process.env.CODEX_HOME = join(cwd, "codex-home");
+      await writeJson(join(process.env.CODEX_HOME, ".omx-config.json"), {
+        notifications: {
+          enabled: true,
+          verbosity: "minimal",
+          telegram: { enabled: true, botToken: "123:abc", chatId: "456" },
+        },
+      });
+      const stateDir = join(cwd, ".omx", "state");
+      const canonicalSessionId = "omx-leader-session-minimal";
+      const leaderNativeSessionId = "codex-leader-thread-minimal";
+      const childNativeSessionId = "codex-child-thread-minimal";
+      await mkdir(join(stateDir, "sessions", canonicalSessionId), { recursive: true });
+      await writeSessionStart(cwd, canonicalSessionId, {
+        nativeSessionId: leaderNativeSessionId,
+      });
+      await mkdir(join(cwd, ".omx", "hooks"), { recursive: true });
+      await writeFile(
+        join(cwd, ".omx", "hooks", "record-lifecycle.mjs"),
+        [
+          "import { appendFileSync } from 'node:fs';",
+          "export async function onHookEvent(event) {",
+          "  appendFileSync('hook-events.jsonl', `${JSON.stringify({ event: event.event })}\\n`);",
+          "}",
+        ].join("\n"),
+      );
+      const transcriptPath = join(cwd, "minimal-subagent-rollout.jsonl");
+      await writeFile(
+        transcriptPath,
+        `${JSON.stringify({
+          type: "session_meta",
+          payload: {
+            id: childNativeSessionId,
+            source: {
+              subagent: {
+                thread_spawn: {
+                  parent_thread_id: leaderNativeSessionId,
+                  agent_role: "verifier",
+                },
+              },
+            },
+          },
+        })}\n`,
+      );
+
+      await dispatchCodexNativeHook(
+        {
+          hook_event_name: "SessionStart",
+          cwd,
+          session_id: childNativeSessionId,
+          transcript_path: transcriptPath,
+        },
+        { cwd, sessionOwnerPid: process.pid },
+      );
+
+      assert.equal(
+        existsSync(join(cwd, "hook-events.jsonl")),
+        false,
+        "subagent SessionStart must be suppressed at minimal verbosity",
+      );
+    } finally {
+      if (originalCodexHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = originalCodexHome;
+      }
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("allows explicit child-agent lifecycle hook dispatch when includeChildAgents is enabled", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-subagent-session-include-"));
+    const originalCodexHome = process.env.CODEX_HOME;
+    try {
+      process.env.CODEX_HOME = join(cwd, "codex-home");
+      await writeJson(join(process.env.CODEX_HOME, ".omx-config.json"), {
+        notifications: {
+          enabled: true,
+          verbosity: "session",
+          includeChildAgents: true,
+          telegram: { enabled: true, botToken: "123:abc", chatId: "456" },
+        },
+      });
+      const stateDir = join(cwd, ".omx", "state");
+      const canonicalSessionId = "omx-leader-session-include";
+      const leaderNativeSessionId = "codex-leader-thread-include";
+      const childNativeSessionId = "codex-child-thread-include";
+      await mkdir(join(stateDir, "sessions", canonicalSessionId), { recursive: true });
+      await writeSessionStart(cwd, canonicalSessionId, {
+        nativeSessionId: leaderNativeSessionId,
+      });
+      await mkdir(join(cwd, ".omx", "hooks"), { recursive: true });
+      await writeFile(
+        join(cwd, ".omx", "hooks", "record-lifecycle.mjs"),
+        [
+          "import { appendFileSync } from 'node:fs';",
+          "export async function onHookEvent(event) {",
+          "  appendFileSync('hook-events.jsonl', `${JSON.stringify({ event: event.event })}\\n`);",
+          "}",
+        ].join("\n"),
+      );
+      const transcriptPath = join(cwd, "included-subagent-rollout.jsonl");
+      await writeFile(
+        transcriptPath,
+        `${JSON.stringify({
+          type: "session_meta",
+          payload: {
+            id: childNativeSessionId,
+            source: {
+              subagent: {
+                thread_spawn: {
+                  parent_thread_id: leaderNativeSessionId,
+                  agent_role: "verifier",
+                },
+              },
+            },
+          },
+        })}\n`,
+      );
+
+      await dispatchCodexNativeHook(
+        {
+          hook_event_name: "SessionStart",
+          cwd,
+          session_id: childNativeSessionId,
+          transcript_path: transcriptPath,
+        },
+        { cwd, sessionOwnerPid: process.pid },
+      );
+
+      await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: childNativeSessionId,
+          thread_id: childNativeSessionId,
+          turn_id: "included-child-stop-turn",
+        },
+        { cwd },
+      );
+
+      const hookEvents = await readFile(join(cwd, "hook-events.jsonl"), "utf-8");
+      assert.match(hookEvents, /"event":"session-start"/);
+      assert.match(hookEvents, /"event":"stop"/);
+    } finally {
+      if (originalCodexHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = originalCodexHome;
+      }
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("allows child-agent lifecycle hook dispatch at agent verbosity", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-subagent-session-agent-"));
+    const originalCodexHome = process.env.CODEX_HOME;
+    try {
+      process.env.CODEX_HOME = join(cwd, "codex-home");
+      await writeJson(join(process.env.CODEX_HOME, ".omx-config.json"), {
+        notifications: {
+          enabled: true,
+          verbosity: "agent",
+          telegram: { enabled: true, botToken: "123:abc", chatId: "456" },
+        },
+      });
+      const stateDir = join(cwd, ".omx", "state");
+      const canonicalSessionId = "omx-leader-session-agent";
+      const leaderNativeSessionId = "codex-leader-thread-agent";
+      const childNativeSessionId = "codex-child-thread-agent";
+      await mkdir(join(stateDir, "sessions", canonicalSessionId), { recursive: true });
+      await writeSessionStart(cwd, canonicalSessionId, {
+        nativeSessionId: leaderNativeSessionId,
+      });
+      await mkdir(join(cwd, ".omx", "hooks"), { recursive: true });
+      await writeFile(
+        join(cwd, ".omx", "hooks", "record-lifecycle.mjs"),
+        [
+          "import { appendFileSync } from 'node:fs';",
+          "export async function onHookEvent(event) {",
+          "  appendFileSync('hook-events.jsonl', `${JSON.stringify({ event: event.event })}\\n`);",
+          "}",
+        ].join("\n"),
+      );
+      const transcriptPath = join(cwd, "agent-verbosity-subagent-rollout.jsonl");
+      await writeFile(
+        transcriptPath,
+        `${JSON.stringify({
+          type: "session_meta",
+          payload: {
+            id: childNativeSessionId,
+            source: {
+              subagent: {
+                thread_spawn: {
+                  parent_thread_id: leaderNativeSessionId,
+                  agent_role: "verifier",
+                },
+              },
+            },
+          },
+        })}\n`,
+      );
+
+      await dispatchCodexNativeHook(
+        {
+          hook_event_name: "SessionStart",
+          cwd,
+          session_id: childNativeSessionId,
+          transcript_path: transcriptPath,
+        },
+        { cwd, sessionOwnerPid: process.pid },
+      );
+
+      const hookEvents = await readFile(join(cwd, "hook-events.jsonl"), "utf-8");
+      assert.match(hookEvents, /"event":"session-start"/);
+    } finally {
+      if (originalCodexHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = originalCodexHome;
+      }
       await rm(cwd, { recursive: true, force: true });
     }
   });
@@ -1498,6 +1807,66 @@ describe("codex native hook dispatch", () => {
     }
   });
 
+  it("does not repeat performance-goal reconciliation after a recorded objective mismatch blocker", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-performance-mismatch-blocked-stop-"));
+    try {
+      await writeJson(join(cwd, ".omx", "goals", "performance", "latency", "state.json"), {
+        version: 1,
+        workflow: "performance-goal",
+        slug: "latency",
+        objective: "Reduce latency",
+        status: "blocked",
+        lastValidation: {
+          status: "blocked",
+          evidence: "omx performance-goal complete rejected the fresh get_goal snapshot: Codex goal objective mismatch: expected \"reduce latency\", got \"legacy objective\".",
+          recordedAt: "2026-05-20T00:00:00.000Z",
+        },
+      });
+
+      const result = await dispatchCodexNativeHook({
+        hook_event_name: "Stop",
+        cwd,
+        session_id: "sess-performance-mismatch-blocked-stop",
+        thread_id: "thread-performance-mismatch-blocked-stop",
+        last_assistant_message: "Performance goal complete; next call update_goal({status: \"complete\"}).",
+      }, { cwd });
+
+      assert.notEqual(result.outputJson?.decision, "block");
+      assert.doesNotMatch(JSON.stringify(result.outputJson), /omx performance-goal complete --slug latency/);
+      assert.doesNotMatch(JSON.stringify(result.outputJson), /get_goal snapshot reconciliation/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("does not block Stop for an already complete performance-goal state", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-performance-complete-stop-"));
+    try {
+      await writeJson(join(cwd, ".omx", "goals", "performance", "latency", "state.json"), {
+        version: 1,
+        workflow: "performance-goal",
+        slug: "latency",
+        objective: "Reduce latency",
+        status: "complete",
+        completedAt: "2026-05-20T00:00:00.000Z",
+      });
+
+      const result = await dispatchCodexNativeHook({
+        hook_event_name: "Stop",
+        cwd,
+        session_id: "sess-performance-complete-stop",
+        thread_id: "thread-performance-complete-stop",
+        last_assistant_message: "Performance goal complete; next call update_goal({status: \"complete\"}).",
+      }, { cwd });
+
+      assert.notEqual(result.outputJson?.decision, "block");
+      assert.doesNotMatch(JSON.stringify(result.outputJson), /omx performance-goal complete --slug latency/);
+      assert.doesNotMatch(JSON.stringify(result.outputJson), /get_goal snapshot reconciliation/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("blocks ultragoal Stop for concise generic goal completion claims", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-ultragoal-generic-complete-stop-"));
     try {
@@ -1546,7 +1915,7 @@ describe("codex native hook dispatch", () => {
     }
   });
 
-  it("blocks ultragoal Stop with blocked checkpoint and fresh-thread remediation for completed legacy snapshots", async () => {
+  it("blocks ultragoal Stop with blocked checkpoint and available-goal-context remediation for completed legacy snapshots", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-ultragoal-legacy-stop-"));
     try {
       await writeJson(join(cwd, ".omx", "ultragoal", "goals.json"), {
@@ -1567,7 +1936,8 @@ describe("codex native hook dispatch", () => {
       assert.equal(result.outputJson?.decision, "block");
       assert.match(output, /omx ultragoal checkpoint --goal-id G001-demo --status complete/);
       assert.match(output, /--status blocked/);
-      assert.match(output, /fresh Codex thread/);
+      assert.match(output, /Codex goal context/);
+      assert.doesNotMatch(output, /fresh (?:Codex )?(?:thread|session)s?/i);
       assert.match(output, /Hooks must not mutate Codex goal state/);
     } finally {
       await rm(cwd, { recursive: true, force: true });
@@ -1581,7 +1951,7 @@ describe("codex native hook dispatch", () => {
       await writeJson(join(cwd, ".omx", "ultragoal", "goals.json"), {
         version: 1,
         codexGoalMode: "aggregate",
-        codexObjective: "Complete all ultragoal stories in .omx/ultragoal/goals.json: many micro goals",
+        codexObjective: "Complete the durable ultragoal plan in .omx/ultragoal/goals.json, including later accepted/appended stories, under the original brief constraints; use .omx/ultragoal/ledger.jsonl as the audit trail.",
         activeGoalId: "G001-micro",
         aggregateCompletion: {
           status: "complete",
@@ -1890,7 +2260,185 @@ describe("codex native hook dispatch", () => {
       assert.match(message, /get_goal/);
       assert.match(message, /create_goal/);
       assert.match(message, /update_goal/);
+      assert.match(message, /does not call `\/goal clear`/);
+      assert.match(message, /multiple sequential ultragoal runs/);
       assert.equal(existsSync(join(cwd, ".omx", "state", "sessions", "sess-ultragoal-1", "ultragoal-state.json")), false);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("applies only explicit structured UserPromptSubmit ultragoal steering directives", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-ultragoal-steer-"));
+    try {
+      await createUltragoalPlan(cwd, {
+        brief: "G002-cli-and-prompt-submit-bridge .omx/ultragoal hook steering fixture",
+        goals: [{ title: "First", objective: "Complete first milestone with tests." }],
+      });
+
+      const prose = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "UserPromptSubmit",
+          cwd,
+          session_id: "sess-ultragoal-steer-1",
+          prompt: "Please add a subgoal for docs later; this is normal prose, not a directive.",
+        },
+        { cwd },
+      );
+      assert.equal(prose.outputJson, null);
+      assert.equal((await readUltragoalPlan(cwd)).goals.length, 1);
+
+      const jsonExample = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "UserPromptSubmit",
+          cwd,
+          session_id: "sess-ultragoal-steer-1",
+          prompt: `Here is an inert example:\n\`\`\`json\n${JSON.stringify({
+            kind: "add_subgoal",
+            source: "user_prompt_submit",
+            evidence: "Example JSON should not mutate .omx/ultragoal.",
+            rationale: "Only explicit steering fences or labels are executable.",
+            title: "Inert JSON example",
+            objective: "This example must not be added.",
+          })}\n\`\`\``,
+        },
+        { cwd },
+      );
+      assert.equal(jsonExample.outputJson, null);
+      assert.equal((await readUltragoalPlan(cwd)).goals.length, 1);
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "UserPromptSubmit",
+          cwd,
+          session_id: "sess-ultragoal-steer-1",
+          prompt: `OMX_ULTRAGOAL_STEER: ${JSON.stringify({
+            kind: "add_subgoal",
+            source: "user_prompt_submit",
+            evidence: "Prompt-submit supplied a structured .omx/ultragoal directive for G002-cli-and-prompt-submit-bridge.",
+            rationale: "Add bounded hook regression work while preserving all completion gates.",
+            title: "Prompt bridge regression",
+            objective: "Verify UserPromptSubmit bounded steering bridge with tests.",
+          })}`,
+        },
+        { cwd },
+      );
+
+      const message = String(
+        (result.outputJson as { hookSpecificOutput?: { additionalContext?: string } })?.hookSpecificOutput?.additionalContext || "",
+      );
+      assert.match(message, /bounded \.omx\/ultragoal steering/);
+      assert.match(message, /G002-cli-and-prompt-submit-bridge/);
+      assert.match(message, /accepted/);
+      const plan = await readUltragoalPlan(cwd);
+      assert.equal(plan.goals.length, 2);
+      assert.equal(plan.goals[1]?.title, "Prompt bridge regression");
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("does not apply UserPromptSubmit ultragoal steering from native subagent prompts", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-ultragoal-steer-subagent-"));
+    try {
+      await createUltragoalPlan(cwd, {
+        brief: "G002-cli-and-prompt-submit-bridge .omx/ultragoal subagent steering fixture",
+        goals: [{ title: "First", objective: "Complete first milestone with tests." }],
+      });
+      const stateDir = join(cwd, ".omx", "state");
+      const canonicalSessionId = "sess-ultragoal-parent";
+      const leaderNativeSessionId = "native-ultragoal-parent";
+      const childNativeSessionId = "native-ultragoal-child";
+      const nowIso = new Date().toISOString();
+      await writeJson(join(stateDir, "session.json"), {
+        session_id: canonicalSessionId,
+        native_session_id: leaderNativeSessionId,
+      });
+      await writeJson(join(stateDir, "subagent-tracking.json"), {
+        schemaVersion: 1,
+        sessions: {
+          [canonicalSessionId]: {
+            session_id: canonicalSessionId,
+            leader_thread_id: leaderNativeSessionId,
+            updated_at: nowIso,
+            threads: {
+              [leaderNativeSessionId]: {
+                thread_id: leaderNativeSessionId,
+                kind: "leader",
+                first_seen_at: nowIso,
+                last_seen_at: nowIso,
+                turn_count: 1,
+              },
+              [childNativeSessionId]: {
+                thread_id: childNativeSessionId,
+                kind: "subagent",
+                first_seen_at: nowIso,
+                last_seen_at: nowIso,
+                turn_count: 1,
+                mode: "architect",
+              },
+            },
+          },
+        },
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "UserPromptSubmit",
+          cwd,
+          session_id: childNativeSessionId,
+          thread_id: childNativeSessionId,
+          turn_id: "turn-ultragoal-child-1",
+          prompt: `OMX_ULTRAGOAL_STEER: ${JSON.stringify({
+            kind: "add_subgoal",
+            source: "user_prompt_submit",
+            evidence: "Subagent prompt text must be literal delegated context.",
+            rationale: "Subagent prompts should not mutate the parent .omx/ultragoal ledger.",
+            title: "Subagent should not add this",
+            objective: "This must remain literal prompt text.",
+          })}`,
+        },
+        { cwd },
+      );
+
+      assert.equal(result.outputJson, null);
+      const plan = await readUltragoalPlan(cwd);
+      assert.equal(plan.goals.length, 1);
+      const ledger = await readFile(join(cwd, ".omx/ultragoal/ledger.jsonl"), "utf-8");
+      assert.equal((ledger.match(/"event":"steering_accepted"/g) ?? []).length, 0);
+      assert.equal((ledger.match(/"event":"steering_rejected"/g) ?? []).length, 0);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("dedupes repeated UserPromptSubmit ultragoal steering directives by prompt signature", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-ultragoal-steer-dedupe-"));
+    try {
+      await createUltragoalPlan(cwd, {
+        brief: "G002-cli-and-prompt-submit-bridge .omx/ultragoal dedupe fixture",
+        goals: [{ title: "First", objective: "Complete first milestone with tests." }],
+      });
+      const prompt = `\`\`\`omx-ultragoal-steer
+${JSON.stringify({
+        kind: "add_subgoal",
+        source: "user_prompt_submit",
+        evidence: "Structured prompt-submit directive adds exactly one deduped goal.",
+        rationale: "Use idempotent bridge semantics for repeated hook delivery.",
+        title: "Deduped bridge regression",
+        objective: "Verify repeated UserPromptSubmit steering does not duplicate goals.",
+      })}
+\`\`\``;
+      await dispatchCodexNativeHook({ hook_event_name: "UserPromptSubmit", cwd, session_id: "sess-dedupe", prompt }, { cwd });
+      const second = await dispatchCodexNativeHook({ hook_event_name: "UserPromptSubmit", cwd, session_id: "sess-dedupe", prompt }, { cwd });
+      const message = String(
+        (second.outputJson as { hookSpecificOutput?: { additionalContext?: string } })?.hookSpecificOutput?.additionalContext || "",
+      );
+      assert.match(message, /deduped/);
+      const plan = await readUltragoalPlan(cwd);
+      assert.equal(plan.goals.filter((goal) => goal.title === "Deduped bridge regression").length, 1);
+      const ledger = await readFile(join(cwd, ".omx/ultragoal/ledger.jsonl"), "utf-8");
+      assert.equal((ledger.match(/"event":"steering_accepted"/g) ?? []).length, 1);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
@@ -3768,7 +4316,7 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-slop-git-priority",
-          tool_input: { command: 'git commit -m "quick hack fallback if it fails"' },
+          tool_input: { command: 'OMX_LORE_COMMIT_GUARD=1 git commit -m "quick hack fallback if it fails"' },
         },
         { cwd },
       );
@@ -3791,7 +4339,7 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-git-commit-invalid",
-          tool_input: { command: 'git commit -m "fix tests"' },
+          tool_input: { command: 'OMX_LORE_COMMIT_GUARD=1 git commit -m "fix tests"' },
         },
         { cwd },
       );
@@ -3820,11 +4368,38 @@ exit 0
     }
   });
 
-  it("allows non-Lore git commit messages when the Lore commit guard is explicitly disabled", async () => {
+
+  it("blocks PreToolUse git commit when process env explicitly enables the Lore commit guard", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-git-commit-lore-env-enabled-"));
+    const original = process.env.OMX_LORE_COMMIT_GUARD;
+    try {
+      process.env.OMX_LORE_COMMIT_GUARD = "1";
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-git-commit-lore-env-enabled",
+          tool_input: { command: 'git commit -m "fix tests"' },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal((result.outputJson as { decision?: string } | null)?.decision, "block");
+      assert.match(JSON.stringify(result.outputJson), /Lore protocol/);
+    } finally {
+      if (original === undefined) delete process.env.OMX_LORE_COMMIT_GUARD;
+      else process.env.OMX_LORE_COMMIT_GUARD = original;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("allows non-Lore git commit messages when the Lore commit guard is disabled by default", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-git-commit-lore-disabled-"));
     const original = process.env.OMX_LORE_COMMIT_GUARD;
     try {
-      process.env.OMX_LORE_COMMIT_GUARD = "0";
+      delete process.env.OMX_LORE_COMMIT_GUARD;
       const result = await dispatchCodexNativeHook(
         {
           hook_event_name: "PreToolUse",
@@ -3843,6 +4418,80 @@ exit 0
       else process.env.OMX_LORE_COMMIT_GUARD = original;
       await rm(cwd, { recursive: true, force: true });
     }
+  });
+
+  it("blocks non-Lore git commit messages when the Lore commit guard is enabled in CODEX_HOME config.toml", async () => {
+    await withLoreGuardConfig("1", "config-enabled", async (cwd) => {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-git-commit-lore-config-enabled",
+          tool_input: { command: 'git commit -m "fix: conventional"' },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal((result.outputJson as { decision?: string } | null)?.decision, "block");
+      assert.match(JSON.stringify(result.outputJson), /Lore protocol/);
+    });
+  });
+
+  it("allows non-Lore git commit messages when the Lore commit guard is disabled in CODEX_HOME config.toml", async () => {
+    await withLoreGuardConfig("0", "config-disabled", async (cwd) => {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-git-commit-lore-config-disabled",
+          tool_input: { command: 'git commit -m "fix: use conventional commit"' },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal(result.outputJson, null);
+    });
+  });
+
+  it("lets inline Lore commit guard values override a disabled CODEX_HOME config.toml", async () => {
+    await withLoreGuardConfig("0", "config-inline-enabled", async (cwd) => {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-git-commit-lore-config-inline-enabled",
+          tool_input: { command: 'OMX_LORE_COMMIT_GUARD=1 git commit -m "fix: conventional"' },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal((result.outputJson as { decision?: string } | null)?.decision, "block");
+      assert.match(JSON.stringify(result.outputJson), /Lore protocol/);
+    });
+  });
+
+  it("restores default-off Lore guard when env -u removes a disabled CODEX_HOME config source", async () => {
+    await withLoreGuardConfig("0", "config-codex-home-unset", async (cwd) => {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-git-commit-lore-config-codex-home-unset",
+          tool_input: { command: 'env -u CODEX_HOME git commit -m "fix: conventional"' },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal(result.outputJson, null);
+    });
   });
 
   it("allows non-Lore git commit messages when the Lore commit guard is disabled inline", async () => {
@@ -3866,7 +4515,33 @@ exit 0
     }
   });
 
-  it("does not treat newline-separated Lore guard assignment as inline git commit env", async () => {
+
+  it("allows inline disabled guard to override an enabled process env", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-git-commit-lore-inline-override-disabled-"));
+    const original = process.env.OMX_LORE_COMMIT_GUARD;
+    try {
+      process.env.OMX_LORE_COMMIT_GUARD = "1";
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-git-commit-lore-inline-override-disabled",
+          tool_input: { command: 'OMX_LORE_COMMIT_GUARD=0 git commit -m "fix: conventional"' },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal(result.outputJson, null);
+    } finally {
+      if (original === undefined) delete process.env.OMX_LORE_COMMIT_GUARD;
+      else process.env.OMX_LORE_COMMIT_GUARD = original;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat newline-separated Lore guard assignment as inline git commit opt-in", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-git-commit-lore-newline-assignment-"));
     try {
       const result = await dispatchCodexNativeHook(
@@ -3875,24 +4550,41 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-git-commit-lore-newline-assignment",
-          tool_input: { command: 'OMX_LORE_COMMIT_GUARD=0\ngit commit -m "fix: conventional"' },
+          tool_input: { command: 'OMX_LORE_COMMIT_GUARD=1\ngit commit -m "fix: conventional"' },
         },
         { cwd },
       );
 
       assert.equal(result.omxEventName, "pre-tool-use");
-      assert.equal((result.outputJson as { decision?: string } | null)?.decision, "block");
-      assert.match(JSON.stringify(result.outputJson), /Lore protocol/);
+      assert.equal(result.outputJson, null);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
   });
 
-  it("restores default-on Lore guard when env -u unsets a disabled process env", async () => {
+  it("restores default-off Lore guard when env -u unsets a config.toml fallback", async () => {
+    await withLoreGuardConfig("1", "config-env-unset", async (cwd) => {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-git-commit-lore-config-env-unset",
+          tool_input: { command: 'env -u OMX_LORE_COMMIT_GUARD git commit -m "fix: conventional"' },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal(result.outputJson, null);
+    });
+  });
+
+  it("restores default-off Lore guard when env -u unsets an enabled process env", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-git-commit-lore-env-unset-"));
     const original = process.env.OMX_LORE_COMMIT_GUARD;
     try {
-      process.env.OMX_LORE_COMMIT_GUARD = "0";
+      process.env.OMX_LORE_COMMIT_GUARD = "1";
       const result = await dispatchCodexNativeHook(
         {
           hook_event_name: "PreToolUse",
@@ -3905,8 +4597,7 @@ exit 0
       );
 
       assert.equal(result.omxEventName, "pre-tool-use");
-      assert.equal((result.outputJson as { decision?: string } | null)?.decision, "block");
-      assert.match(JSON.stringify(result.outputJson), /Lore protocol/);
+      assert.equal(result.outputJson, null);
     } finally {
       if (original === undefined) delete process.env.OMX_LORE_COMMIT_GUARD;
       else process.env.OMX_LORE_COMMIT_GUARD = original;
@@ -3914,11 +4605,11 @@ exit 0
     }
   });
 
-  it("restores default-on Lore guard when env -i clears a disabled process env", async () => {
+  it("restores default-off Lore guard when env -i clears an enabled process env", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-git-commit-lore-env-ignore-"));
     const original = process.env.OMX_LORE_COMMIT_GUARD;
     try {
-      process.env.OMX_LORE_COMMIT_GUARD = "0";
+      process.env.OMX_LORE_COMMIT_GUARD = "1";
       const result = await dispatchCodexNativeHook(
         {
           hook_event_name: "PreToolUse",
@@ -3931,8 +4622,7 @@ exit 0
       );
 
       assert.equal(result.omxEventName, "pre-tool-use");
-      assert.equal((result.outputJson as { decision?: string } | null)?.decision, "block");
-      assert.match(JSON.stringify(result.outputJson), /Lore protocol/);
+      assert.equal(result.outputJson, null);
     } finally {
       if (original === undefined) delete process.env.OMX_LORE_COMMIT_GUARD;
       else process.env.OMX_LORE_COMMIT_GUARD = original;
@@ -3940,7 +4630,7 @@ exit 0
     }
   });
 
-  it("keeps Lore commit enforcement enabled for unknown inline guard values", async () => {
+  it("keeps Lore commit enforcement disabled for unknown inline guard values", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-git-commit-lore-inline-unknown-"));
     try {
       const result = await dispatchCodexNativeHook(
@@ -3955,8 +4645,7 @@ exit 0
       );
 
       assert.equal(result.omxEventName, "pre-tool-use");
-      assert.equal((result.outputJson as { decision?: string } | null)?.decision, "block");
-      assert.match(JSON.stringify(result.outputJson), /Lore protocol/);
+      assert.equal(result.outputJson, null);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
@@ -3987,7 +4676,7 @@ exit 0
     }
   });
 
-  it("keeps Lore commit enforcement enabled for unknown guard values", async () => {
+  it("keeps Lore commit enforcement disabled for unknown guard values", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-git-commit-lore-unknown-"));
     const original = process.env.OMX_LORE_COMMIT_GUARD;
     try {
@@ -4004,8 +4693,7 @@ exit 0
       );
 
       assert.equal(result.omxEventName, "pre-tool-use");
-      assert.equal((result.outputJson as { decision?: string } | null)?.decision, "block");
-      assert.match(JSON.stringify(result.outputJson), /Lore protocol/);
+      assert.equal(result.outputJson, null);
     } finally {
       if (original === undefined) delete process.env.OMX_LORE_COMMIT_GUARD;
       else process.env.OMX_LORE_COMMIT_GUARD = original;
@@ -4111,7 +4799,7 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-git-commit-env-invalid",
-          tool_input: { command: 'HUSKY=0 git commit -m "fix tests"' },
+          tool_input: { command: 'OMX_LORE_COMMIT_GUARD=1 HUSKY=0 git commit -m "fix tests"' },
         },
         { cwd },
       );
@@ -4146,7 +4834,7 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-git-commit-option-invalid",
-          tool_input: { command: 'git -c core.editor=true commit -m "fix tests"' },
+          tool_input: { command: 'OMX_LORE_COMMIT_GUARD=1 git -c core.editor=true commit -m "fix tests"' },
         },
         { cwd },
       );
@@ -4181,7 +4869,7 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-git-exe-commit-env-wrapper-invalid",
-          tool_input: { command: 'env git.exe commit -m "fix tests"' },
+          tool_input: { command: 'env OMX_LORE_COMMIT_GUARD=1 git.exe commit -m "fix tests"' },
         },
         { cwd },
       );
@@ -4216,7 +4904,7 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-git-exe-commit-invalid",
-          tool_input: { command: 'git.exe commit -m "fix tests"' },
+          tool_input: { command: 'OMX_LORE_COMMIT_GUARD=1 git.exe commit -m "fix tests"' },
         },
         { cwd },
       );
@@ -4251,7 +4939,7 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-git-exe-commit-env-flag-wrapper-invalid",
-          tool_input: { command: 'env -i PATH=/usr/bin git.exe commit -m "fix tests"' },
+          tool_input: { command: 'env -i PATH=/usr/bin OMX_LORE_COMMIT_GUARD=1 git.exe commit -m "fix tests"' },
         },
         { cwd },
       );
@@ -4286,7 +4974,7 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-git-exe-commit-env-value-wrapper-invalid",
-          tool_input: { command: 'env -u FOO git.exe commit -m "fix tests"' },
+          tool_input: { command: 'env -u FOO OMX_LORE_COMMIT_GUARD=1 git.exe commit -m "fix tests"' },
         },
         { cwd },
       );
@@ -4321,7 +5009,7 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-git-exe-commit-windows-path-invalid",
-          tool_input: { command: '"C:/Program Files/Git/cmd/git.exe" commit -m "fix tests"' },
+          tool_input: { command: 'OMX_LORE_COMMIT_GUARD=1 "C:/Program Files/Git/cmd/git.exe" commit -m "fix tests"' },
         },
         { cwd },
       );
@@ -4356,7 +5044,7 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-git-exe-commit-windows-backslash-path-invalid",
-          tool_input: { command: '"C:\\Program Files\\Git\\cmd\\git.exe" commit -m "fix tests"' },
+          tool_input: { command: 'OMX_LORE_COMMIT_GUARD=1 "C:\\Program Files\\Git\\cmd\\git.exe" commit -m "fix tests"' },
         },
         { cwd },
       );
@@ -4391,7 +5079,7 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-git-commit-path-invalid",
-          tool_input: { command: '/usr/bin/git commit -m "fix tests"' },
+          tool_input: { command: 'OMX_LORE_COMMIT_GUARD=1 /usr/bin/git commit -m "fix tests"' },
         },
         { cwd },
       );
@@ -4426,7 +5114,7 @@ exit 0
           cwd,
           tool_name: "Bash",
           tool_use_id: "tool-git-commit-file",
-          tool_input: { command: "git commit -F .git/COMMIT_EDITMSG" },
+          tool_input: { command: "OMX_LORE_COMMIT_GUARD=1 git commit -F .git/COMMIT_EDITMSG" },
         },
         { cwd },
       );
@@ -4460,7 +5148,7 @@ exit 0
           tool_use_id: "tool-git-commit-missing-omx-coauthor",
           tool_input: {
             command: [
-              'git commit',
+              'OMX_LORE_COMMIT_GUARD=1 git commit',
               '-m "Prevent invalid history from bypassing Lore enforcement"',
               '-m "The native pre-tool-use hook now blocks inline git commit messages that skip Lore trailers or the required OmX co-author trailer."',
               '-m "Constraint: Native PreToolUse can only inspect the Bash command text"',
@@ -4500,7 +5188,7 @@ exit 0
           tool_use_id: "tool-git-commit-valid",
           tool_input: {
             command: [
-              'git commit',
+              'OMX_LORE_COMMIT_GUARD=1 git commit',
               '-m "Prevent invalid history from bypassing Lore enforcement"',
               '-m "The native pre-tool-use hook now blocks inline git commit messages that skip Lore trailers or the required OmX co-author trailer."',
               '-m "Constraint: Native PreToolUse can only inspect the Bash command text"',
@@ -4530,7 +5218,7 @@ exit 0
           tool_use_id: "tool-git-commit-compact-coauthor",
           tool_input: {
             command: [
-              'git commit',
+              'OMX_LORE_COMMIT_GUARD=1 git commit',
               '-m "Launch lvisai.xyz intro site"',
               '-m "Co-authored-by: OmX <omx@oh-my-codex.dev>"',
             ].join(" "),
@@ -4557,7 +5245,7 @@ exit 0
           tool_use_id: "tool-git-commit-compact-trailers",
           tool_input: {
             command: [
-              'git commit',
+              'OMX_LORE_COMMIT_GUARD=1 git commit',
               '-m "Launch lvisai.xyz intro site"',
               '-m "Constraint: Native PreToolUse can only inspect inline Bash command text\nTested: node --test dist/scripts/__tests__/codex-native-hook.test.js\n\nCo-authored-by: OmX <omx@oh-my-codex.dev>"',
             ].join(" "),
@@ -4584,7 +5272,7 @@ exit 0
           tool_use_id: "tool-git-commit-compact-no-separator",
           tool_input: {
             command: [
-              'git commit',
+              'OMX_LORE_COMMIT_GUARD=1 git commit',
               '--message="Launch lvisai.xyz intro site\nCo-authored-by: OmX <omx@oh-my-codex.dev>"',
             ].join(" "),
           },
@@ -5612,6 +6300,91 @@ exit 0
       });
       assert.equal(replay.omxEventName, "stop");
       assert.equal(replay.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("allows Stop when terminal Autopilot run-state shadows stale session ralplan state", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-autopilot-terminal-run-state-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const sessionId = "sess-stop-autopilot-terminal-run-state";
+      await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+      await writeJson(join(stateDir, "sessions", sessionId, "autopilot-state.json"), {
+        active: true,
+        mode: "autopilot",
+        current_phase: "ralplan",
+      });
+      await writeJson(join(stateDir, "sessions", sessionId, "run-state.json"), {
+        version: 1,
+        active: false,
+        mode: "autopilot",
+        outcome: "finish",
+        lifecycle_outcome: "finished",
+        current_phase: "complete",
+        completed_at: "2026-05-20T11:00:00.000Z",
+        updated_at: "2026-05-20T11:00:00.000Z",
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: sessionId,
+          thread_id: "thread-stop-autopilot-terminal-run-state",
+          turn_id: "turn-stop-autopilot-terminal-run-state-1",
+          last_assistant_message: "Done. Verification passed.",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("still blocks Stop while Autopilot ralplan state is genuinely non-terminal", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-autopilot-active-ralplan-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const sessionId = "sess-stop-autopilot-active-ralplan";
+      await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+      await writeJson(join(stateDir, "sessions", sessionId, "autopilot-state.json"), {
+        active: true,
+        mode: "autopilot",
+        current_phase: "ralplan",
+      });
+      await writeJson(join(stateDir, "sessions", sessionId, "run-state.json"), {
+        version: 1,
+        active: true,
+        mode: "autopilot",
+        outcome: "continue",
+        current_phase: "ralplan",
+        updated_at: "2026-05-20T11:00:00.000Z",
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: sessionId,
+          thread_id: "thread-stop-autopilot-active-ralplan",
+          turn_id: "turn-stop-autopilot-active-ralplan-1",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.deepEqual(result.outputJson, {
+        decision: "block",
+        reason:
+          "OMX autopilot is still active (phase: ralplan); continue the task and gather fresh verification evidence before stopping.",
+        stopReason: "autopilot_ralplan",
+        systemMessage: "OMX autopilot is still active (phase: ralplan).",
+      });
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
@@ -8381,16 +9154,29 @@ exit 0
       assert.equal(result.omxEventName, "stop");
       const reason = String(result.outputJson?.reason);
       assert.match(reason, /Ralph completion audit is missing required evidence/);
-      assert.match(reason, /state\.completion_audit = \{ passed: true, prompt_to_artifact_checklist: \[\.\.\.\], verification_evidence: \[\.\.\.\] \}/);
+      assert.match(reason, /set "completion_audit" on the Ralph state object/);
+      assert.doesNotMatch(reason, /state\.completion_audit/);
       assert.match(reason, /repo-relative JSON file/);
       assert.match(reason, /Markdown artifacts and flat top-level checklist\/evidence fields are not accepted/);
       assert.equal(result.outputJson?.stopReason, "ralph_completion_audit_missing_completion_audit");
       const reopened = JSON.parse(await readFile(statePath, "utf-8")) as Record<string, unknown>;
-      assert.equal(reopened.active, true);
-      assert.equal(reopened.current_phase, "verifying");
+      assert.equal(reopened.active, false);
+      assert.equal(reopened.current_phase, "complete");
       assert.equal(reopened.completion_audit_gate, "blocked");
       assert.equal(reopened.completion_audit_missing_reason, "missing_completion_audit");
-      assert.equal(typeof reopened.completed_at, "undefined");
+      assert.equal(reopened.completed_at, "2026-05-10T12:00:00.000Z");
+
+      const repeat = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: sessionId,
+          last_assistant_message: "Done. Ralph complete.",
+        },
+        { cwd },
+      );
+      assert.equal(repeat.outputJson?.stopReason, "ralph_completion_audit_missing_completion_audit");
+      assert.doesNotMatch(String(repeat.outputJson?.reason), /Ralph is still active/);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

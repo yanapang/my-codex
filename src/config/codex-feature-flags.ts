@@ -1,4 +1,5 @@
 export const CODEX_HOOK_FEATURE_FLAGS = ["hooks", "codex_hooks"] as const;
+export const CODEX_PLUGIN_SCOPED_HOOKS_FEATURE_FLAG = "plugin_hooks";
 
 export type CodexHookFeatureFlag = (typeof CODEX_HOOK_FEATURE_FLAGS)[number];
 
@@ -52,6 +53,14 @@ export function isCodexCliVersionAtLeast(
     if (parsed[i] < minimum[i]) return false;
   }
   return true;
+}
+
+export function supportsCodexPluginScopedHooks(options: {
+  featuresListOutput?: string | null;
+} = {}): boolean {
+  return parseCodexFeatureNames(options.featuresListOutput).has(
+    CODEX_PLUGIN_SCOPED_HOOKS_FEATURE_FLAG,
+  );
 }
 
 export function resolveCodexHookFeatureFlag(options: {

@@ -56,6 +56,7 @@ import {
 	buildManagedCodexNativeHookWindowsShimContent,
 	buildManagedCodexNativeHookWindowsShimPath,
 	mergeManagedCodexHooksConfig,
+	removeManagedCodexHooks,
 } from "../config/codex-hooks.js";
 import {
 	getLegacyUnifiedMcpRegistryCandidate,
@@ -106,7 +107,7 @@ import {
 	upsertLocalOmxPluginMcpServerEnablement,
 	hasLocalOmxPluginMcpServerRegistrations,
 } from "./plugin-marketplace.js";
-import { resolveCodexHookFeatureFlagForCli } from "./codex-feature-probe.js";
+import { resolveCodexHookFeatureSupportForCli } from "./codex-feature-probe.js";
 
 async function resolveStatusLinePresetForSetup(
 	projectRoot: string,
@@ -897,6 +898,7 @@ interface OmxPluginCacheManifest {
 	name: string | null;
 	version: string | null;
 	skills: string | null;
+	hooks: string | null;
 }
 
 async function readPluginManifestSummary(
@@ -909,11 +911,13 @@ async function readPluginManifestSummary(
 			name?: unknown;
 			version?: unknown;
 			skills?: unknown;
+			hooks?: unknown;
 		};
 		return {
 			name: typeof manifest.name === "string" ? manifest.name : null,
 			version: typeof manifest.version === "string" ? manifest.version : null,
 			skills: typeof manifest.skills === "string" ? manifest.skills : null,
+			hooks: typeof manifest.hooks === "string" ? manifest.hooks : null,
 		};
 	} catch {
 		return null;
@@ -1019,12 +1023,22 @@ async function refreshOmxPluginDiscoveryCache(
 		const versionChanged =
 			expectedVersion !== null && manifest.version !== expectedVersion;
 		const skillsPointerChanged = manifest.skills !== "./skills/";
+		const hooksPointerChanged = manifest.hooks !== "./hooks/hooks.json";
+		const hookFilesMissing = !existsSync(join(cacheDir, "hooks", "hooks.json"))
+			|| !existsSync(join(cacheDir, "hooks", "codex-native-hook.mjs"))
+			|| !existsSync(join(cacheDir, "hooks", "omx-command.json"));
 		const skillListChanged =
 			expectedSkillNames !== null &&
 			cachedSkillNames !== null &&
 			JSON.stringify(cachedSkillNames) !== JSON.stringify(expectedSkillNames);
 
-		if (!versionChanged && !skillsPointerChanged && !skillListChanged) continue;
+		if (
+			!versionChanged &&
+			!skillsPointerChanged &&
+			!hooksPointerChanged &&
+			!hookFilesMissing &&
+			!skillListChanged
+		) continue;
 
 		staleDirs.push(cacheDir);
 		if (!options.dryRun) {
@@ -1038,6 +1052,10 @@ async function refreshOmxPluginDiscoveryCache(
 				skillsPointerChanged
 					? `skills pointer ${manifest.skills ?? "missing"} -> ./skills/`
 					: null,
+				hooksPointerChanged
+					? `hooks pointer ${manifest.hooks ?? "missing"} -> ./hooks/hooks.json`
+					: null,
+				hookFilesMissing ? "plugin hook files missing" : null,
 				skillListChanged ? "skill directory list changed" : null,
 			].filter(Boolean);
 			console.log(
@@ -1489,6 +1507,42 @@ async function ensurePluginMarketplaceRegistration(
 	return "updated";
 }
 
+async function cleanupPluginModeManagedHooksJson(
+	existingHooksContent: string | null,
+	hooksPath: string,
+	backupContext: SetupBackupContext,
+	summary: SetupCategorySummary,
+	options: Pick<SetupOptions, "dryRun" | "verbose">,
+): Promise<void> {
+	if (existingHooksContent === null) {
+		summary.unchanged += 1;
+		return;
+	}
+
+	const removed = removeManagedCodexHooks(existingHooksContent);
+	if (removed.removedCount === 0) {
+		summary.unchanged += 1;
+		return;
+	}
+
+	if (await ensureBackup(hooksPath, true, backupContext, options)) {
+		summary.backedUp += 1;
+	}
+	if (!options.dryRun) {
+		if (removed.nextContent === null) {
+			await rm(hooksPath, { force: true });
+		} else {
+			await writeFile(hooksPath, removed.nextContent);
+		}
+	}
+	summary.removed += removed.removedCount;
+	if (options.verbose) {
+		console.log(
+			`  ${options.dryRun ? "would remove" : "removed"} ${removed.removedCount} legacy setup-managed hook wrapper(s) from ${hooksPath}`,
+		);
+	}
+}
+
 async function applyPluginModeHooksConfig(
 	configPath: string,
 	hooksPath: string,
@@ -1498,20 +1552,25 @@ async function applyPluginModeHooksConfig(
 	summary: SetupCategorySummary,
 	options: Pick<SetupOptions, "dryRun" | "verbose"> & {
 		codexHookFeatureFlag: CodexHookFeatureFlag;
+		pluginScopedHooks: boolean;
 	},
 ): Promise<void> {
 	const existingConfig = existsSync(configPath)
 		? await readFile(configPath, "utf-8")
 		: "";
-	const nextConfig = upsertManagedCodexHookTrustState(
-		upsertPluginModeRuntimeFeatureFlags(
-			stripManagedCodexHookTrustState(existingConfig),
-			options.codexHookFeatureFlag,
-		),
-		pkgRoot,
-		hooksPath,
-		{ platform: process.platform, codexHomeDir },
+	const nextConfigBase = upsertPluginModeRuntimeFeatureFlags(
+		stripManagedCodexHookTrustState(existingConfig),
+		options.codexHookFeatureFlag,
+		{ pluginScopedHooks: options.pluginScopedHooks },
 	);
+	const nextConfig = options.pluginScopedHooks
+		? nextConfigBase
+		: upsertManagedCodexHookTrustState(
+			nextConfigBase,
+			pkgRoot,
+			hooksPath,
+			{ platform: process.platform, codexHomeDir },
+		);
 	if (nextConfig !== existingConfig) {
 		if (
 			await ensureBackup(
@@ -1535,33 +1594,46 @@ async function applyPluginModeHooksConfig(
 	const existingHooksContent = existsSync(hooksPath)
 		? await readFile(hooksPath, "utf-8")
 		: null;
-	const hooksConfig = mergeManagedCodexHooksConfig(
-		existingHooksContent,
-		pkgRoot,
-		hooksPath,
-		{ platform: process.platform, codexHomeDir },
-	);
-	await syncManagedContent(
-		hooksConfig,
-		hooksPath,
-		summary,
-		backupContext,
-		options,
-		`native hooks ${hooksPath}`,
-	);
-	await syncManagedWindowsNativeHookShim(
-		codexHomeDir,
-		pkgRoot,
-		summary,
-		backupContext,
-		options,
-	);
+	if (options.pluginScopedHooks) {
+		await cleanupPluginModeManagedHooksJson(
+			existingHooksContent,
+			hooksPath,
+			backupContext,
+			summary,
+			options,
+		);
+	} else {
+		const hooksConfig = mergeManagedCodexHooksConfig(
+			existingHooksContent,
+			pkgRoot,
+			hooksPath,
+			{ platform: process.platform, codexHomeDir },
+		);
+		await syncManagedContent(
+			hooksConfig,
+			hooksPath,
+			summary,
+			backupContext,
+			options,
+			`native hooks ${hooksPath}`,
+		);
+		await syncManagedWindowsNativeHookShim(
+			codexHomeDir,
+			pkgRoot,
+			summary,
+			backupContext,
+			options,
+		);
+	}
 
-		if (options.verbose) {
-			console.log(
-				`  ${options.dryRun ? "would configure" : "configured"} plugin-mode native hooks and runtime feature flags at ${hooksPath}`,
-			);
-		}
+	if (options.verbose) {
+		const surface = options.pluginScopedHooks
+			? "official plugin-scoped hooks"
+			: `legacy native hooks at ${hooksPath}`;
+		console.log(
+			`  ${options.dryRun ? "would configure" : "configured"} plugin-mode ${surface} and runtime feature flags`,
+		);
+	}
 }
 
 async function applyPluginDeveloperInstructionsDefault(
@@ -2044,13 +2116,18 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 	console.log("[5/8] Updating config.toml...");
 	let resolvedConfig = "";
 	let omxManagesTui = false;
-	const codexHookFeatureFlag = resolveCodexHookFeatureFlagForCli({
+	const codexHookFeatureSupport = resolveCodexHookFeatureSupportForCli({
 		codexFeaturesProbe: options.codexFeaturesProbe,
 		codexVersionProbe: options.codexVersionProbe,
 	});
+	const codexHookFeatureFlag = codexHookFeatureSupport.hookFeatureFlag;
+	const pluginScopedHooksSupported = codexHookFeatureSupport.pluginScopedHooks;
 	if (verbose) {
 		console.log(
 			`  Native Codex hook feature flag: [features].${codexHookFeatureFlag}`,
+		);
+		console.log(
+			`  Plugin-scoped Codex hooks: ${pluginScopedHooksSupported ? "supported" : "not reported; using legacy setup fallback"}`,
 		);
 	}
 	const shouldSyncSharedMcpRegistry = resolvedMcpMode.mcpMode === "compat";
@@ -2107,7 +2184,12 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 			scopeDirs.codexHomeDir,
 			backupContext,
 			summary.config,
-			{ dryRun, verbose, codexHookFeatureFlag },
+			{
+				dryRun,
+				verbose,
+				codexHookFeatureFlag,
+				pluginScopedHooks: pluginScopedHooksSupported,
+			},
 		);
 		const pluginMarketplaceResult = await ensurePluginMarketplaceRegistration(
 			scopeDirs.codexConfigFile,
@@ -2180,7 +2262,9 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 			? await readFile(scopeDirs.codexConfigFile, "utf-8")
 			: "";
 		console.log(
-			`  Native Codex hooks and runtime feature flags refresh complete (${scopeDirs.codexHooksFile}; hooks, goals).\n`,
+			pluginScopedHooksSupported
+				? "  Plugin-scoped Codex hooks and runtime feature flags refresh complete (plugin_hooks, goals).\n"
+				: `  Native Codex hooks fallback and runtime feature flags refresh complete (${scopeDirs.codexHooksFile}; hooks, goals).\n`,
 		);
 
 		if (usePluginDeveloperInstructionsDefault) {

@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   parseCodexFeatureNames,
   resolveCodexHookFeatureFlag,
+  supportsCodexPluginScopedHooks,
 } from "../codex-feature-flags.js";
 
 describe("Codex feature flag resolution", () => {
@@ -28,6 +29,18 @@ describe("Codex feature flag resolution", () => {
       resolveCodexHookFeatureFlag({ featuresListOutput: output }),
       "codex_hooks",
     );
+  });
+
+  it("detects official plugin-scoped hook support separately from legacy hooks", () => {
+    const output = [
+      "hooks                                   stable             true",
+      "plugin_hooks                            experimental       true",
+      "goals                                   experimental       true",
+      "",
+    ].join("\n");
+
+    assert.equal(supportsCodexPluginScopedHooks({ featuresListOutput: output }), true);
+    assert.equal(supportsCodexPluginScopedHooks({ featuresListOutput: "hooks stable true" }), false);
   });
 
   it("uses version fallback for current Codex releases when feature listing is unavailable", () => {

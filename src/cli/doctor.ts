@@ -80,6 +80,12 @@ interface Check {
 	message: string;
 }
 
+interface NativeHookDistSmokeOptions {
+	packageRoot?: string;
+	nodePath?: string;
+	runner?: typeof spawnSync;
+}
+
 type DoctorSetupScope = "user" | "project";
 
 interface DoctorScopeResolution {
@@ -191,6 +197,7 @@ export async function doctor(options: DoctorOptions = {}): Promise<void> {
 
 	// Check 4.25: Native hooks coverage
 	checks.push(await checkNativeHooks(paths.hooksPath, paths.configPath));
+	checks.push(await checkNativeHookDistSmoke());
 	if (options.verbose) {
 		const postCompactRuntimeCheck = await checkNativePostCompactHookRuntime(
 			paths.hooksPath,
@@ -951,17 +958,35 @@ async function checkExploreRouting(configPath: string): Promise<Check> {
 	}
 }
 
+const LORE_COMMIT_GUARD_EXPLICIT_OPT_OUT_VALUES = new Set([
+	"0",
+	"false",
+	"no",
+	"off",
+]);
+
 async function checkLoreCommitGuard(configPath: string): Promise<Check> {
 	const envValue = process.env[OMX_LORE_COMMIT_GUARD_ENV];
-	if (
-		typeof envValue === "string" &&
-		!isLoreCommitGuardEnabled(process.env)
-	) {
+	if (typeof envValue === "string") {
+		if (isLoreCommitGuardEnabled(process.env)) {
+			return {
+				name: "Lore commit guard",
+				status: "pass",
+				message: "enabled by environment opt-in",
+			};
+		}
+		if (!isExplicitLoreCommitGuardOptOut(envValue)) {
+			return {
+				name: "Lore commit guard",
+				status: "warn",
+				message:
+					"invalid environment value; Lore commit enforcement is disabled until OMX_LORE_COMMIT_GUARD is set to 1, true, yes, or on",
+			};
+		}
 		return {
 			name: "Lore commit guard",
-			status: "warn",
-			message:
-				"disabled by environment override; enable with OMX_LORE_COMMIT_GUARD=1 (or remove the explicit opt-out)",
+			status: "pass",
+			message: "disabled by environment/default opt-out; enable with OMX_LORE_COMMIT_GUARD=1",
 		};
 	}
 
@@ -969,7 +994,7 @@ async function checkLoreCommitGuard(configPath: string): Promise<Check> {
 		return {
 			name: "Lore commit guard",
 			status: "pass",
-			message: "enabled by default (config.toml not found yet)",
+			message: "disabled by default (config.toml not found yet)",
 		};
 	}
 
@@ -983,24 +1008,36 @@ async function checkLoreCommitGuard(configPath: string): Promise<Check> {
 			parsed?.shell_environment_policy?.set?.[OMX_LORE_COMMIT_GUARD_ENV] ??
 			parsed?.env?.[OMX_LORE_COMMIT_GUARD_ENV];
 
-		if (
-			typeof configuredValue === "string" &&
-			!isLoreCommitGuardEnabled({
+		if (typeof configuredValue === "string") {
+			if (isLoreCommitGuardEnabled({
 				[OMX_LORE_COMMIT_GUARD_ENV]: configuredValue,
-			})
-		) {
+			})) {
+				return {
+					name: "Lore commit guard",
+					status: "pass",
+					message: "enabled by config.toml opt-in",
+				};
+			}
+			if (!isExplicitLoreCommitGuardOptOut(configuredValue)) {
+				return {
+					name: "Lore commit guard",
+					status: "warn",
+					message:
+						'invalid config.toml value; Lore commit enforcement is disabled until OMX_LORE_COMMIT_GUARD = "1" (or true/yes/on) is set under [shell_environment_policy.set]',
+				};
+			}
 			return {
 				name: "Lore commit guard",
-				status: "warn",
+				status: "pass",
 				message:
-					'disabled in config.toml; set OMX_LORE_COMMIT_GUARD = "1" under [shell_environment_policy.set] to restore default Lore commit enforcement',
+					'disabled in config.toml/default opt-out; set OMX_LORE_COMMIT_GUARD = "1" under [shell_environment_policy.set] to enable Lore commit enforcement',
 			};
 		}
 
 		return {
 			name: "Lore commit guard",
 			status: "pass",
-			message: "enabled by default",
+			message: "disabled by default",
 		};
 	} catch {
 		return {
@@ -1009,6 +1046,12 @@ async function checkLoreCommitGuard(configPath: string): Promise<Check> {
 			message: "cannot read config.toml for Lore commit guard check",
 		};
 	}
+}
+
+function isExplicitLoreCommitGuardOptOut(value: string): boolean {
+	return LORE_COMMIT_GUARD_EXPLICIT_OPT_OUT_VALUES.has(
+		value.trim().toLowerCase(),
+	);
 }
 
 async function checkNativeHooks(
@@ -1075,6 +1118,85 @@ async function checkNativeHooks(
 			status: "fail",
 			message: "cannot read hooks.json",
 		};
+	}
+}
+
+export async function checkNativeHookDistSmoke(
+	options: NativeHookDistSmokeOptions = {},
+): Promise<Check> {
+	const packageRoot = options.packageRoot ?? getPackageRoot();
+	const nodePath = options.nodePath ?? process.execPath;
+	const runner = options.runner ?? spawnSync;
+	const scriptPath = join(packageRoot, "dist", "scripts", "codex-native-hook.js");
+	const packageJsonPath = join(packageRoot, "package.json");
+	let packageVersion = "current";
+	try {
+		const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf-8")) as { version?: unknown };
+		if (typeof packageJson.version === "string" && packageJson.version.trim()) {
+			packageVersion = packageJson.version.trim();
+		}
+	} catch {
+		// Keep the generic recovery copy when package metadata is not readable.
+	}
+
+	if (!existsSync(scriptPath)) {
+		return {
+			name: "Native hook dist smoke",
+			status: "fail",
+			message: `installed native hook script is missing at ${scriptPath}; reinstall oh-my-codex and run "omx setup --force"`,
+		};
+	}
+
+	const smokeCwd = await mkdtemp(join(tmpdir(), "omx-doctor-native-hook-dist-"));
+	try {
+		const payload = JSON.stringify({
+			hook_event_name: "UserPromptSubmit",
+			session_id: "omx-doctor-native-hook-dist-smoke",
+			transcript_path: join(smokeCwd, "nonexistent-transcript.jsonl"),
+			cwd: smokeCwd,
+			prompt: "doctor smoke test",
+		});
+		const result = runner(nodePath, [scriptPath], {
+			cwd: smokeCwd,
+			encoding: "utf-8",
+			env: {
+				...process.env,
+				OMX_NATIVE_HOOK_DOCTOR_SMOKE: "1",
+				OMX_ROOT: join(smokeCwd, ".omx-doctor-root"),
+				OMX_SESSION_ID: "omx-doctor-native-hook-dist-smoke",
+				OMX_SOURCE_CWD: smokeCwd,
+				OMX_STARTUP_CWD: smokeCwd,
+			},
+			input: payload,
+			timeout: 5_000,
+		});
+
+		if (result.error) {
+			return {
+				name: "Native hook dist smoke",
+				status: "fail",
+				message: `installed native hook dist smoke failed to run (${result.error.message}); reinstall oh-my-codex and run "omx setup --force"`,
+			};
+		}
+		if (result.status !== 0) {
+			const stderr = (result.stderr || "").trim();
+			const stdout = (result.stdout || "").trim();
+			const detail = stderr || stdout || `exit ${result.status}`;
+			return {
+				name: "Native hook dist smoke",
+				status: "fail",
+				message: `installed native hook dist failed a minimal UserPromptSubmit smoke (${detail}); reinstall with "npm install -g oh-my-codex@${packageVersion} --force --min-release-age=0 --before=" and then run "omx setup --force"`,
+			};
+		}
+
+		return {
+			name: "Native hook dist smoke",
+			status: "pass",
+			message:
+				"installed dist/scripts/codex-native-hook.js parsed and accepted a minimal UserPromptSubmit payload",
+		};
+	} finally {
+		await rm(smokeCwd, { recursive: true, force: true });
 	}
 }
 
