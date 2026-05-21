@@ -1297,10 +1297,16 @@ function normalizeMadmaxDetachedLaunchArgv(argv: readonly string[]): string[] {
 export function buildMadmaxDetachedLaunchContextKey(
   sourceCwd: string,
   argv: readonly string[],
+  runIdentity = "",
 ): string {
+  // The boxed run root is part of the lock identity for auto-isolated madmax
+  // launches. That lets independent `omx --madmax --high` sessions share the
+  // same source cwd/argv without contending on one active-detached lock, while
+  // callers that intentionally reuse the same boxed context keep one key.
   const payload = JSON.stringify({
     source_cwd: canonicalizeLaunchCwd(sourceCwd),
     argv: normalizeMadmaxDetachedLaunchArgv(argv),
+    run_identity: runIdentity,
   });
   return createHash("sha256").update(payload).digest("hex").slice(0, 32);
 }
@@ -1436,7 +1442,7 @@ export function createMadmaxIsolatedRoot(
   const suffix = Math.random().toString(16).slice(2, 6);
   const runDir = join(runsRoot, sanitizeRunIdSegment(`run-${stamp}-${suffix}`));
   mkdirSync(runDir, { recursive: false });
-  const detachedLaunchContext = buildMadmaxDetachedLaunchContextKey(sourceCwd, argv);
+  const detachedLaunchContext = buildMadmaxDetachedLaunchContextKey(sourceCwd, argv, runDir);
 
   const metadata = {
     launcher: "omx --madmax",
