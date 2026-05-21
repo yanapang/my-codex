@@ -1279,7 +1279,7 @@ async function checkNativeHooks(
 		return {
 			name: "Native hooks",
 			status: "pass",
-			message: `hooks.json not found at ${hooksPath} yet (expected before first setup)`,
+			message: "hooks.json not found yet (expected before first setup)",
 		};
 	}
 
