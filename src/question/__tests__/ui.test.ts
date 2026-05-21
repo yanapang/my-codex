@@ -428,7 +428,7 @@ describe('question ui arrow navigation', () => {
 
 
 describe('question ui batch wizard', () => {
-  it('renders a review frame for Other selections before free-text collection', () => {
+  it('signals needsOtherText before advancing when Other is picked, then renders the inline text into review', () => {
     const record = makeRecord({
       questions: [
         {
@@ -444,10 +444,46 @@ describe('question ui batch wizard', () => {
     });
     let state = createInitialQuestionWizardState(record);
     state = applyQuestionWizardKey(record, state, { name: 'down' }).state;
-    state = applyQuestionWizardKey(record, state, { name: 'enter' }).state;
 
-    assert.equal(state.mode, 'review');
-    assert.match(renderQuestionWizardFrame(record, state), /Custom/);
+    const firstAdvance = applyQuestionWizardKey(record, state, { name: 'enter' });
+    assert.equal(firstAdvance.needsOtherText, 0, 'wizard must request inline Other text before advancing');
+    assert.equal(firstAdvance.submit, false);
+    assert.equal(firstAdvance.state.mode, 'answering', 'wizard must stay in answering mode until Other text is collected');
+
+    state = { ...firstAdvance.state, otherTexts: ['my custom answer'] };
+
+    const secondAdvance = applyQuestionWizardKey(record, state, { name: 'enter' });
+    assert.equal(secondAdvance.needsOtherText, undefined, 'wizard must not re-prompt once Other text is stored');
+    assert.equal(secondAdvance.state.mode, 'review', 'wizard advances to review after inline text is captured');
+    assert.match(renderQuestionWizardFrame(record, secondAdvance.state), /Custom: my custom answer/);
+  });
+
+  it('clears stored Other text when the user navigates back and changes the selection away from Other', () => {
+    const record = makeRecord({
+      questions: [
+        {
+          id: 'first',
+          question: 'First?',
+          options: [{ label: 'A', value: 'a' }, { label: 'B', value: 'b' }],
+          allow_other: true,
+          other_label: 'Custom',
+          multi_select: false,
+          type: 'single-answerable',
+        },
+      ],
+    });
+    let state = createInitialQuestionWizardState(record);
+    state = applyQuestionWizardKey(record, state, { name: 'down' }).state;
+    state = applyQuestionWizardKey(record, state, { name: 'down' }).state;
+    const advance = applyQuestionWizardKey(record, state, { name: 'enter' });
+    assert.equal(advance.needsOtherText, 0);
+    state = { ...advance.state, otherTexts: ['stale custom text'] };
+
+    const moveToA = applyQuestionWizardKey(record, state, { name: 'up' });
+    state = moveToA.state;
+    const moveToA2 = applyQuestionWizardKey(record, state, { name: 'up' });
+    state = moveToA2.state;
+    assert.equal(state.otherTexts[0], undefined, 'wizard must drop stale Other text once the user cursors away from Other');
   });
 
   it('submits a batch after navigating back and editing an earlier answer', async () => {
