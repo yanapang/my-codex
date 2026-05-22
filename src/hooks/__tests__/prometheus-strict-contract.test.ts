@@ -256,6 +256,21 @@ describe('prometheus-strict clean-room contract', () => {
     assert.match(metis, /(?:explicit[\s\S]{0,20}(?:new feature|from scratch|greenfield)|name a new module|require[\s\S]{0,40}explicit)/i, 'metis <intent_classification> must require explicit greenfield keywords before classifying as build-from-scratch');
   });
 
+  it('imports the OMO Prometheus judge-absorption pattern: gap triage, silent absorption, and single-decision test-strategy', () => {
+    const metis = readRepoFile(join(repoRoot, 'prompts', 'prometheus-strict-metis.md'));
+
+    assert.match(metis, /<gap_triage>[\s\S]+<\/gap_triage>|gap[\s\S]{0,40}triage|CRITICAL[\s\S]{0,200}MINOR[\s\S]{0,200}AMBIGUOUS/i, 'metis must declare a gap-triage classification (CRITICAL / MINOR / AMBIGUOUS) for self_review');
+    assert.match(metis, /CRITICAL[\s\S]{0,300}(?:emit|ask|user question|surfaces)/i, 'metis gap triage must route CRITICAL gaps to the user question slate');
+    assert.match(metis, /MINOR[\s\S]{0,300}(?:self[-\s]?(?:fix|resolve|absorb)|stated assumption|safe assumption|continue)/i, 'metis gap triage must route MINOR gaps to a stated assumption and continue, NOT to a user question');
+    assert.match(metis, /AMBIGUOUS[\s\S]{0,300}(?:default|safe default|industry default|conservative default)/i, 'metis gap triage must route AMBIGUOUS gaps to a default with explicit annotation');
+
+    assert.match(metis, /<silent_absorption>[\s\S]+<\/silent_absorption>|silent[\s\S]{0,30}absorption|do not ask additional/i, 'metis must declare a silent-absorption rule: low-leverage gaps must be answered by Metis itself, not emitted as user questions');
+    assert.match(metis, /(?:repo[\s\S]{0,30}context|prior turn|industry default|sensible default)[\s\S]{0,400}(?:assumption|continue|absorb)/i, 'metis silent_absorption must list the inference sources (repo context, prior turns, industry defaults) that replace user questions');
+
+    assert.match(metis, /(?:single (?:bundled|combined|consolidated) test[\s-]?strategy|one test[\s-]?strategy decision|test[\s-]?infra[\s\S]{0,80}single decision)/i, 'metis intent_classification for build/refactor/test-infra must consolidate test strategy into a single bundled decision instead of three separate questions');
+    assert.match(metis, /(?:TDD|test[\s-]?first)[\s\S]{0,300}(?:after[\s-]?implementation|post[\s-]?implementation|agent[\s-]?QA|none)/i, 'metis test-strategy decision must offer the canonical option set (TDD / test-after-implementation / agent-QA only / no automated tests)');
+  });
+
   it('enforces the strengthened operator contract: iterative interview, rule-clearance, post-plan Metis, Momus bounded retry, and Oracle 2-pass', () => {
     const skill = readRepoFile(skillPath);
     const metis = readRepoFile(join(repoRoot, 'prompts', 'prometheus-strict-metis.md'));

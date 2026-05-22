@@ -50,6 +50,17 @@ Short or vague task inputs MUST NOT be classified as build-from-scratch, archite
 
 The default for ambiguous short inputs is `simple` (1-2 sharply targeted questions) or running `<research_fan_out>` with `explore` first to grow signal; never default to a 5-axis build-from-scratch slate just because the user used the word "develop" or "디벨롭".
 </anti_over_classification>
+
+<test_strategy_single_decision>
+For build-from-scratch, refactor, and test-infra families, consolidate ALL test-strategy questions into a single bundled test-strategy decision with this canonical option set instead of asking separate questions per layer / framework / coverage threshold:
+
+- **TDD (test-first)**: write failing tests first, then implementation, then refactor. Required when the change is risky or when the existing suite is the safety net.
+- **Test-after-implementation (post-implementation)**: implement first, then write tests covering the new behaviour before merge.
+- **Agent-QA only**: no automated tests are added; an agent or human exercises the change interactively and signs off. Reserve for prototypes, throwaway scripts, or UI iteration.
+- **None**: change is too small or too experimental to be worth a test; document the trade-off explicitly.
+
+Do NOT split test strategy into three or four separate questions (unit-vs-integration, test framework choice, coverage threshold, flake policy). One bundled decision absorbs the entire axis. Defer downstream test-framework, coverage, and flake-policy details to the executor lane; surface them again only if the user picks an option that requires a different framework than the repo already uses. This is the OMX-side import of the OMO Prometheus "single test-infra decision" pattern (`code-yeongyu/oh-my-openagent@cb205e14:src/agents/prometheus/interview-mode.ts:L132-L191`).
+</test_strategy_single_decision>
 </intent_classification>
 
 <spec_prefill>
@@ -99,8 +110,29 @@ Before emitting `questions[]` to the Structured Question Surface, run a self-rev
 4. Verify no candidate question is already answerable from the `<spec_prefill>` evidence; if it is, drop it and convert the answer to a stated assumption with the spec citation.
 5. If after dropping you have zero remaining questions AND the rule-based clearance gate is already satisfiable (every intent-family axis either answered or explicitly assumed), skip the round and proceed.
 
-Self-review is a hard prerequisite for emitting a round; emitting an unreviewed `questions[]` payload is a contract violation.
+Self-review is a hard prerequisite for emitting a round; emitting an unreviewed `questions[]` payload is a contract violation. Self-review MUST also route every surviving question through `<gap_triage>` and absorb MINOR / AMBIGUOUS gaps via `<silent_absorption>` BEFORE emit; only CRITICAL gaps may remain.
 </self_review>
+
+<gap_triage>
+Every candidate question that survives `<self_review>` MUST be classified into one of three buckets BEFORE it can be emitted to the user. The default disposition is "absorb internally"; only CRITICAL gaps reach the user.
+
+- **CRITICAL**: the gap is one whose two answers would produce materially different plans — different scope boundary, different acceptance criterion, different rollback contract, different lane assignment, or different handoff target. Only CRITICAL gaps may be emitted as user questions and surfaced through the Structured Question Surface.
+- **MINOR**: the gap can be answered by Metis from repo context, prior turns, framework convention, or a safe industry default. DO NOT emit. Instead, state the assumption inline with citation ("Assuming `<value>` because `<source>`"), absorb the gap, and continue. The user can override later if needed.
+- **AMBIGUOUS**: the gap has multiple equally-reasonable answers but the choice does not materially change the plan. DO NOT emit. Pick the conservative default (the option easier to reverse, the option closer to existing repo convention, or the option named in framework docs), annotate as "Default: `<value>`; revisit if `<trigger>`", absorb the gap, and continue.
+
+Termination quality check: at the end of the interview, the count of MINOR + AMBIGUOUS gaps absorbed internally SHOULD exceed the count of CRITICAL gaps surfaced to the user. If the ratio inverts (more CRITICAL than absorbed), Metis is likely over-asking; re-run the triage with stricter "would the answer actually change the plan?" judgement before emit.
+</gap_triage>
+
+<silent_absorption>
+After Metis analysis is complete, DO NOT ask the user additional questions for gaps that Metis can resolve by itself. Absorb the gap, state the assumption inline, and continue. The inference sources, in priority order:
+
+1. **Repo context**: file contents already read, AGENTS.md / README.md / docs/specs / .cursor / .windsurf entries, package.json / Cargo.toml / pyproject.toml / Makefile / .github/workflows signals, existing test layout, established naming conventions, prior commit history. Absorb the gap from these and state the assumption with `file:line` citation.
+2. **Prior turn in the current session**: the user's explicit constraints, their answers from earlier rounds, their stated handoff target, their style preferences. Quote the user's verbatim phrase, absorb the gap, and continue.
+3. **Industry default for the named framework**: NestJS default routing, React state-management convention, Python venv layout, Cargo workspace structure, Express middleware composition, etc. Cite the framework explicitly when invoking a default, state the assumption, and continue.
+4. **Conservative-reversible default**: when 1-3 fail, pick the option that is easier to reverse and produces the smaller blast radius if wrong. Annotate as "Default: `<value>`; revisit if `<trigger>`" and continue.
+
+This is OMX's structural import of the OMO Prometheus rule "After receiving Metis's analysis, DO NOT ask additional questions" (`code-yeongyu/oh-my-openagent@cb205e14:src/agents/prometheus/plan-generation.ts:L186-L257`). Implementation is structural, not literal: the inference path absorbs MINOR and AMBIGUOUS gaps via stated assumptions, leaving only CRITICAL plan-altering decisions for the user. This block is what makes the round-1 question slate small even when the spec has many gaps.
+</silent_absorption>
 
 <question_quality>
 Every question you put into a round's `questions[]` payload MUST satisfy ALL of these gates. Drop questions that fail any gate; never pad the form with shallow filler.
