@@ -55,17 +55,29 @@ Every Metis/Momus/Oracle question to the user MUST go through the surface-approp
 - When neither structured surface can render (non-tmux Codex CLI, piped runs, CI), list the round's independent questions as a numbered prose block (`Q1: ... Q2: ... Q3: ...`) and wait for all answers in one user turn; do not split into separate round-trips.
 - Multiple interview rounds ARE expected when clearance is not yet reached; each round is one batched form (or its prose fallback), never split across forms.
 
-### Rule-Based Clearance
+### Checklist Clearance
 
-The interview is governed by a deterministic clearance rule, not by subjective "feels enough" judgement. Exit the Metis interview loop when **both** of:
+The interview is governed by deterministic checklist clearance, not by subjective "feels enough" judgement. Exit the Metis interview loop when the 6-item checklist is fully YES: objective / scope IN+OUT / acceptance / test strategy / handoff target / no outstanding CRITICAL. Each item is evaluated with the tri-state defined in `<Turn_Termination_Rules>`.
 
-- `unresolved_blocker_count == 0` (no high-leverage question remains that materially changes scope, safety, or validation).
-- `answered_high_leverage_question_count >= 3` (at least three distinct high-leverage answers are on record), or every high-leverage question identified at intake has been answered (whichever comes first).
+Cap interview rounds at **5** to prevent runaway. If checklist clearance is not reached by round 5, hand the remaining UNKNOWN items to Oracle as explicitly carried-forward `<unresolved_blocker>` entries.
 
-Cap interview rounds at **5** to prevent runaway. If clearance is not reached by round 5, hand the remaining blockers to Oracle as explicitly carried-forward unresolved items.
-
-**Hostility / non-answer exit**: if the user's responses for a round contain refusal signals (1-2 character non-answers, dismissive `알아서` / "you decide" / "whatever" patterns, profanity-laden responses, or a `<turn_aborted>` on the prior turn), the round invalidates the answers — it does NOT increment `answered_high_leverage_question_count`, exits the interview loop immediately, and routes the unresolved gaps either to `<silent_absorption>` (for dismissive delegation) or back to the user (for anger / aborted turns). See `prometheus-strict-metis` `<hostility_detection>` for the full pattern list and routing rules.
+**Hostility / non-answer exit**: if the user's responses for a round contain refusal signals (1-2 character non-answers, dismissive `알아서` / "you decide" / "whatever" patterns, profanity-laden responses, or a `<turn_aborted>` on the prior turn), the round invalidates the answers — it does NOT advance any checklist item to YES, exits the interview loop immediately, and routes the unresolved gaps either to `<silent_absorption>` (for dismissive delegation) or back to the user via `hostility_exit` (for anger / aborted turns). See `prometheus-strict-metis` `<hostility_detection>` for the full pattern list and routing rules.
 </Execution_Policy>
+
+<Turn_Termination_Rules>
+Every Prometheus Strict turn ends with EXACTLY ONE of the following terminations. Bare summaries and "I think we're done" are forbidden.
+
+The 6-item checklist is: objective / scope IN+OUT / acceptance / test strategy / handoff target / no outstanding CRITICAL. A checklist item is YES when it is USER_ANSWERED ∪ ABSORBED_WITH_CITATION ∪ INFERRED_FROM_SPEC. Only UNKNOWN (no answer, no citation, no spec inference) counts as NO.
+
+- (a) `omx question` batch: use when at least one CRITICAL question survives `<gap_triage>` and `<self_review>`. The batch is the round; the turn waits for `answers[]` before continuing.
+- (b) explicit handoff: use when the 6-item checklist is fully YES. Hand off Metis → Momus after clearance, Momus → Oracle after critique, and Oracle → user or `<unresolved_blocker>` carry-forward after Pass 2 synthesis.
+- (c) stop-blocker: use when hostility/`<turn_aborted>` is detected via `<hostility_detection>` with subtype `hostility_exit`, or when the next action is destructive, credential-gated, external-production, and cannot be defaulted safely.
+
+Edge cases:
+1. Zero-questions-but-complete-checklist → option (b) explicit handoff. Do not emit an empty `omx question` form.
+2. Round-5-cap with incomplete checklist → option (a) emit one more question batch with surviving UNKNOWN items annotated, OR option (b) handoff with UNKNOWN items carried forward to Oracle as `<unresolved_blocker>` entries.
+3. Hostility/`<turn_aborted>` → option (c) for anger, profanity, or aborted-turn via `hostility_exit`; option (b) for dismissive-delegation (`알아서` / "you decide") with absorbed gaps annotated.
+</Turn_Termination_Rules>
 
 <Steps>
 ### 1. Intake and Safety Bounds
@@ -74,7 +86,7 @@ Restate the target result, known constraints, deliverables, validation expectati
 
 If the prompt contains destructive, credential-gated, external-production, or materially scope-changing decisions, hold those decisions for explicit user confirmation. Otherwise, continue through the planning loop.
 
-### 2. Metis Interview (Iterative, Rule-Clearance)
+### 2. Metis Interview (Iterative, Checklist Clearance)
 
 Use `prometheus-strict-metis` as the interview voice. When native subagents are available, invoke the dedicated agent; otherwise run the same role in-context without editing files.
 
@@ -82,11 +94,11 @@ Metis discovers success criteria, non-goals, evidence versus assumptions, requir
 
 Run the interview as a bounded loop:
 
-1. Identify every currently-unanswered high-leverage question (those whose answers would materially change scope, safety, or validation).
+1. Identify every currently-UNKNOWN checklist item and every CRITICAL question whose answers would materially change scope, safety, or validation.
 2. Batch the round's independent questions into a single Structured Question Surface call (`questions[]` array, or numbered prose fallback outside tmux).
-3. Collect the structured `answers[]`, update evidence vs. assumption, mark resolved blockers.
-4. Evaluate the **Rule-Based Clearance** (`<Execution_Policy>`): exit when `unresolved_blocker_count == 0` AND `answered_high_leverage_question_count >= 3` (or all intake-identified high-leverage questions are answered).
-5. If clearance is not reached, return to step 1 with the next round. Cap at 5 rounds; on cap, carry the remaining blockers forward to Oracle as explicit unresolved items.
+3. Collect the structured `answers[]`, update evidence vs. assumption, and mark checklist items YES only when USER_ANSWERED, ABSORBED_WITH_CITATION, or INFERRED_FROM_SPEC.
+4. Evaluate the 6-item checklist (`<Turn_Termination_Rules>` tri-state); exit when ALL YES.
+5. If checklist clearance is not reached, return to step 1 with the next round. Cap at 5 rounds; on cap, carry remaining UNKNOWN items forward to Oracle as explicit `<unresolved_blocker>` entries.
 
 ### 3. Momus Challenge (Bounded Retry)
 
@@ -146,7 +158,7 @@ Do not create hook state, Sisyphus state, or `start-work` compatibility state fo
 - [ ] Target result is explicit.
 - [ ] Scope and non-goals are explicit.
 - [ ] Acceptance criteria are measurable.
-- [ ] Metis interview loop reached rule-based clearance (`unresolved_blocker_count == 0` AND `answered_high_leverage_question_count >= 3`), or the 5-round cap was reached with explicit unresolved-item handoff.
+- [ ] Metis interview loop reached checklist clearance (6-item checklist all YES per `<Turn_Termination_Rules>` tri-state), or the 5-round cap was reached with UNKNOWN items carried forward as `<unresolved_blocker>` entries.
 - [ ] Momus objections are resolved or carried forward as explicit blockers, with at most 3 Momus → Oracle re-synthesis cycles consumed.
 - [ ] Oracle plan includes a verification matrix.
 - [ ] Oracle Pass 2 self-verification completed; every machine-checkable contract item passes or is annotated as carried-forward.
