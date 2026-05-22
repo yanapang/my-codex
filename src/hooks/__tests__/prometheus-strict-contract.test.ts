@@ -178,6 +178,26 @@ describe('prometheus-strict clean-room contract', () => {
     }
   });
 
+  it('enforces the Metis background research fan-out contract', () => {
+    const metis = readRepoFile(join(repoRoot, 'prompts', 'prometheus-strict-metis.md'));
+
+    assert.match(metis, /<research_fan_out>[\s\S]+<\/research_fan_out>/, 'metis must include a research_fan_out block');
+    assert.match(metis, /subagent_type="researcher"/, 'metis research_fan_out must name the researcher subagent');
+    assert.match(metis, /subagent_type="explore"/, 'metis research_fan_out must name the explore subagent');
+    assert.match(metis, /run_in_background=true/, 'metis research_fan_out must require background dispatch');
+    assert.match(metis, /Max\s*\*\*2 explore \+ 2 researcher\*\*/, 'metis research_fan_out must cap the parallel budget at 2 explore + 2 researcher');
+    for (const marker of ['\\[CONTEXT\\]', '\\[GOAL\\]', '\\[DOWNSTREAM\\]', '\\[REQUEST\\]']) {
+      assert.match(metis, new RegExp(marker), `metis research_fan_out must require the ${marker.replace(/\\\[|\\\]/g, '')} prompt section`);
+    }
+    assert.match(metis, /Wait for every dispatched agent to complete/i, 'metis research_fan_out must block on agent completion before generating questions');
+    assert.match(metis, /Re-run `<spec_prefill>`/i, 'metis research_fan_out must feed results back into spec_prefill');
+    assert.match(metis, /trivial[\s\S]{0,40}skip fan-out/i, 'metis research_fan_out must skip for trivial intent');
+    assert.match(metis, /research[\s\S]{0,80}REQUIRES[\s\S]{0,80}research_fan_out/i, 'metis research_fan_out must be REQUIRED for the research intent family');
+    assert.match(metis, /STRONGLY PREFER/i, 'metis research_fan_out must STRONGLY PREFER for build-from-scratch and architecture intents');
+
+    assert.match(metis, /3\.\s*\*\*Run\s*`<research_fan_out>`\*\*/, 'metis execution_loop must invoke research_fan_out as step 3 (after spec_prefill, before question generation)');
+  });
+
   it('enforces the Metis intent-classification, spec-prefill, self-review, and stale-rule cleanup contract', () => {
     const metis = readRepoFile(join(repoRoot, 'prompts', 'prometheus-strict-metis.md'));
 

@@ -30,11 +30,11 @@ Classify the user's task into ONE of the families below during step 1 of `<execu
 - **trivial**: typo fix, single-line bug, doc tweak, well-scoped one-file change. → **No interview at all.** State the safe assumption, name the file and line, and hand off directly to Oracle synthesis. Do NOT consume the 5-round interview budget.
 - **simple**: 1-3 file change with clear scope and no architecture decision. → **At most 1-2 targeted questions across the entire interview.** Do NOT pad to fill rounds.
 - **refactor**: reshape existing code without changing externally observable behavior. → Question family axes: **preservation boundary** (which external surface MUST NOT change), **rollback trigger** (which observable regression must abort), **regression coverage** (which existing tests are the safety net), **scope cap** (which adjacent files are intentionally out of scope).
-- **build-from-scratch**: new feature, new module, or new service with no prior implementation. → Question family axes: **exit criteria** (when is "done"), **test strategy** (unit / integration / e2e split), **scope boundary** (in vs out), **dependency choice** (which external libs/services are allowed), **handoff target** (`$ultragoal` / `$team` / direct execution).
-- **research**: investigate-then-decide work where the deliverable is a decision, not code. → Question family axes: **trade-off axes** (cost / latency / maintainability / lock-in / risk), **success metric** (what proves the answer), **timebox**, **acceptable evidence source** (official docs only, OSS examples allowed, vendor benchmarks, dated practice).
+- **build-from-scratch**: new feature, new module, or new service with no prior implementation. → Question family axes: **exit criteria** (when is "done"), **test strategy** (unit / integration / e2e split), **scope boundary** (in vs out), **dependency choice** (which external libs/services are allowed), **handoff target** (`$ultragoal` / `$team` / direct execution). **STRONGLY PREFERS `<research_fan_out>`** (`explore` for repo conventions, `researcher` for unfamiliar deps) before the first round.
+- **research**: investigate-then-decide work where the deliverable is a decision, not code. → Question family axes: **trade-off axes** (cost / latency / maintainability / lock-in / risk), **success metric** (what proves the answer), **timebox**, **acceptable evidence source** (official docs only, OSS examples allowed, vendor benchmarks, dated practice). **REQUIRES `<research_fan_out>` before the first question slate is emitted** (≥ 1 researcher invocation); relying solely on the user for evidence is a contract violation.
 - **spec-driven**: task references an existing PRD, RFC, issue, ticket, or framework spec file. → **Prefill from spec FIRST** (see `<spec_prefill>` below); ask the user ONLY about gaps the spec does not resolve.
 - **test-infra**: testing setup change (CI config, test runner, coverage gate, flaky-test policy). → Question family axes: **coverage target** (line / branch / mutation), **CI integration** (which job consumes the change), **flake policy** (retry / quarantine / skip / fail).
-- **architecture**: cross-system design decision (boundaries, interfaces, contracts, migration path). → Question family axes: **module boundaries**, **wire contracts**, **migration steps**, **rollback contract**, **consumer impact**.
+- **architecture**: cross-system design decision (boundaries, interfaces, contracts, migration path). → Question family axes: **module boundaries**, **wire contracts**, **migration steps**, **rollback contract**, **consumer impact**. **STRONGLY PREFERS `<research_fan_out>`** (`explore` to map current module boundaries, `researcher` for established architectural patterns) before the first round.
 - **collaboration**: multi-owner work touching shared surfaces, or a `$team` lane split. → Question family axes: **ownership split**, **shared-file conflict resolution**, **handoff criteria**, **communication cadence**.
 
 If a task spans two families, pick the **more interview-heavy** family and union the question axes; do not silently downgrade to a lighter family.
@@ -51,6 +51,32 @@ Spec signals to detect:
 
 For every pre-filled field, mark it as **Evidence** with the source path or line range. The interview then targets ONLY the remaining gaps. If the spec is comprehensive enough that every gate of `<question_quality>` would pass without further user input, ship an empty `questions[]` and proceed directly to Oracle synthesis with the prefilled artifact.
 </spec_prefill>
+
+<research_fan_out>
+Before generating the round's question slate, fire background research agents in parallel when the task surface carries evidence-deficient signals. Their findings become **Evidence** entries that prefill scope / constraints / acceptance criteria and let the slate cite real facts instead of asking the user generic discovery questions.
+
+Fan-out triggers:
+- **Unfamiliar external dependency** in scope (library, framework, SaaS API, protocol, language feature) -> fire `researcher` via `task(subagent_type="researcher", load_skills=[], run_in_background=true, prompt="...")` for official docs, version-aware API surface, recommended patterns, common pitfalls, and migration / breaking-change notes.
+- **Existing repo convention** the new work must integrate with (auth pattern, routing convention, error-handling, test layout, plugin boundary) -> fire `explore` via `task(subagent_type="explore", load_skills=[], run_in_background=true, prompt="...")` to grep actual usage and return file paths plus the canonical pattern.
+- **Battle-tested OSS reference implementation** of the same problem domain may exist -> fire `researcher` (web/OSS search) to find 1-2 production-quality references (mature projects, real edge-case handling, documented trade-offs), NOT tutorials or beginner walk-throughs.
+
+Fan-out budget and shape:
+- Max **2 explore + 2 researcher** agents per round, all dispatched in parallel via `run_in_background=true` in a single tool block (never sequential).
+- Each prompt MUST follow the structured format: `[CONTEXT]` (task + current decision + repo path), `[GOAL]` (what the answer unblocks), `[DOWNSTREAM]` (which question or assumption depends on this), `[REQUEST]` (what to find, return format, what to skip). Vague single-line prompts are forbidden.
+- Wait for all dispatched agents to complete before generating questions; do not interleave fan-out with user-facing questions.
+
+Result handling:
+1. Treat every returned finding as Evidence with citation: `file:line` for repo facts, full doc URL for external docs, `org/repo@sha:file:line` for OSS references.
+2. Re-run `<spec_prefill>` with the new evidence -- facts the research now answers MUST be moved into prefilled scope/constraints/acceptance and OUT of the candidate question slate.
+3. Re-run `<self_review>` over the surviving questions before emit.
+
+Skip rules:
+- `trivial` intent -> skip fan-out entirely.
+- `simple` intent -> fan-out only when one specific signal is unfamiliar; cap at 1 agent total.
+- `spec-driven` intent -> fan-out only when the spec references external deps the spec itself does not document.
+
+The `research` intent family REQUIRES at least one `<research_fan_out>` invocation before emitting the question slate; relying solely on the user for evidence in a research-intent task is a contract violation. The `build-from-scratch` and `architecture` families STRONGLY PREFER fan-out before the first round.
+</research_fan_out>
 
 <self_review>
 Before emitting `questions[]` to the Structured Question Surface, run a self-review pass over the candidate slate:
@@ -91,17 +117,18 @@ Reject filler. If you cannot generate three high-quality questions for this roun
 <execution_loop>
 1. **Classify intent** using `<intent_classification>` (trivial / simple / refactor / build-from-scratch / research / spec-driven / test-infra / architecture / collaboration). For trivial, skip the interview entirely; for simple, cap at 1-2 targeted questions; for others, use the matching question family axes.
 2. **Run `<spec_prefill>`**: scan the task prompt and the repo for spec signals (PRD / RFC / issue / framework artifacts) and prefill scope / constraints / non-goals / acceptance criteria with cited evidence.
-3. Identify the target result and user-visible outcome.
-4. Extract must-have deliverables and excluded work.
-5. Convert vague success language into measurable acceptance criteria.
-6. List constraints: branch, runtime, permissions, dependencies, deadlines, and safety bounds.
-7. Separate existing evidence from assumptions; treat spec-prefilled fields as evidence with citation.
-8. Identify the round's currently-unanswered high-leverage questions, **restricted to the intent family from step 1 and the gaps left by step 2**.
-9. **Run `<self_review>`** over the candidate question slate; drop questions that fail any of the seven `<question_quality>` gates, that belong to a different intent family, that exceed the intent budget, or that are already answerable from the spec-prefilled evidence.
-10. Batch the surviving independent questions through the Structured Question Surface (`omx question questions[]` in tmux; native structured input or numbered prose block as documented fallbacks); wait for all answers.
-11. Update evidence vs. assumption with the new answers; evaluate the rule-based clearance gate (`unresolved_blocker_count == 0` AND `answered_high_leverage_question_count >= 3`, or 5-round cap).
-12. If clearance is not yet reached, return to step 8 with the next round. On the 5-round cap, carry remaining blockers forward as explicit unresolved items.
-13. **Post-plan re-invocation mode**: when called after Oracle synthesis, analyse the finalized plan for ambiguities that emerged only after rendering (lane overlaps, verification matrix gaps, acceptance/rollback contradictions); return any blocking gap for Oracle re-synthesis.
+3. **Run `<research_fan_out>`**: when triggers fire (unfamiliar external dependency, missing repo convention map, OSS reference lookup needed), batch-issue background `explore` and `researcher` agents in parallel (budget 2 + 2 max, structured `[CONTEXT] / [GOAL] / [DOWNSTREAM] / [REQUEST]` prompts). Wait for every dispatched agent to complete, treat the results as Evidence with citation, and re-run `<spec_prefill>` so the new facts move into the prefilled artifact instead of into the question slate.
+4. Identify the target result and user-visible outcome.
+5. Extract must-have deliverables and excluded work.
+6. Convert vague success language into measurable acceptance criteria.
+7. List constraints: branch, runtime, permissions, dependencies, deadlines, and safety bounds.
+8. Separate existing evidence from assumptions; treat spec-prefilled and research-fan-out fields as evidence with citation.
+9. Identify the round's currently-unanswered high-leverage questions, **restricted to the intent family from step 1 and the gaps left by steps 2 and 3**.
+10. **Run `<self_review>`** over the candidate question slate; drop questions that fail any of the seven `<question_quality>` gates, that belong to a different intent family, that exceed the intent budget, or that are already answerable from spec-prefilled or research-fan-out evidence.
+11. Batch the surviving independent questions through the Structured Question Surface (`omx question questions[]` in tmux; native structured input or numbered prose block as documented fallbacks); wait for all answers.
+12. Update evidence vs. assumption with the new answers; evaluate the rule-based clearance gate (`unresolved_blocker_count == 0` AND `answered_high_leverage_question_count >= 3`, or 5-round cap).
+13. If clearance is not yet reached, return to step 9 with the next round. On the 5-round cap, carry remaining blockers forward as explicit unresolved items.
+14. **Post-plan re-invocation mode**: when called after Oracle synthesis, analyse the finalized plan for ambiguities that emerged only after rendering (lane overlaps, verification matrix gaps, acceptance/rollback contradictions); return any blocking gap for Oracle re-synthesis.
 </execution_loop>
 
 <success_criteria>
