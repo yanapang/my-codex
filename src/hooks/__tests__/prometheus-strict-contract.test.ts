@@ -186,17 +186,20 @@ describe('prometheus-strict clean-room contract', () => {
     assert.match(metis, /subagent_type="researcher"/, 'metis research_fan_out must name the researcher subagent');
     assert.match(metis, /subagent_type="explore"/, 'metis research_fan_out must name the explore subagent');
     assert.match(metis, /run_in_background=true/, 'metis research_fan_out must require background dispatch');
-    assert.match(metis, /Max\s*\*\*2 explore \+ 2 researcher\*\*/, 'metis research_fan_out must cap the parallel budget at 2 explore + 2 researcher');
+    assert.match(metis, /Max\s*\*\*2 explore \+ 4 researcher\*\*/, 'metis research_fan_out must cap the parallel budget at 2 explore + 4 researcher');
     for (const marker of ['\\[CONTEXT\\]', '\\[GOAL\\]', '\\[DOWNSTREAM\\]', '\\[REQUEST\\]']) {
       assert.match(metis, new RegExp(marker), `metis research_fan_out must require the ${marker.replace(/\\\[|\\\]/g, '')} prompt section`);
     }
+    assert.match(metis, /gpt-5\.4-mini[\s\S]{0,120}researcher/i, 'metis research_fan_out must document researcher as the exact cheap mini lane');
+    assert.match(metis, /official docs[\s\S]{0,120}release notes\/changelog[\s\S]{0,160}OSS reference implementations[\s\S]{0,120}pitfalls\/migration notes/i, 'metis research_fan_out must split multiple researcher requests by evidence lane');
     assert.match(metis, /Wait for every dispatched agent to complete/i, 'metis research_fan_out must block on agent completion before generating questions');
     assert.match(metis, /Re-run `<spec_prefill>`/i, 'metis research_fan_out must feed results back into spec_prefill');
     assert.match(metis, /trivial[\s\S]{0,40}skip fan-out/i, 'metis research_fan_out must skip for trivial intent');
-    assert.match(metis, /research[\s\S]{0,80}REQUIRES[\s\S]{0,80}research_fan_out/i, 'metis research_fan_out must be REQUIRED for the research intent family');
+    assert.match(metis, /research[\s\S]{0,120}(?:minimum|REQUIRES)[\s\S]{0,80}2 researcher/i, 'metis research_fan_out must require at least 2 researcher lanes for research intent');
     assert.match(metis, /STRONGLY PREFER/i, 'metis research_fan_out must STRONGLY PREFER for build-from-scratch and architecture intents');
 
-    assert.match(metis, /3\.\s*\*\*Run\s*`<research_fan_out>`\*\*/, 'metis execution_loop must invoke research_fan_out as step 3 (after spec_prefill, before question generation)');
+    assert.match(metis, /3\.\s*\*\*Run\s*`<research_fan_out>`\*\*[\s\S]{0,260}budget 2 explore \+ 4 researcher max/i, 'metis execution_loop must invoke research_fan_out as step 3 with the 2 explore + 4 researcher budget');
+    assert.doesNotMatch(metis, /2 \+ 2 max|2 explore \+ 2 researcher/i, 'metis must not retain stale 2+2 fan-out budget wording');
   });
 
   it('researcher subagent referenced by Metis fan-out absorbs OMO librarian-shape capability', () => {
@@ -273,7 +276,11 @@ describe('prometheus-strict clean-room contract', () => {
     assert.doesNotMatch(metis, /answered_high_leverage_question_count\s*>=\s*3/i, 'count rule removed from metis');
     assert.match(metis, /6[- ]item checklist|six[- ]item checklist/i, 'metis must name 6-item checklist');
     assert.match(metis, /objective[\s\S]{0,300}scope IN\+OUT[\s\S]{0,300}acceptance[\s\S]{0,300}test strategy[\s\S]{0,300}handoff target[\s\S]{0,300}no outstanding CRITICAL/i, 'metis must list checklist items in order');
-    assert.match(metis, /ALL[\s\S]{0,80}YES[\s\S]{0,120}ANY[\s\S]{0,80}NO[\s\S]{0,120}(?:ask|question)/i, 'metis must lock YES/NO transition');
+    assert.match(metis, /ALL[\s\S]{0,120}YES[\s\S]{0,180}ANY[\s\S]{0,120}(?:NO|UNKNOWN)[\s\S]{0,180}(?:ask|question)/i, 'metis must lock YES/NO transition');
+    assert.match(metis, /two-pass gap-fill minimum|two gap-fill passes|BOTH gap-fill passes/i, 'metis must require at least two gap-fill passes after answers before handoff or another question');
+    assert.match(metis, /Pass 1[\s\S]{0,120}answer assimilation[\s\S]{0,240}Pass 2[\s\S]{0,160}residual adversarial scan/i, 'metis must name gap-fill Pass 1 and Pass 2 responsibilities');
+    assert.match(metis, /do not hand off after only one gap-fill pass|mandatory even when Pass 1 appears/i, 'metis must forbid single-pass handoff after receiving answers');
+    assert.match(skill, /at least \*\*two gap-fill passes\*\*|BOTH gap-fill passes/i, 'skill must expose the mandatory two-pass gap-fill contract');
     assert.match(metis, /Plan-A[\s\S]{0,200}Plan-B[\s\S]{0,240}(?:identical|same)[\s\S]{0,120}(?:DROP|absorb)/i, 'metis must drop identical Plan-A Plan-B');
     assert.match(metis, /WHEN IN DOUBT|DO NOT ask unless[\s\S]{0,120}structurally different plans/i, 'metis must default to absorb');
     assert.match(metis, /MUST[\s\S]{0,80}absorbed[\s\S]{0,80}(?:exceed|>=|≥)/i, 'metis absorbed ratio must be MUST');
@@ -304,10 +311,14 @@ ${oracle}`, /Default-absorb prior[\s\S]+Plan-A-vs-Plan-B[\s\S]+scope boundary[\s
     assert.match(metis, /(?:default[\s-]?on|interview[\s-]?mode[\s-]?by[\s-]?default|Before (?:your |the )?first question|fan[\s-]?out is the default)/i, 'metis research_fan_out must declare default-on dispatch (OMO interview-mode-by-default), not trigger-conditional');
     assert.match(metis, /(?:per[\s-]?intent mandatory minimum|mandatory minimum dispatch|minimum per[\s-]?intent)/i, 'metis must declare per-intent mandatory minimum dispatch counts');
     assert.match(metis, /refactor[\s\S]{0,200}(?:1[\s\S]{0,10}explore|>=\s*1\s*explore|min(?:imum)?[\s\S]{0,20}1\s*explore)/i, 'metis must require minimum 1 explore for refactor intent (preservation surface map)');
-    assert.match(metis, /build[\s-]?from[\s-]?scratch[\s\S]{0,200}(?:1[\s\S]{0,10}explore[\s\S]{0,100}1[\s\S]{0,10}researcher|explore[\s\S]{0,30}researcher)/i, 'metis must require minimum 1 explore + 1 researcher for build-from-scratch');
-    assert.match(metis, /architecture[\s\S]{0,200}(?:1[\s\S]{0,10}explore[\s\S]{0,100}1[\s\S]{0,10}researcher|explore[\s\S]{0,30}researcher)/i, 'metis must require minimum 1 explore + 1 researcher for architecture');
-    assert.match(metis, /test[\s-]?infra[\s\S]{0,200}(?:explore[\s\S]{0,80}researcher|1[\s\S]{0,10}explore)/i, 'metis must require minimum dispatch for test-infra');
+    assert.match(metis, /build[\s-]?from[\s-]?scratch[\s\S]{0,240}1[\s\S]{0,10}explore[\s\S]{0,120}2[\s\S]{0,10}researcher/i, 'metis must require minimum 1 explore + 2 researcher for build-from-scratch');
+    assert.match(metis, /architecture[\s\S]{0,240}1[\s\S]{0,10}explore[\s\S]{0,120}2[\s\S]{0,10}researcher/i, 'metis must require minimum 1 explore + 2 researcher for architecture');
+    assert.match(metis, /test[\s-]?infra[\s\S]{0,240}1[\s\S]{0,10}explore[\s\S]{0,120}2[\s\S]{0,10}researcher/i, 'metis must require minimum 1 explore + 2 researcher for test-infra');
     assert.match(metis, /(?:skip[\s\S]{0,30}only when|skip[\s-]?out rule|skip rule)[\s\S]{0,300}trivial/i, 'metis must declare skip-out rules (trivial is the only universal skip)');
+    assert.doesNotMatch(metis, /when triggers fire/i, 'metis must not preserve trigger-conditional fan-out wording; non-trivial planning dispatch is default-on');
+    assert.doesNotMatch(metis, /simple` intent -> fan-out only when one specific signal is unfamiliar/i, 'simple intent must still run the baseline explore fan-out instead of skipping until unfamiliarity is detected');
+    assert.match(metis, /simple` intent -> keep the mandatory baseline at exactly 1 `explore` agent/i, 'simple intent must keep one mandatory explore baseline before user questions');
+    assert.match(readRepoFile(skillPath), /gpt-5\.4-mini[\s\S]{0,160}researcher[\s\S]{0,220}2 explore \+ 4 researcher/i, 'skill must expose exact mini researcher plus wider cheap fan-out');
   });
 
   it('detects user hostility or non-answer responses and exits the interview instead of incrementing the clearance count', () => {
@@ -332,6 +343,12 @@ ${oracle}`, /Default-absorb prior[\s\S]+Plan-A-vs-Plan-B[\s\S]+scope boundary[\s
     const metis = readRepoFile(join(repoRoot, 'prompts', 'prometheus-strict-metis.md'));
     const momus = readRepoFile(join(repoRoot, 'prompts', 'prometheus-strict-momus.md'));
     const oracle = readRepoFile(join(repoRoot, 'prompts', 'prometheus-strict-oracle.md'));
+
+    assert.match(
+      skill,
+      /pre-question research fan-out[\s\S]{0,300}non-trivial intent[\s\S]{0,300}`explore`[\s\S]{0,120}`researcher`/i,
+      'skill must make active explore/researcher fan-out a planning-stage contract before user questions',
+    );
 
     // Gate 1: Metis interview is iterative with multiple rounds capped at 5
     assert.match(

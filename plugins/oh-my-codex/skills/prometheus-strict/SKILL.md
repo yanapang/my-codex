@@ -42,6 +42,7 @@ OMX already has `$plan`, `$ralplan`, and `$deep-interview`. Prometheus Strict ex
 - Ask high-leverage questions as a batched round when the answers materially change scope, safety, or validation. Reserve one-at-a-time questioning only for dependent question chains where the next question depends on the previous answer.
 - If a safe assumption is available, state it and continue.
 - Use repository reads when needed to make paths, tests, and handoff commands concrete.
+- During Metis planning, run pre-question research fan-out for every non-trivial intent unless the task is trivial, the cited spec is self-contained, or cached evidence already covers the same surface; use `explore` for repo facts and the exact cheap `gpt-5.4-mini` `researcher` lane for external docs / OSS references before asking the user. Prometheus Strict may fan out up to `2 explore + 4 researcher` agents per round so breadth comes from more citation-focused mini researchers while Metis/Momus/Oracle keep stronger judgment roles.
 - Recommend `$team` only when Oracle identifies independent, bounded, verifiable lanes.
 
 ### Structured Question Surface
@@ -50,7 +51,7 @@ Every Metis/Momus/Oracle question to the user MUST go through the surface-approp
 
 - In attached-tmux OMX runtime, use `omx question` as the OMX-owned structured question surface (this is the `AskUserQuestion` equivalent for Prometheus Strict). From attached-tmux Bash/tool paths, prefix the command with `OMX_QUESTION_RETURN_PANE=$TMUX_PANE` (or a concrete `%pane` value) so the leader-pane return target is preserved.
 - **Batch independent high-leverage questions into a single `questions[]` array call**: scope, constraints, non-goals, deliverables, safety bounds, and acceptance criteria are normally independent and MUST be batched into one structured form so the user answers them in a single panel. Reserve one-at-a-time only for dependent question chains where the next question depends on the previous answer.
-- Wait for the `omx question` JSON answer before checking the clearance rule, asking another round, or handing off; prefer `answers[]` / `answers[i].answer`, and use the legacy top-level `answer` only as a compatibility fallback.
+- Wait for the `omx question` JSON answer before checking the clearance rule, asking another round, or handing off; prefer `answers[]` / `answers[i].answer`, and use the legacy top-level `answer` only as a compatibility fallback. After every `answers[]` batch, run at least **two gap-fill passes** before another question or handoff: Pass 1 assimilates user answers into the checklist; Pass 2 re-scans repo context, prior turns, research fan-out evidence, and conservative defaults to absorb non-CRITICAL residual gaps.
 - Outside tmux, use the native structured input tool when one is available.
 - When neither structured surface can render (non-tmux Codex CLI, piped runs, CI), list the round's independent questions as a numbered prose block (`Q1: ... Q2: ... Q3: ...`) and wait for all answers in one user turn; do not split into separate round-trips.
 - Multiple interview rounds ARE expected when clearance is not yet reached; each round is one batched form (or its prose fallback), never split across forms.
@@ -90,15 +91,16 @@ If the prompt contains destructive, credential-gated, external-production, or ma
 
 Use `prometheus-strict-metis` as the interview voice. When native subagents are available, invoke the dedicated agent; otherwise run the same role in-context without editing files.
 
-Metis discovers success criteria, non-goals, evidence versus assumptions, required artifacts, likely execution lanes, and missing decisions.
+Metis discovers success criteria, non-goals, evidence versus assumptions, required artifacts, likely execution lanes, and missing decisions. Before the first user-facing question batch, Metis must actively fan out repo/external research per intent: `explore` maps local surfaces and exact `gpt-5.4-mini` `researcher` lanes gather official/upstream or OSS-reference evidence. Research-heavy intents use more cheap researchers rather than downgrading Metis/Momus/Oracle judgment.
 
 Run the interview as a bounded loop:
 
 1. Identify every currently-UNKNOWN checklist item and every CRITICAL question whose answers would materially change scope, safety, or validation.
 2. Batch the round's independent questions into a single Structured Question Surface call (`questions[]` array, or numbered prose fallback outside tmux).
-3. Collect the structured `answers[]`, update evidence vs. assumption, and mark checklist items YES only when USER_ANSWERED, ABSORBED_WITH_CITATION, or INFERRED_FROM_SPEC.
-4. Evaluate the 6-item checklist (`<Turn_Termination_Rules>` tri-state); exit when ALL YES.
-5. If checklist clearance is not reached, return to step 1 with the next round. Cap at 5 rounds; on cap, carry remaining UNKNOWN items forward to Oracle as explicit `<unresolved_blocker>` entries.
+3. Collect the structured `answers[]`, then run **Gap-fill Pass 1 — answer assimilation**: update evidence vs. assumption and mark checklist items YES only when USER_ANSWERED, ABSORBED_WITH_CITATION, or INFERRED_FROM_SPEC.
+4. Run **Gap-fill Pass 2 — residual adversarial scan**: re-check every remaining UNKNOWN against repo context, prior turns, research fan-out evidence, framework/industry defaults, and conservative reversible defaults; absorb non-CRITICAL gaps with citations/assumptions and leave only CRITICAL blockers.
+5. Evaluate the 6-item checklist (`<Turn_Termination_Rules>` tri-state) only after BOTH gap-fill passes; exit when ALL YES.
+6. If checklist clearance is not reached, return to step 1 with the next round. Cap at 5 rounds; on cap, carry remaining UNKNOWN items forward to Oracle as explicit `<unresolved_blocker>` entries.
 
 ### 3. Momus Challenge (Bounded Retry)
 
@@ -143,6 +145,7 @@ $team <N>:executor "execute the approved Ultragoal story in parallel lanes"  # o
 
 <Tool_Usage>
 - Use read-only repository inspection to verify referenced files, commands, and existing conventions.
+- Treat Metis research fan-out as part of planning, not execution: dispatch `explore` / exact `gpt-5.4-mini` `researcher` evidence-gathering before question generation for non-trivial intents, then re-prefill and ask only surviving CRITICAL gaps.
 - Use `prometheus-strict-metis`, `prometheus-strict-momus`, and `prometheus-strict-oracle` sequentially; do not fan out implementation work from this skill.
 - Use `$ultragoal` only as the recommended execution handoff after the plan is ready.
 - Use `$team` only when parallel lanes are independent and verifiable.
@@ -158,7 +161,7 @@ Do not create hook state, Sisyphus state, or `start-work` compatibility state fo
 - [ ] Target result is explicit.
 - [ ] Scope and non-goals are explicit.
 - [ ] Acceptance criteria are measurable.
-- [ ] Metis interview loop reached checklist clearance (6-item checklist all YES per `<Turn_Termination_Rules>` tri-state), or the 5-round cap was reached with UNKNOWN items carried forward as `<unresolved_blocker>` entries.
+- [ ] Metis interview loop reached checklist clearance only after the mandatory two gap-fill passes following every `answers[]` batch, or the 5-round cap was reached with UNKNOWN items carried forward as `<unresolved_blocker>` entries.
 - [ ] Momus objections are resolved or carried forward as explicit blockers, with at most 3 Momus → Oracle re-synthesis cycles consumed.
 - [ ] Oracle plan includes a verification matrix.
 - [ ] Oracle Pass 2 self-verification completed; every machine-checkable contract item passes or is annotated as carried-forward.

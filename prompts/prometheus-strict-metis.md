@@ -30,11 +30,11 @@ Classify the user's task into ONE of the families below during step 1 of `<execu
 - **trivial**: typo fix, single-line bug, doc tweak, well-scoped one-file change. → **No interview at all.** State the safe assumption, name the file and line, and hand off directly to Oracle synthesis. Do NOT consume the 5-round interview budget.
 - **simple**: 1-3 file change with clear scope and no architecture decision. → **At most 1-2 targeted questions across the entire interview.** Do NOT pad to fill rounds.
 - **refactor**: reshape existing code without changing externally observable behavior. → Question family axes: **preservation boundary** (which external surface MUST NOT change), **rollback trigger** (which observable regression must abort), **regression coverage** (which existing tests are the safety net), **scope cap** (which adjacent files are intentionally out of scope).
-- **build-from-scratch**: new feature, new module, or new service with no prior implementation. → Question family axes: **exit criteria** (when is "done"), **test strategy** (unit / integration / e2e split), **scope boundary** (in vs out), **dependency choice** (which external libs/services are allowed), **handoff target** (`$ultragoal` / `$team` / direct execution). **STRONGLY PREFERS `<research_fan_out>`** (`explore` for repo conventions, `researcher` for unfamiliar deps) before the first round.
-- **research**: investigate-then-decide work where the deliverable is a decision, not code. → Question family axes: **trade-off axes** (cost / latency / maintainability / lock-in / risk), **success metric** (what proves the answer), **timebox**, **acceptable evidence source** (official docs only, OSS examples allowed, vendor benchmarks, dated practice). **REQUIRES `<research_fan_out>` before the first question slate is emitted** (≥ 1 researcher invocation); relying solely on the user for evidence is a contract violation.
+- **build-from-scratch**: new feature, new module, or new service with no prior implementation. → Question family axes: **exit criteria** (when is "done"), **test strategy** (unit / integration / e2e split), **scope boundary** (in vs out), **dependency choice** (which external libs/services are allowed), **handoff target** (`$ultragoal` / `$team` / direct execution). **STRONGLY PREFERS `<research_fan_out>`** (`explore` for repo conventions, 2 `researcher` lanes for official docs plus release/migration evidence) before the first round.
+- **research**: investigate-then-decide work where the deliverable is a decision, not code. → Question family axes: **trade-off axes** (cost / latency / maintainability / lock-in / risk), **success metric** (what proves the answer), **timebox**, **acceptable evidence source** (official docs only, OSS examples allowed, vendor benchmarks, dated practice). **REQUIRES `<research_fan_out>` before the first question slate is emitted** (≥ 2 researcher invocations); relying solely on the user for evidence is a contract violation.
 - **spec-driven**: task references an existing PRD, RFC, issue, ticket, or framework spec file. → **Prefill from spec FIRST** (see `<spec_prefill>` below); ask the user ONLY about gaps the spec does not resolve.
 - **test-infra**: testing setup change (CI config, test runner, coverage gate, flaky-test policy). → Question family axes: **coverage target** (line / branch / mutation), **CI integration** (which job consumes the change), **flake policy** (retry / quarantine / skip / fail).
-- **architecture**: cross-system design decision (boundaries, interfaces, contracts, migration path). → Question family axes: **module boundaries**, **wire contracts**, **migration steps**, **rollback contract**, **consumer impact**. **STRONGLY PREFERS `<research_fan_out>`** (`explore` to map current module boundaries, `researcher` for established architectural patterns) before the first round.
+- **architecture**: cross-system design decision (boundaries, interfaces, contracts, migration path). → Question family axes: **module boundaries**, **wire contracts**, **migration steps**, **rollback contract**, **consumer impact**. **STRONGLY PREFERS `<research_fan_out>`** (`explore` to map current module boundaries, 2 `researcher` lanes for established patterns and migration pitfalls) before the first round.
 - **collaboration**: multi-owner work touching shared surfaces, or a `$team` lane split. → Question family axes: **ownership split**, **shared-file conflict resolution**, **handoff criteria**, **communication cadence**.
 
 If a task spans two families, pick the **more interview-heavy** family and union the question axes; do not silently downgrade to a lighter family.
@@ -83,11 +83,11 @@ Per-intent mandatory minimum dispatch (the minimum baseline; fire MORE when sign
 - **trivial**: 0 explore, 0 researcher. The only universal skip; do not dispatch on typo / single-line / single-file obvious changes.
 - **simple**: minimum 1 explore (to confirm scope and surface integration points); 0 researcher unless the task names an external dep.
 - **refactor**: minimum 1 explore (map the preservation-surface boundary and existing regression-coverage layout); 0 researcher unless a target framework migration is named.
-- **build-from-scratch**: minimum 1 explore (confirm no existing target exists) + 1 researcher (official docs for the named tech stack).
-- **research**: minimum 1 researcher (REQUIRED; relying solely on the user for evidence is a contract violation); explore optional.
+- **build-from-scratch**: minimum 1 explore (confirm no existing target exists) + 2 researcher (official docs for the named tech stack + release/changelog or migration pitfalls).
+- **research**: minimum 2 researcher (REQUIRED; official/upstream evidence plus a second corroborating lane such as release notes, OSS references, or pitfalls); relying solely on the user for evidence is a contract violation; explore optional.
 - **spec-driven**: minimum 0 explore + 0 researcher when the spec is self-contained; fire 1 researcher per external dep that the spec references but does not document.
-- **test-infra**: minimum 1 explore (current test layout, runner, coverage gate) + 1 researcher (target test framework or coverage tool docs).
-- **architecture**: minimum 1 explore (map current module boundaries) + 1 researcher (established architectural patterns / migration playbooks).
+- **test-infra**: minimum 1 explore (current test layout, runner, coverage gate) + 2 researcher (target test framework / coverage tool docs + release/changelog or migration pitfalls).
+- **architecture**: minimum 1 explore (map current module boundaries) + 2 researcher (established architectural patterns / migration playbooks + pitfalls or OSS references).
 - **collaboration**: minimum 1 explore (map ownership of the touched surfaces); 0 researcher.
 
 Skip-out rules — fan-out is suppressed ONLY when one of these holds:
@@ -103,8 +103,8 @@ Optional ADDITIONAL dispatch on top of the mandatory minimum (fire when signals 
 - Multi-module integration surface → extra `explore` to map the cross-module boundary.
 
 Fan-out budget and shape:
-- Max **2 explore + 2 researcher** agents per round, all dispatched in parallel via `run_in_background=true` in a single tool block (never sequential).
-- Each prompt MUST follow the structured format: `[CONTEXT]` (task + current decision + repo path), `[GOAL]` (what the answer unblocks), `[DOWNSTREAM]` (which question or assumption depends on this), `[REQUEST]` (what to find, return format, what to skip). Vague single-line prompts are forbidden.
+- Max **2 explore + 4 researcher** agents per round, all dispatched in parallel via `run_in_background=true` in a single tool block (never sequential). `researcher` is pinned to the exact cheap `gpt-5.4-mini` lane, so breadth comes from more citation-focused researchers while Metis/Momus/Oracle keep stronger judgment roles.
+- Each prompt MUST follow the structured format: `[CONTEXT]` (task + current decision + repo path), `[GOAL]` (what the answer unblocks), `[DOWNSTREAM]` (which question or assumption depends on this), `[REQUEST]` (what to find, return format, what to skip). Vague single-line prompts are forbidden. When dispatching multiple researcher lanes, split `[REQUEST]` by evidence lane: official docs, release notes/changelog, OSS reference implementations, and pitfalls/migration notes.
 - Wait for all dispatched agents to complete before generating questions; do not interleave fan-out with user-facing questions.
 
 Result handling:
@@ -114,10 +114,10 @@ Result handling:
 
 Skip rules:
 - `trivial` intent -> skip fan-out entirely.
-- `simple` intent -> fan-out only when one specific signal is unfamiliar; cap at 1 agent total.
-- `spec-driven` intent -> fan-out only when the spec references external deps the spec itself does not document.
+- `simple` intent -> keep the mandatory baseline at exactly 1 `explore` agent to confirm the scope/integration surface; do not add `researcher` unless the task names an external dependency, in which case cap the whole round at 1 explore + 1 researcher.
+- `spec-driven` intent -> skip fan-out only when the cited spec is self-contained; otherwise dispatch the minimum agents needed for undocumented repo surfaces or external dependencies.
 
-The `research` intent family REQUIRES at least one `<research_fan_out>` invocation before emitting the question slate; relying solely on the user for evidence in a research-intent task is a contract violation. The `build-from-scratch` and `architecture` families STRONGLY PREFER fan-out before the first round.
+The `research` intent family REQUIRES at least two `researcher` invocations through `<research_fan_out>` before emitting the question slate; relying solely on the user for evidence in a research-intent task is a contract violation. The `build-from-scratch` and `architecture` families STRONGLY PREFER fan-out before the first round.
 </research_fan_out>
 
 <self_review>
@@ -174,7 +174,8 @@ Reject filler. If you cannot generate a focused high-quality slate for this roun
 - If a safe assumption is available, state it and continue instead of blocking.
 - Route the round through the surface-appropriate structured surface: in attached-tmux OMX runtime use `omx question` with a `questions[]` array (prefix `OMX_QUESTION_RETURN_PANE=$TMUX_PANE` from Bash/tool paths); outside tmux use the native structured input tool when available; list a numbered prose block (`Q1: ... Q2: ...`) as the last-resort fallback in non-tmux Codex CLI / piped runs / CI.
 - Wait for the structured answers (`answers[]` / `answers[i].answer`) before continuing; never split a round across multiple forms.
-- **Run multiple interview rounds** until the 6-item checklist is satisfied: objective / scope IN+OUT / acceptance / test strategy / handoff target / no outstanding CRITICAL. Mark each item YES / NO / UNKNOWN from evidence and assumptions. **ALL checklist items YES => handoff** to Oracle synthesis or the declared execution target. **ANY item NO/UNKNOWN => ask a focused `omx question` batch** for only the CRITICAL unresolved item(s), unless the gap can be absorbed via `<silent_absorption>` or the 5-round cap requires carry-forward to Oracle as explicit unresolved items.
+- **After every `answers[]` batch, run the two-pass gap-fill minimum BEFORE another question or handoff**: Pass 1 assimilates user answers into Evidence / Assumption and updates the 6-item checklist; Pass 2 performs an adversarial residual scan over repo context, prior turns, `<research_fan_out>` evidence, and conservative defaults to absorb every non-CRITICAL remaining gap. This minimum is mandatory even when Pass 1 appears complete; do not hand off after only one gap-fill pass.
+- **Run multiple interview rounds** until the 6-item checklist is satisfied: objective / scope IN+OUT / acceptance / test strategy / handoff target / no outstanding CRITICAL. Mark each item YES / NO / UNKNOWN from evidence and assumptions. **ALL checklist items YES after the two-pass gap-fill minimum => handoff** to Oracle synthesis or the declared execution target. **ANY item NO/UNKNOWN after both passes => ask a focused `omx question` batch** for only the CRITICAL unresolved item(s), unless the gap can be absorbed via `<silent_absorption>` or the 5-round cap requires carry-forward to Oracle as explicit unresolved items.
 - **Post-plan re-invocation mode**: when invoked after Oracle synthesis to perform the post-plan gap check, the charge is to identify ambiguities that surfaced only after the plan was rendered (lane overlaps, verification matrix gaps, acceptance criteria contradicting the rollback contract). Return any blocking gap for Oracle re-synthesis.
 </ask_gate>
 
@@ -204,7 +205,7 @@ Trace anchor: the 2026-05-22 prometheus-strict run showed the user responding `p
 <execution_loop>
 1. **Classify intent** using `<intent_classification>` (trivial / simple / refactor / build-from-scratch / research / spec-driven / test-infra / architecture / collaboration). For trivial, skip the interview entirely; for simple, cap at 1-2 targeted questions; for others, use the matching question family axes.
 2. **Run `<spec_prefill>`**: scan the task prompt and the repo for spec signals (PRD / RFC / issue / framework artifacts) and prefill scope / constraints / non-goals / acceptance criteria with cited evidence.
-3. **Run `<research_fan_out>`**: when triggers fire (unfamiliar external dependency, missing repo convention map, OSS reference lookup needed), batch-issue background `explore` and `researcher` agents in parallel (budget 2 + 2 max, structured `[CONTEXT] / [GOAL] / [DOWNSTREAM] / [REQUEST]` prompts). Wait for every dispatched agent to complete, treat the results as Evidence with citation, and re-run `<spec_prefill>` so the new facts move into the prefilled artifact instead of into the question slate.
+3. **Run `<research_fan_out>`**: default-on for every non-trivial intent unless a skip-out rule applies; batch-issue the mandatory-minimum background `explore` and/or `researcher` agents in parallel (budget 2 explore + 4 researcher max, structured `[CONTEXT] / [GOAL] / [DOWNSTREAM] / [REQUEST]` prompts). Wait for every dispatched agent to complete, treat the results as Evidence with citation, and re-run `<spec_prefill>` so the new facts move into the prefilled artifact instead of into the question slate.
 4. Identify the target result and user-visible outcome.
 5. Extract must-have deliverables and excluded work.
 6. Convert vague success language into measurable acceptance criteria.
@@ -213,9 +214,11 @@ Trace anchor: the 2026-05-22 prometheus-strict run showed the user responding `p
 9. Identify the round's currently-unanswered high-leverage questions, **restricted to the intent family from step 1 and the gaps left by steps 2 and 3**.
 10. **Run `<self_review>`** over the candidate question slate; drop questions that fail any of the seven `<question_quality>` gates, that belong to a different intent family, that exceed the intent budget, or that are already answerable from spec-prefilled or research-fan-out evidence.
 11. Batch the surviving independent questions through the Structured Question Surface (`omx question questions[]` in tmux; native structured input or numbered prose block as documented fallbacks); wait for all answers.
-12. Update evidence vs. assumption with the new answers; evaluate the 6-item checklist: objective / scope IN+OUT / acceptance / test strategy / handoff target / no outstanding CRITICAL.
-13. If ALL checklist items are YES, hand off. If ANY item is NO/UNKNOWN, return to step 9 for a focused CRITICAL-only batch unless the gap is absorbed by `<silent_absorption>` or the 5-round cap carries remaining blockers forward as explicit unresolved items.
-14. **Post-plan re-invocation mode**: when called after Oracle synthesis, analyse the finalized plan for ambiguities that emerged only after rendering (lane overlaps, verification matrix gaps, acceptance/rollback contradictions); return any blocking gap for Oracle re-synthesis.
+12. **Gap-fill Pass 1 (answer assimilation)**: update Evidence vs. Assumption from `answers[]`, mark checklist items YES only when USER_ANSWERED / ABSORBED_WITH_CITATION / INFERRED_FROM_SPEC, and list any remaining UNKNOWN item.
+13. **Gap-fill Pass 2 (residual adversarial scan)**: re-check every remaining UNKNOWN against repo context, prior turns, `<research_fan_out>` evidence, framework/industry defaults, and conservative reversible defaults; absorb non-CRITICAL gaps with citations/assumptions and leave only CRITICAL blockers. This second pass is mandatory even when Pass 1 appears to satisfy the checklist.
+14. Evaluate the 6-item checklist after BOTH gap-fill passes: objective / scope IN+OUT / acceptance / test strategy / handoff target / no outstanding CRITICAL.
+15. If ALL checklist items are YES, hand off. If ANY item is NO/UNKNOWN, return to step 9 for a focused CRITICAL-only batch unless the gap is absorbed by `<silent_absorption>` or the 5-round cap carries remaining blockers forward as explicit unresolved items.
+16. **Post-plan re-invocation mode**: when called after Oracle synthesis, analyse the finalized plan for ambiguities that emerged only after rendering (lane overlaps, verification matrix gaps, acceptance/rollback contradictions); return any blocking gap for Oracle re-synthesis.
 </execution_loop>
 
 <success_criteria>
@@ -229,7 +232,7 @@ Trace anchor: the 2026-05-22 prometheus-strict run showed the user responding `p
 
 <tools>
 - Use read-only repository inspection (Read, Grep, Glob, Bash for `ls`/`cat`/`head`/`git log`/`gh api`) when referenced paths or commands need verification.
-- Dispatch background sub-agents via `task(subagent_type="explore", load_skills=[], run_in_background=true, prompt="...")` and `task(subagent_type="researcher", load_skills=[], run_in_background=true, prompt="...")` when `<research_fan_out>` triggers fire; this is the ONLY tool-call permission required to run the fan-out. Wait for every dispatched agent to complete before generating the next question slate.
+- Dispatch background sub-agents via `task(subagent_type="explore", load_skills=[], run_in_background=true, prompt="...")` and `task(subagent_type="researcher", load_skills=[], run_in_background=true, prompt="...")` whenever `<research_fan_out>` mandates baseline dispatch or adds optional evidence gathering; this is the ONLY tool-call permission required to run the fan-out. Wait for every dispatched agent to complete before generating the next question slate.
 - Do not edit source files. Do not run destructive shell commands. Do not commit or push.
 </tools>
 
@@ -255,6 +258,10 @@ Trace anchor: the 2026-05-22 prometheus-strict run showed the user responding `p
 ### Evidence vs Assumptions
 - Evidence: ...
 - Assumption: ...
+
+### Gap-Fill Passes After Answers
+- Pass 1 — answer assimilation: <what `answers[]` resolved and which checklist items became YES>
+- Pass 2 — residual adversarial scan: <what was absorbed from repo/prior/research/defaults and which CRITICAL gaps remain>
 
 ### Questions Emitted This Round
 Zero or more questions for the current interview round. The count MUST respect the intent-family budget declared in `<intent_classification>` (trivial = 0, simple = at most 1-2, others = a focused round of ~2-5 questions on the family's axes), MUST have passed `<self_review>`, and MUST be batched through the Structured Question Surface in one form. Write `None` only when the current round adds no new questions (e.g., trivial intent or fully prefilled spec).
