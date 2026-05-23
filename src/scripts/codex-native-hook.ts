@@ -3,7 +3,7 @@ import { closeSync, existsSync, openSync, readFileSync, readSync } from "fs";
 import { appendFile, mkdir, readFile, readdir, stat, writeFile } from "fs/promises";
 import { extname, join, relative, resolve } from "path";
 import { pathToFileURL } from "url";
-import { readModeState, readModeStateForActiveDecision, readModeStateForSession, updateModeState } from "../modes/base.js";
+import { readModeStateForActiveDecision, readModeStateForSession, updateModeState } from "../modes/base.js";
 import {
   extractSessionIdFromInitializedStatePath,
   getSkillActiveStatePathsForStateDir,
@@ -14,6 +14,7 @@ import {
 } from "../state/skill-active.js";
 import {
   readSubagentSessionSummary,
+  readSubagentTrackingState,
   recordSubagentTurnForSession,
 } from "../subagents/tracker.js";
 import { resolveCanonicalTeamStateRoot, resolveWorkerNotifyTeamStateRootPath } from "../team/state-root.js";
@@ -297,18 +298,32 @@ async function isNativeSubagentHook(
   nativeSessionId: string,
   threadId: string,
 ): Promise<boolean> {
-  const sessionId = canonicalSessionId.trim();
-  if (!sessionId) return false;
-
-  const summary = await readSubagentSessionSummary(cwd, sessionId).catch(() => null);
-  if (!summary) return false;
-
   const candidateIds = [nativeSessionId, threadId]
     .map((value) => value.trim())
     .filter(Boolean);
   if (candidateIds.length === 0) return false;
 
-  return candidateIds.some((id) => summary.allSubagentThreadIds.includes(id));
+  const sessionId = canonicalSessionId.trim();
+  if (sessionId) {
+    const summary = await readSubagentSessionSummary(cwd, sessionId).catch(() => null);
+    if (summary && candidateIds.some((id) => summary.allSubagentThreadIds.includes(id))) {
+      return true;
+    }
+  }
+
+  // Native Codex resume can report the child native session as the canonical
+  // session id before OMX reconciles it back to the owning session.  In that
+  // window the per-session summary lookup above misses the child and a
+  // subagent UserPromptSubmit can accidentally activate workflow keywords from
+  // quoted review context.  Fall back to the global tracking index so any known
+  // subagent thread is treated as subagent-scoped, regardless of the current
+  // hook payload's session-id mapping.
+  const trackingState = await readSubagentTrackingState(cwd).catch(() => null);
+  if (!trackingState) return false;
+
+  return Object.values(trackingState.sessions).some((session) => (
+    candidateIds.some((id) => session.threads[id]?.kind === "subagent")
+  ));
 }
 
 function shouldSuppressSubagentLifecycleHookDispatch(): boolean {
@@ -1683,6 +1698,17 @@ function buildSkillStateCliInstruction(mode: string, statePath: string): string 
   return `skill: ${mode} activated and initial state initialized at ${statePath}; use CLI-first state updates via \`omx state write/read/clear --input '<json>' --json\`; use omx_state MCP only when explicit MCP compatibility is enabled.`;
 }
 
+function buildAutopilotPromptActivationNote(skillState?: SkillActiveState | null): string | null {
+  if (skillState?.initialized_mode !== "autopilot") return null;
+  return [
+    "Autopilot protocol: the durable default chain is $deep-interview -> $ralplan -> $ultragoal (+ $team if needed) -> $code-review -> $ultraqa (deep-interview -> ralplan -> ultragoal -> code-review -> ultraqa).",
+    "Start/resume at current_phase=deep-interview unless the task is clear and bounded; if deep-interview is intentionally skipped, persist and state an explicit deep_interview_gate.skip_reason before moving to ralplan.",
+    "The ralplan phase is not complete until Planner output has been reviewed sequentially by Architect and then Critic; do not hand off to Ultragoal or implementation until the ralplan state/artifact records both ralplan_architect_review and ralplan_critic_review with approval or an explicit blocker.",
+    "Do not silently fall back to ordinary $plan/ralplan-only handling; keep autopilot-state.json, skill-active-state.json, HUD/statusline, and Codex goal-mode handoff guidance visible while the workflow is active.",
+    "When Codex goal tools are available, call get_goal/create_goal only from the active thread handoff and treat the active goal as the completion contract until code-review and ultraqa are clean.",
+  ].join(" ");
+}
+
 function buildAdditionalContextMessage(
   prompt: string,
   skillState?: SkillActiveState | null,
@@ -1716,6 +1742,7 @@ function buildAdditionalContextMessage(
   const ultragoalPromptActivationNote = match.skill === "ultragoal"
     ? "Ultragoal protocol: use `omx ultragoal create-goals` / `complete-goals` / `checkpoint` for `.omx/ultragoal` artifacts, then use Codex goal model tools only from the active agent handoff (`get_goal`, `create_goal`, `update_goal`) and never overwrite a different active Codex goal. Ultragoal does not call `/goal clear`; for multiple sequential ultragoal runs in one Codex session/thread, manually clear the completed Codex goal in the UI before creating the next aggregate goal."
     : null;
+  const autopilotPromptActivationNote = buildAutopilotPromptActivationNote(skillState);
   const combinedTransitionMessage = (() => {
     if (!skillState?.transition_message) return null;
     if (matches.length <= 1 || activeSkills.length <= 1) return skillState.transition_message;
@@ -1743,6 +1770,7 @@ function buildAdditionalContextMessage(
         : null,
       promptPriorityMessage,
       ultragoalPromptActivationNote,
+      autopilotPromptActivationNote,
       skillState.initialized_mode && skillState.initialized_state_path
         ? buildSkillStateCliInstruction(skillState.initialized_mode, skillState.initialized_state_path)
         : null,
@@ -1769,6 +1797,7 @@ function buildAdditionalContextMessage(
       deepInterviewPromptActivationNote,
       ultraworkPromptActivationNote,
       ultragoalPromptActivationNote,
+      autopilotPromptActivationNote,
       buildTeamRuntimeInstruction(cwd, payload),
       buildTeamHelpInstruction(cwd, payload),
       "Follow AGENTS.md routing and preserve workflow transition and planning-safety rules.",
@@ -1787,12 +1816,13 @@ function buildAdditionalContextMessage(
       deepInterviewPromptActivationNote,
       ultraworkPromptActivationNote,
       ultragoalPromptActivationNote,
+      autopilotPromptActivationNote,
       ralphPromptActivationNote,
       "Follow AGENTS.md routing and preserve workflow transition and planning-safety rules.",
     ].join(" ");
   }
 
-  return [detectedKeywordMessage, promptPriorityMessage, ultragoalPromptActivationNote, "Follow AGENTS.md routing and preserve workflow transition and planning-safety rules."].filter(Boolean).join(" ");
+  return [detectedKeywordMessage, promptPriorityMessage, ultragoalPromptActivationNote, autopilotPromptActivationNote, "Follow AGENTS.md routing and preserve workflow transition and planning-safety rules."].filter(Boolean).join(" ");
 }
 
 function parseTeamWorkerEnv(rawValue: string): { teamName: string; workerName: string } | null {
@@ -2041,6 +2071,7 @@ async function findActiveGoalWorkflowReconciliationRequirement(cwd: string): Pro
         `If get_goal returns a completed task-scoped objective for the same aggregate ultragoal plan, checkpoint ${goalId} with evidence naming ${goalId} plus .omx/ultragoal/goals.json or ledger.jsonl and pass final quality-gate JSON; OMX will reconcile the completed planned scope without mutating Codex goal state.`,
         `If get_goal instead returns a different completed legacy objective and complete checkpointing fails, do not repeat --status complete in this thread.`,
         `Record the non-terminal blocker with: omx ultragoal checkpoint --goal-id ${goalId} --status blocked --codex-goal-json '<different completed get_goal JSON or path>' --evidence '<completed legacy Codex goal blocks create_goal in this thread>'.`,
+        `If get_goal itself is unavailable with a Codex DB/schema/context error such as "no such table: thread_goals", record an auditable safe-recovery blocker instead: omx ultragoal checkpoint --goal-id ${goalId} --status blocked --codex-goal-json '<unavailable get_goal error JSON or path>' --evidence '<get_goal unavailable due to Codex DB/schema/context error; safe recovery requires a working Codex goal context>'.`,
         "Then continue only from a Codex goal context with no active/completed conflicting goal in the same repo/worktree and create the intended goal there.",
       ].join(" "),
     };
@@ -2127,36 +2158,60 @@ async function buildGoalWorkflowReconciliationStopOutput(
   };
 }
 
+interface TeamModeStateForStop {
+  state: Record<string, unknown>;
+  scope: "session" | "root";
+}
+
+function teamStateMatchesThreadForStop(
+  state: Record<string, unknown>,
+  threadId?: string,
+  options: { requireOwnerThread?: boolean } = {},
+): boolean {
+  const normalizedThreadId = safeString(threadId).trim();
+  if (!normalizedThreadId) return true;
+
+  const ownerThreadId = safeString(state.owner_codex_thread_id ?? state.thread_id).trim();
+  if (!ownerThreadId) return options.requireOwnerThread !== true;
+  return ownerThreadId === normalizedThreadId;
+}
+
 async function readTeamModeStateForStop(
   cwd: string,
   stateDir: string,
   sessionId?: string,
-): Promise<Record<string, unknown> | null> {
+  threadId?: string,
+): Promise<TeamModeStateForStop | null> {
   const normalizedSessionId = safeString(sessionId).trim();
-  if (!normalizedSessionId) {
-    return await readModeState("team", cwd);
-  }
+  if (!normalizedSessionId) return null;
 
   const scopedState = await readStopSessionPinnedState("team-state.json", cwd, normalizedSessionId, stateDir);
-  if (scopedState) return scopedState;
+  if (scopedState) {
+    return teamStateMatchesThreadForStop(scopedState, threadId)
+      ? { state: scopedState, scope: "session" }
+      : null;
+  }
 
   const rootState = await readJsonIfExists(join(stateDir, "team-state.json"));
   if (rootState?.active !== true) return null;
 
-  const ownerSessionId = safeString(rootState.session_id).trim();
-  if (ownerSessionId && ownerSessionId !== normalizedSessionId) {
-    return null;
-  }
+  const teamName = safeString(rootState.team_name).trim();
+  if (!teamName) return null;
 
-  return rootState;
+  const ownerSessionId = safeString(rootState.session_id).trim();
+  if (!ownerSessionId || ownerSessionId !== normalizedSessionId) return null;
+  if (!teamStateMatchesThreadForStop(rootState, threadId, { requireOwnerThread: true })) return null;
+
+  return { state: rootState, scope: "root" };
 }
 
-async function buildTeamStopOutput(cwd: string, sessionId?: string): Promise<Record<string, unknown> | null> {
+async function buildTeamStopOutput(cwd: string, sessionId?: string, threadId?: string): Promise<Record<string, unknown> | null> {
   if (await readCanonicalTerminalRunStateForStop(cwd, sessionId, "team")) {
     return null;
   }
-  const teamState = await readTeamModeStateForStop(cwd, getBaseStateDir(cwd), sessionId);
-  if (teamState?.active !== true) return null;
+  const teamStateForStop = await readTeamModeStateForStop(cwd, getBaseStateDir(cwd), sessionId, threadId);
+  if (!teamStateForStop || teamStateForStop.state.active !== true) return null;
+  const teamState = teamStateForStop.state;
   const teamName = safeString(teamState.team_name).trim();
   if (teamName) {
     const canonicalTeamDir = join(resolveCanonicalTeamStateRoot(cwd), "team", teamName);
@@ -2165,7 +2220,9 @@ async function buildTeamStopOutput(cwd: string, sessionId?: string): Promise<Rec
     }
   }
   const coarsePhase = teamState.current_phase;
-  const canonicalPhase = teamName ? (await readTeamPhase(teamName, cwd))?.current_phase ?? coarsePhase : coarsePhase;
+  const canonicalPhaseState = teamName ? await readTeamPhase(teamName, cwd) : null;
+  if (teamStateForStop.scope === "root" && !canonicalPhaseState) return null;
+  const canonicalPhase = canonicalPhaseState?.current_phase ?? coarsePhase;
   if (!isNonTerminalPhase(canonicalPhase)) return null;
   return buildTeamStopOutputForPhase(teamName, formatPhase(canonicalPhase));
 }
@@ -2909,6 +2966,7 @@ async function returnPersistentStopBlock(
 async function findCanonicalActiveTeamForSession(
   cwd: string,
   sessionId: string,
+  threadId?: string,
 ): Promise<{ teamName: string; phase: string } | null> {
   if (!sessionId.trim()) return null;
   const teamsRoot = join(resolveCanonicalTeamStateRoot(cwd), "team");
@@ -2927,6 +2985,7 @@ async function findCanonicalActiveTeamForSession(
     if (!manifest || !phaseState) continue;
     const ownerSessionId = (manifest.leader?.session_id ?? "").trim();
     if (ownerSessionId && ownerSessionId !== sessionId.trim()) continue;
+    if (!teamStateMatchesThreadForStop(manifest.leader as unknown as Record<string, unknown>, threadId)) continue;
     if (!isNonTerminalPhase(phaseState.current_phase)) continue;
 
     return {
@@ -2942,12 +3001,13 @@ async function resolveActiveTeamNameForStop(
   cwd: string,
   stateDir: string,
   sessionId: string,
+  threadId?: string,
 ): Promise<string> {
-  const directState = await readTeamModeStateForStop(cwd, stateDir, sessionId);
-  const directTeamName = safeString(directState?.team_name).trim();
-  if (directState?.active === true && directTeamName) return directTeamName;
+  const directState = await readTeamModeStateForStop(cwd, stateDir, sessionId, threadId);
+  const directTeamName = safeString(directState?.state.team_name).trim();
+  if (directState?.state.active === true && directTeamName) return directTeamName;
 
-  const canonicalTeam = await findCanonicalActiveTeamForSession(cwd, sessionId);
+  const canonicalTeam = await findCanonicalActiveTeamForSession(cwd, sessionId, threadId);
   return canonicalTeam?.teamName ?? "";
 }
 
@@ -2959,7 +3019,7 @@ async function maybeBuildReleaseReadinessFinalizeStopOutput(
 ): Promise<{ matched: boolean; output: Record<string, unknown> | null }> {
   if (!sessionId) return { matched: false, output: null };
 
-  const teamName = await resolveActiveTeamNameForStop(cwd, stateDir, sessionId);
+  const teamName = await resolveActiveTeamNameForStop(cwd, stateDir, sessionId, readPayloadThreadId(payload));
   if (!teamName) return { matched: false, output: null };
 
   const explicitReleaseReadinessContext =
@@ -3288,7 +3348,7 @@ async function buildStopHookOutput(
     );
     if (releaseReadinessFinalizeResult.matched) return releaseReadinessFinalizeResult.output;
 
-    const teamOutput = await buildTeamStopOutput(cwd, canonicalSessionId);
+    const teamOutput = await buildTeamStopOutput(cwd, canonicalSessionId, threadId);
     if (teamOutput) {
       return await returnPersistentStopBlock(
         payload,
@@ -3320,7 +3380,7 @@ async function buildStopHookOutput(
 
       const canonicalTeam = await readCanonicalTerminalRunStateForStop(cwd, canonicalSessionId, "team")
         ? null
-        : await findCanonicalActiveTeamForSession(cwd, canonicalSessionId);
+        : await findCanonicalActiveTeamForSession(cwd, canonicalSessionId, threadId);
       if (canonicalTeam) {
         const canonicalTeamOutput = buildTeamStopOutputForPhase(
           canonicalTeam.teamName,

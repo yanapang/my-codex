@@ -16,6 +16,7 @@ import { dirname, join } from 'node:path';
 import { classifyTaskSize, isHeavyMode, type TaskSizeResult, type TaskSizeThresholds } from './task-size-detector.js';
 import { isApprovedExecutionFollowupShortcut, type FollowupMode } from '../team/followup-planner.js';
 import { isPlanningComplete, readPlanningArtifacts } from '../planning/artifacts.js';
+import { hasDurableRalplanConsensusEvidenceForCwd } from '../ralplan/consensus-gate.js';
 import { KEYWORD_TRIGGER_DEFINITIONS, compareKeywordMatches } from './keyword-registry.js';
 import {
   SKILL_ACTIVE_STATE_FILE,
@@ -51,7 +52,7 @@ function safeString(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
-export type SkillActivePhase = 'planning' | 'executing' | 'reviewing' | 'completing' | 'ralplan';
+export type SkillActivePhase = 'planning' | 'executing' | 'reviewing' | 'completing' | 'ralplan' | 'deep-interview';
 
 export interface DeepInterviewInputLock {
   active: boolean;
@@ -399,6 +400,15 @@ async function persistStatefulSkillSeedState(
       handoff_artifacts: {
         deep_interview: null,
         ralplan: null,
+        ralplan_consensus_gate: {
+          required: true,
+          sequence: ['architect-review', 'critic-review'],
+          planning_artifacts_are_not_consensus: true,
+          required_review_roles: ['architect', 'critic'],
+          ralplan_architect_review: null,
+          ralplan_critic_review: null,
+          complete: false,
+        },
         ultragoal: null,
         code_review: null,
         ultraqa: null,
@@ -413,6 +423,13 @@ async function persistStatefulSkillSeedState(
       return_to_ralplan_reason: Object.prototype.hasOwnProperty.call(existingState, 'return_to_ralplan_reason')
         ? existingState.return_to_ralplan_reason
         : null,
+      deep_interview_gate: (existingState.deep_interview_gate && typeof existingState.deep_interview_gate === 'object')
+        ? existingState.deep_interview_gate
+        : {
+            status: 'required',
+            skip_reason: null,
+            rationale: 'Autopilot starts at the deep-interview gate by default; clear bounded tasks may skip only with an explicit persisted skip reason.',
+          },
     };
   }
 
@@ -712,7 +729,7 @@ function resolveContinuationKeywordMatch(
 
 function initialWorkflowPhaseForMode(mode: TrackedWorkflowMode): SkillActivePhase {
   if (mode === 'autoresearch') return 'executing';
-  if (mode === 'autopilot') return 'ralplan';
+  if (mode === 'autopilot') return 'deep-interview';
   return 'planning';
 }
 
@@ -1148,13 +1165,14 @@ export function applyRalplanGate(
   }
 
   const planningComplete = isPlanningComplete(readPlanningArtifacts(options.cwd ?? process.cwd()));
+  const consensusComplete = hasDurableRalplanConsensusEvidenceForCwd(options.cwd ?? process.cwd());
   const shortFollowupBypasses = executionKeywords.filter((keyword) => {
     if (keyword !== 'team' && keyword !== 'ralph') return false;
     return isApprovedExecutionFollowupShortcut(
       keyword as FollowupMode,
       text,
       {
-        planningComplete,
+        planningComplete: planningComplete && consensusComplete,
         priorSkill: options.priorSkill,
       },
     );

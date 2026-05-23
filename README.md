@@ -106,6 +106,7 @@ Start OMX strongly, clarify first when needed, approve the plan, optionally use 
 
 Use OMX if you already like Codex and want a better day-to-day runtime around it:
 - a standard workflow built around `$deep-interview` -> `$ralplan` -> `$ultragoal`, with `$prometheus-strict` available when plans need stricter interview/critique/synthesis before execution and optional `.omx/plans/prometheus-strict/` artifacts
+- research boundaries: use `$best-practice-research` for ordinary pre-planning official/upstream evidence, `$autoresearch` for bounded validator-gated research artifacts, `$autoresearch-goal` for goal-mode research missions, and feed any research findings into `$ralplan` for architecture synthesis
 - durable multi-goal handoffs with `$ultragoal` and `.omx/ultragoal` artifacts as the default completion path after planning
 - specialist roles and supporting skills when the task needs them
 - project guidance through scoped `AGENTS.md`
