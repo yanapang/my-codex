@@ -108,7 +108,7 @@ export const DEEP_INTERVIEW_STATE_FILE = 'deep-interview-state.json';
 export const DEEP_INTERVIEW_BLOCKED_APPROVAL_INPUTS = ['yes', 'y', 'proceed', 'continue', 'ok', 'sure', 'go ahead', 'next i should'] as const;
 export const DEEP_INTERVIEW_INPUT_LOCK_MESSAGE = 'Deep interview is active; auto-approval shortcuts are blocked until the interview finishes.';
 
-type StatefulSkillMode = 'deep-interview' | 'autopilot' | 'ralph' | 'ralplan' | 'ultrawork' | 'ultraqa' | 'team' | 'autoresearch';
+type StatefulSkillMode = 'deep-interview' | 'autopilot' | 'ralph' | 'ralplan' | 'ultragoal' | 'ultrawork' | 'ultraqa' | 'team' | 'autoresearch';
 
 interface StatefulSkillSeedConfig {
   mode: StatefulSkillMode;
@@ -127,6 +127,7 @@ const EXECUTION_LIKE_WORKFLOW_SKILLS = new Set<TrackedWorkflowMode>([
   'autoresearch',
   'ralph',
   'team',
+  'ultragoal',
   'ultrawork',
   'ultraqa',
 ]);
@@ -138,6 +139,7 @@ const STATEFUL_SKILL_SEED_CONFIG: Record<StatefulSkillMode, StatefulSkillSeedCon
   ralph: { mode: 'ralph', initialPhase: 'starting', includeIteration: true },
   ralplan: { mode: 'ralplan', initialPhase: 'planning' },
   team: { mode: 'team', initialPhase: 'starting', scope: 'root' },
+  ultragoal: { mode: 'ultragoal', initialPhase: 'planning' },
   ultrawork: { mode: 'ultrawork', initialPhase: 'planning' },
   ultraqa: { mode: 'ultraqa', initialPhase: 'planning' },
 };
@@ -611,12 +613,12 @@ function parseExplicitSkillInvocations(text: string): ExplicitSkillParseResult {
 
 function hasIntentContextForKeyword(text: string, keyword: string): boolean {
   const k = keyword.toLowerCase();
-  if (
-    (k === 'deep interview' || k === 'interview')
-    && DEEP_INTERVIEW_MANAGEMENT_MENTION_PATTERN.test(text)
-    && !DEEP_INTERVIEW_ACTIVATION_PATTERNS.some((pattern) => pattern.test(text))
-  ) {
-    return false;
+  if (k === 'deep interview' || k === 'interview') {
+    if (DEEP_INTERVIEW_MANAGEMENT_MENTION_PATTERN.test(text)
+      && !DEEP_INTERVIEW_ACTIVATION_PATTERNS.some((pattern) => pattern.test(text))) {
+      return false;
+    }
+    return DEEP_INTERVIEW_ACTIVATION_PATTERNS.some((pattern) => pattern.test(text));
   }
   if (!KEYWORDS_REQUIRING_INTENT.has(k)) return true;
   const patterns = KEYWORD_INTENT_PATTERNS[k as IntentKeyword];

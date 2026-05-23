@@ -251,6 +251,12 @@ describe('keyword detector team compatibility', () => {
     assert.equal(detectPrimaryKeyword('remove the stale deep interview lock from .omx/state'), null);
   });
 
+  it('does not trigger deep-interview from casual discussion mentions', () => {
+    assert.equal(detectPrimaryKeyword('the deep interview report is useful context for the next plan'), null);
+    assert.equal(detectPrimaryKeyword('we already did a deep interview and should not reactivate it'), null);
+    assert.equal(detectPrimaryKeyword('this interview transcript says implementation is ready'), null);
+  });
+
   it('maps "gather requirements" to deep-interview skill', () => {
     const match = detectPrimaryKeyword('let us gather requirements first');
 
@@ -1016,13 +1022,16 @@ describe('keyword detector skill-active-state lifecycle', () => {
 
       const result = await recordSkillActivation({
         stateDir,
-        text: '$ralplan implement the approved contract',
+        text: '$ultragoal turn the clarified spec into goals',
         sessionId: 'sess-handoff',
         nowIso: '2026-04-10T00:00:00.000Z',
       });
 
       assert.equal(result?.transition_error, undefined);
-      assert.equal(result?.transition_message, 'mode transiting: deep-interview -> ralplan');
+      assert.equal(result?.skill, 'ultragoal');
+      assert.equal(result?.initialized_mode, 'ultragoal');
+      assert.equal(result?.initialized_state_path, '.omx/state/sessions/sess-handoff/ultragoal-state.json');
+      assert.equal(result?.transition_message, 'mode transiting: deep-interview -> ultragoal');
 
       const completed = JSON.parse(
         await readFile(join(stateDir, 'sessions', 'sess-handoff', 'deep-interview-state.json'), 'utf-8'),
@@ -1036,6 +1045,53 @@ describe('keyword detector skill-active-state lifecycle', () => {
       assert.equal(completed.question_enforcement?.status, 'cleared');
       assert.equal(completed.question_enforcement?.clear_reason, 'handoff');
       assert.ok(completed.question_enforcement?.cleared_at);
+      const ultragoal = JSON.parse(
+        await readFile(join(stateDir, 'sessions', 'sess-handoff', 'ultragoal-state.json'), 'utf-8'),
+      ) as { active?: boolean; mode?: string; current_phase?: string };
+      assert.equal(ultragoal.active, true);
+      assert.equal(ultragoal.mode, 'ultragoal');
+      assert.equal(ultragoal.current_phase, 'planning');
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps ralplan as an allowlisted deep-interview forward handoff', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-ralplan-handoff-'));
+    const stateDir = join(cwd, '.omx', 'state');
+    try {
+      await mkdir(join(stateDir, 'sessions', 'sess-ralplan-handoff'), { recursive: true });
+      await writeFile(
+        join(stateDir, 'sessions', 'sess-ralplan-handoff', SKILL_ACTIVE_STATE_FILE),
+        JSON.stringify({
+          version: 1,
+          active: true,
+          skill: 'deep-interview',
+          phase: 'planning',
+          session_id: 'sess-ralplan-handoff',
+          active_skills: [{ skill: 'deep-interview', phase: 'planning', active: true, session_id: 'sess-ralplan-handoff' }],
+        }, null, 2),
+      );
+      await writeFile(
+        join(stateDir, 'sessions', 'sess-ralplan-handoff', 'deep-interview-state.json'),
+        JSON.stringify({ active: true, mode: 'deep-interview', current_phase: 'intent-first' }, null, 2),
+      );
+
+      const result = await recordSkillActivation({
+        stateDir,
+        text: '$ralplan implement the approved contract',
+        sessionId: 'sess-ralplan-handoff',
+        nowIso: '2026-04-10T00:00:00.000Z',
+      });
+
+      assert.equal(result?.transition_error, undefined);
+      assert.equal(result?.skill, 'ralplan');
+      assert.equal(result?.transition_message, 'mode transiting: deep-interview -> ralplan');
+      const completed = JSON.parse(
+        await readFile(join(stateDir, 'sessions', 'sess-ralplan-handoff', 'deep-interview-state.json'), 'utf-8'),
+      ) as { active?: boolean; current_phase?: string };
+      assert.equal(completed.active, false);
+      assert.equal(completed.current_phase, 'completed');
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
@@ -1462,7 +1518,7 @@ describe('keyword detector skill-active-state lifecycle', () => {
     }
   });
 
-  it('records ultragoal as a prompt skill without seeding unrelated mode state', async () => {
+  it('records ultragoal as a prompt skill with first-class mode state', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-ultragoal-'));
     const stateDir = join(cwd, '.omx', 'state');
     try {
@@ -1475,9 +1531,16 @@ describe('keyword detector skill-active-state lifecycle', () => {
       assert.ok(result);
       assert.equal(result.skill, 'ultragoal');
       assert.equal(result.keyword, '$ultragoal');
-      assert.equal(result.initialized_mode, undefined);
-      assert.equal(result.initialized_state_path, undefined);
-      assert.equal(existsSync(join(stateDir, 'ultragoal-state.json')), false);
+      assert.equal(result.initialized_mode, 'ultragoal');
+      assert.equal(result.initialized_state_path, '.omx/state/ultragoal-state.json');
+      const modeState = JSON.parse(await readFile(join(stateDir, 'ultragoal-state.json'), 'utf-8')) as {
+        active?: boolean;
+        mode?: string;
+        current_phase?: string;
+      };
+      assert.equal(modeState.active, true);
+      assert.equal(modeState.mode, 'ultragoal');
+      assert.equal(modeState.current_phase, 'planning');
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
