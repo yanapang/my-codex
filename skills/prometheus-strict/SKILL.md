@@ -52,6 +52,8 @@ Every Metis/Momus/Oracle question to the user MUST go through the surface-approp
 - In attached-tmux OMX runtime, use `omx question` as the OMX-owned structured question surface (this is the `AskUserQuestion` equivalent for Prometheus Strict). From attached-tmux Bash/tool paths, prefix the command with `OMX_QUESTION_RETURN_PANE=$TMUX_PANE` (or a concrete `%pane` value) so the leader-pane return target is preserved.
 - **Batch independent high-leverage questions into a single `questions[]` array call**: scope, constraints, non-goals, deliverables, safety bounds, and acceptance criteria are normally independent and MUST be batched into one structured form so the user answers them in a single panel. Reserve one-at-a-time only for dependent question chains where the next question depends on the previous answer.
 - Wait for the `omx question` JSON answer before checking the clearance rule, asking another round, or handing off; prefer `answers[]` / `answers[i].answer`, and use the legacy top-level `answer` only as a compatibility fallback. After every `answers[]` batch, run at least **two gap-fill passes** before another question or handoff: Pass 1 assimilates user answers into the checklist; Pass 2 re-scans repo context, prior turns, research fan-out evidence, and conservative defaults to absorb non-CRITICAL residual gaps.
+- Minimum two emitted question rounds: when Metis emits any user-facing question round, do not hand off after Round 1 unless hostility/`<turn_aborted>` or the round-5 cap forces exit; handoff is allowed only after Round 2 has been emitted and processed. Zero-question complete-checklist handoff remains valid when no questions were emitted.
+- Between-round planning must actively use evidence: after Round 1 answers and the two gap-fill passes, refresh or reuse `<research_fan_out>` explore/researcher evidence, re-run spec prefill, and build Round 2 from residual CRITICAL gaps only.
 - Outside tmux, use the native structured input tool when one is available.
 - When neither structured surface can render (non-tmux Codex CLI, piped runs, CI), list the round's independent questions as a numbered prose block (`Q1: ... Q2: ... Q3: ...`) and wait for all answers in one user turn; do not split into separate round-trips.
 - Multiple interview rounds ARE expected when clearance is not yet reached; each round is one batched form (or its prose fallback), never split across forms.
@@ -99,8 +101,9 @@ Run the interview as a bounded loop:
 2. Batch the round's independent questions into a single Structured Question Surface call (`questions[]` array, or numbered prose fallback outside tmux).
 3. Collect the structured `answers[]`, then run **Gap-fill Pass 1 — answer assimilation**: update evidence vs. assumption and mark checklist items YES only when USER_ANSWERED, ABSORBED_WITH_CITATION, or INFERRED_FROM_SPEC.
 4. Run **Gap-fill Pass 2 — residual adversarial scan**: re-check every remaining UNKNOWN against repo context, prior turns, research fan-out evidence, framework/industry defaults, and conservative reversible defaults; absorb non-CRITICAL gaps with citations/assumptions and leave only CRITICAL blockers.
-5. Evaluate the 6-item checklist (`<Turn_Termination_Rules>` tri-state) only after BOTH gap-fill passes; exit when ALL YES.
-6. If checklist clearance is not reached, return to step 1 with the next round. Cap at 5 rounds; on cap, carry remaining UNKNOWN items forward to Oracle as explicit `<unresolved_blocker>` entries.
+5. Run **between-round planning** after Round 1: refresh or reuse `<research_fan_out>` explore/researcher evidence, re-run spec prefill, and prepare Round 2 from residual CRITICAL gaps only.
+6. Evaluate the 6-item checklist (`<Turn_Termination_Rules>` tri-state) only after BOTH gap-fill passes and the minimum two emitted question rounds gate; exit when ALL YES and either no questions were emitted or Round 2 has been emitted and processed.
+7. If checklist clearance is not reached, or only Round 1 has been processed, return to step 1 with the next round. Cap at 5 rounds; on cap, carry remaining UNKNOWN items forward to Oracle as explicit `<unresolved_blocker>` entries.
 
 ### 3. Momus Challenge (Bounded Retry)
 
@@ -161,7 +164,7 @@ Do not create hook state, Sisyphus state, or `start-work` compatibility state fo
 - [ ] Target result is explicit.
 - [ ] Scope and non-goals are explicit.
 - [ ] Acceptance criteria are measurable.
-- [ ] Metis interview loop reached checklist clearance only after the mandatory two gap-fill passes following every `answers[]` batch, or the 5-round cap was reached with UNKNOWN items carried forward as `<unresolved_blocker>` entries.
+- [ ] Metis interview loop reached checklist clearance only after the mandatory two gap-fill passes following every `answers[]` batch and, if any question round was emitted, after the minimum two emitted question rounds gate; otherwise the 5-round cap was reached with UNKNOWN items carried forward as `<unresolved_blocker>` entries.
 - [ ] Momus objections are resolved or carried forward as explicit blockers, with at most 3 Momus → Oracle re-synthesis cycles consumed.
 - [ ] Oracle plan includes a verification matrix.
 - [ ] Oracle Pass 2 self-verification completed; every machine-checkable contract item passes or is annotated as carried-forward.

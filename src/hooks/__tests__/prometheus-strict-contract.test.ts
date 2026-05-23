@@ -280,6 +280,12 @@ describe('prometheus-strict clean-room contract', () => {
     assert.match(metis, /two-pass gap-fill minimum|two gap-fill passes|BOTH gap-fill passes/i, 'metis must require at least two gap-fill passes after answers before handoff or another question');
     assert.match(metis, /Pass 1[\s\S]{0,120}answer assimilation[\s\S]{0,240}Pass 2[\s\S]{0,160}residual adversarial scan/i, 'metis must name gap-fill Pass 1 and Pass 2 responsibilities');
     assert.match(metis, /do not hand off after only one gap-fill pass|mandatory even when Pass 1 appears/i, 'metis must forbid single-pass handoff after receiving answers');
+    assert.match(metis, /minimum two emitted question rounds|two emitted rounds|Round 2 has been emitted and processed/i, 'metis must forbid one-round handoff when any user-question round was emitted');
+    assert.match(metis, /zero-question(?:s)?[- ]but[- ]complete|zero-question handoff|no questions were emitted[\s\S]{0,160}(?:handoff|allowed|option \(b\))/i, 'metis must preserve zero-question handoff for trivial/spec-complete cases');
+    assert.match(metis, /Between Round 1 and Round 2|between-round planning[\s\S]{0,260}(?:research_fan_out|researcher|explore)/i, 'metis must require researcher/explore-assisted planning between emitted rounds');
+    assert.match(metis, /Round 2[\s\S]{0,220}residual CRITICAL|residual CRITICAL[\s\S]{0,220}Round 2/i, 'metis Round 2 must be limited to residual CRITICAL gaps, not filler');
+    assert.match(skill, /minimum two emitted question rounds|two emitted rounds|Round 2 has been emitted and processed/i, 'skill must expose the minimum two emitted rounds contract');
+    assert.match(skill, /between-round planning[\s\S]{0,240}(?:research_fan_out|researcher|explore)/i, 'skill must expose researcher-assisted between-round planning');
     assert.match(skill, /at least \*\*two gap-fill passes\*\*|BOTH gap-fill passes/i, 'skill must expose the mandatory two-pass gap-fill contract');
     assert.match(metis, /Plan-A[\s\S]{0,200}Plan-B[\s\S]{0,240}(?:identical|same)[\s\S]{0,120}(?:DROP|absorb)/i, 'metis must drop identical Plan-A Plan-B');
     assert.match(metis, /WHEN IN DOUBT|DO NOT ask unless[\s\S]{0,120}structurally different plans/i, 'metis must default to absorb');
