@@ -1938,6 +1938,9 @@ describe("codex native hook dispatch", () => {
       assert.match(output, /omx ultragoal checkpoint --goal-id G001-demo --status complete/);
       assert.match(output, /--status blocked/);
       assert.match(output, /Codex goal context/);
+      assert.match(output, /no such table: thread_goals/);
+      assert.match(output, /unavailable get_goal error JSON or path/);
+      assert.match(output, /safe-recovery blocker/);
       assert.doesNotMatch(output, /fresh (?:Codex )?(?:thread|session)s?/i);
       assert.match(output, /Hooks must not mutate Codex goal state/);
     } finally {
