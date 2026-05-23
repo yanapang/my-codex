@@ -20,12 +20,23 @@ interface NotifyDispatcherMetadata {
 }
 
 const DISPATCH_LOCK_STALE_MS = 45_000;
-const DEFAULT_TURN_DISPATCH_MIN_INTERVAL_MS = 1_000;
+// Codex Desktop can replay a backlog of turn-ended callbacks well after the UI
+// window has gone away. Keep the default same-turn coalescing window longer
+// than a heavily loaded notification hook invocation so sequential queued
+// callbacks from one thread do not slip through merely because the first
+// dispatch was slow. Payloads with different thread/session identity retain
+// independent notification cadence.
+const DEFAULT_TURN_DISPATCH_MIN_INTERVAL_MS = 10_000;
 const DEFAULT_STALE_EVENT_AGE_MS = 5 * 60_000;
 
 interface DispatchGuard {
 	ok: boolean;
 	release?: () => void;
+}
+
+interface DispatchGuardState {
+	lastDispatchAt?: unknown;
+	lastDispatchByIdentity?: Record<string, unknown>;
 }
 
 function parseNonNegativeEnvMs(name: string, fallback: number): number {
@@ -71,9 +82,53 @@ function readPayloadTimestampMs(payload: Record<string, unknown>): number | null
 	return null;
 }
 
+function readPayloadIdentity(payload: Record<string, unknown> | null): string {
+	if (!payload) return "global";
+	for (const key of [
+		"thread_id",
+		"threadId",
+		"conversation_id",
+		"conversationId",
+		"session_id",
+		"sessionId",
+	]) {
+		const value = payload[key];
+		if (typeof value === "string" && value.trim()) {
+			return `${key}:${value.trim()}`;
+		}
+	}
+	return "global";
+}
+
 function dispatchGuardDir(metadataPath: string): string {
 	if (metadataPath) return dirname(metadataPath);
 	return join(tmpdir(), "oh-my-codex-notify-dispatch");
+}
+
+function writeDispatchGuardState(
+	statePath: string,
+	state: DispatchGuardState,
+	identity: string,
+	minIntervalMs: number,
+	staleEventAgeMs: number,
+): void {
+	const previousByIdentity = state.lastDispatchByIdentity && typeof state.lastDispatchByIdentity === "object"
+		? state.lastDispatchByIdentity
+		: {};
+	const retainedByIdentity: Record<string, number> = {};
+	const now = Date.now();
+	const retentionMs = Math.max(minIntervalMs, staleEventAgeMs, DEFAULT_TURN_DISPATCH_MIN_INTERVAL_MS);
+	for (const [key, value] of Object.entries(previousByIdentity)) {
+		if (typeof value === "number" && now - value <= retentionMs) {
+			retainedByIdentity[key] = value;
+		}
+	}
+	retainedByIdentity[identity] = now;
+	writeFileSync(statePath, JSON.stringify({
+		lastDispatchAt: identity === "global" ? now : (typeof state.lastDispatchAt === "number" ? state.lastDispatchAt : undefined),
+		lastDispatchByIdentity: retainedByIdentity,
+		pid: process.pid,
+	}));
 }
 
 function acquireTurnDispatchGuard(metadataPath: string, payloadArg: string): DispatchGuard {
@@ -117,20 +172,36 @@ function acquireTurnDispatchGuard(metadataPath: string, payloadArg: string): Dis
 
 	try {
 		const minIntervalMs = parseNonNegativeEnvMs("OMX_NOTIFY_DISPATCH_MIN_INTERVAL_MS", DEFAULT_TURN_DISPATCH_MIN_INTERVAL_MS);
+		const identity = readPayloadIdentity(payload);
+		let state: DispatchGuardState = {};
+		try {
+			state = JSON.parse(readFileSync(statePath, "utf-8")) as typeof state;
+		} catch {
+			// No prior guard state.
+		}
 		if (minIntervalMs > 0) {
-			try {
-				const parsed = JSON.parse(readFileSync(statePath, "utf-8")) as { lastDispatchAt?: unknown };
-				const lastDispatchAt = typeof parsed.lastDispatchAt === "number" ? parsed.lastDispatchAt : 0;
-				if (lastDispatchAt > 0 && now - lastDispatchAt < minIntervalMs) {
-					release();
-					return { ok: false };
-				}
-			} catch {
-				// No prior guard state.
+			const byIdentity = state.lastDispatchByIdentity && typeof state.lastDispatchByIdentity === "object"
+				? state.lastDispatchByIdentity
+				: {};
+			const identityLastDispatchAt = typeof byIdentity[identity] === "number" ? byIdentity[identity] : 0;
+			const legacyLastDispatchAt = identity === "global" && typeof state.lastDispatchAt === "number" ? state.lastDispatchAt : 0;
+			const lastDispatchAt = Math.max(identityLastDispatchAt, legacyLastDispatchAt);
+			if (lastDispatchAt > 0 && now - lastDispatchAt < minIntervalMs) {
+				release();
+				return { ok: false };
 			}
 		}
-		writeFileSync(statePath, JSON.stringify({ lastDispatchAt: now, pid: process.pid }));
-		return { ok: true, release };
+		return {
+			ok: true,
+			release: () => {
+				try {
+					writeDispatchGuardState(statePath, state, identity, minIntervalMs, staleEventAgeMs);
+				} catch {
+					// Guard state is best effort; the lock still prevents concurrent duplicate dispatch.
+				}
+				release();
+			},
+		};
 	} catch {
 		release();
 		return { ok: false };

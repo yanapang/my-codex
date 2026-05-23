@@ -6,12 +6,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
-function runDispatcher(metadataPath: string, payload: Record<string, unknown> = { type: "test" }): void {
+function runDispatcher(
+	metadataPath: string,
+	payload: Record<string, unknown> = { type: "test" },
+	env: NodeJS.ProcessEnv = {},
+): void {
 	const dispatcherScript = join(process.cwd(), "dist", "scripts", "notify-dispatcher.js");
 	const result = spawnSync(
 		process.execPath,
 		[dispatcherScript, "--metadata", metadataPath, JSON.stringify(payload)],
-		{ encoding: "utf-8", windowsHide: true },
+		{ encoding: "utf-8", env: { ...process.env, ...env }, windowsHide: true },
 	);
 	assert.equal(result.status, 0, result.stderr || result.stdout);
 }
@@ -31,6 +35,70 @@ describe("notify dispatcher turn-ended storm guard", () => {
 			}
 
 			assert.equal(readFileSync(omxMarker, "utf-8"), "omx|");
+		} finally {
+			rmSync(wd, { recursive: true, force: true });
+		}
+	});
+
+	it("allows separate turn-ended identities to dispatch independently", () => {
+		const wd = mkdtempSync(join(tmpdir(), "omx-notify-dispatcher-identities-"));
+		try {
+			const omxMarker = join(wd, "omx-ran");
+			const omxHook = join(wd, "current-notify-hook.js");
+			writeFileSync(omxHook, `import { appendFileSync } from "node:fs"; appendFileSync(${JSON.stringify(omxMarker)}, "omx|");\n`);
+			const metadataPath = join(wd, "notify-dispatch.json");
+			writeFileSync(metadataPath, JSON.stringify({ managedBy: "oh-my-codex", version: 1, omxNotify: [process.execPath, omxHook] }));
+
+			runDispatcher(metadataPath, { type: "agent-turn-complete", thread_id: "desktop-thread-a", turn_id: "queued-a" });
+			runDispatcher(metadataPath, { type: "agent-turn-complete", thread_id: "desktop-thread-b", turn_id: "queued-b" });
+
+			assert.equal(readFileSync(omxMarker, "utf-8"), "omx|omx|");
+		} finally {
+			rmSync(wd, { recursive: true, force: true });
+		}
+	});
+
+	it("coalesces same-identity turn-ended callbacks after a slow notify hook completes", () => {
+		const wd = mkdtempSync(join(tmpdir(), "omx-notify-dispatcher-slow-"));
+		try {
+			const omxMarker = join(wd, "omx-ran");
+			const omxHook = join(wd, "current-notify-hook.js");
+			writeFileSync(omxHook, `import { appendFileSync } from "node:fs"; await new Promise((resolve) => setTimeout(resolve, 1500)); appendFileSync(${JSON.stringify(omxMarker)}, "omx|");\n`);
+			const metadataPath = join(wd, "notify-dispatch.json");
+			writeFileSync(metadataPath, JSON.stringify({ managedBy: "oh-my-codex", version: 1, omxNotify: [process.execPath, omxHook] }));
+			const env = { OMX_NOTIFY_DISPATCH_MIN_INTERVAL_MS: "1000" };
+
+			runDispatcher(metadataPath, { type: "agent-turn-complete", thread_id: "slow-thread", turn_id: "queued-a" }, env);
+			runDispatcher(metadataPath, { type: "agent-turn-complete", thread_id: "slow-thread", turn_id: "queued-b" }, env);
+
+			assert.equal(readFileSync(omxMarker, "utf-8"), "omx|");
+		} finally {
+			rmSync(wd, { recursive: true, force: true });
+		}
+	});
+
+	it("prunes expired turn-ended identity guard state", () => {
+		const wd = mkdtempSync(join(tmpdir(), "omx-notify-dispatcher-prune-"));
+		try {
+			const omxMarker = join(wd, "omx-ran");
+			const omxHook = join(wd, "current-notify-hook.js");
+			writeFileSync(omxHook, `import { appendFileSync } from "node:fs"; appendFileSync(${JSON.stringify(omxMarker)}, "omx|");\n`);
+			const metadataPath = join(wd, "notify-dispatch.json");
+			const guardPath = join(wd, "notify-dispatch.guard.json");
+			writeFileSync(metadataPath, JSON.stringify({ managedBy: "oh-my-codex", version: 1, omxNotify: [process.execPath, omxHook] }));
+			writeFileSync(guardPath, JSON.stringify({
+				lastDispatchByIdentity: {
+					"thread_id:expired": Date.now() - 11 * 60_000,
+					"thread_id:recent": Date.now(),
+				},
+			}));
+
+			runDispatcher(metadataPath, { type: "agent-turn-complete", thread_id: "fresh-thread", turn_id: "queued-fresh" });
+
+			const guard = JSON.parse(readFileSync(guardPath, "utf-8"));
+			assert.equal("thread_id:expired" in guard.lastDispatchByIdentity, false);
+			assert.equal(typeof guard.lastDispatchByIdentity["thread_id:recent"], "number");
+			assert.equal(typeof guard.lastDispatchByIdentity["thread_id:fresh-thread"], "number");
 		} finally {
 			rmSync(wd, { recursive: true, force: true });
 		}
