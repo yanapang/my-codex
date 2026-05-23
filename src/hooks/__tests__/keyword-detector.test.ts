@@ -510,7 +510,7 @@ describe('keyword detector skill-active-state lifecycle', () => {
     }
   });
 
-  it('writes skill-active-state.json with ralplan phase when autopilot keyword activates', async () => {
+  it('writes skill-active-state.json with deep-interview phase when autopilot keyword activates', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-'));
     const stateDir = join(cwd, '.omx', 'state');
     try {
@@ -526,11 +526,11 @@ describe('keyword detector skill-active-state lifecycle', () => {
 
       assert.ok(result);
       assert.equal(result.skill, 'autopilot');
-      assert.equal(result.phase, 'ralplan');
+      assert.equal(result.phase, 'deep-interview');
       assert.equal(result.active, true);
       assert.deepEqual(result.active_skills, [{
         skill: 'autopilot',
-        phase: 'ralplan',
+        phase: 'deep-interview',
         active: true,
         activated_at: '2026-02-25T00:00:00.000Z',
         updated_at: '2026-02-25T00:00:00.000Z',
@@ -562,6 +562,7 @@ describe('keyword detector skill-active-state lifecycle', () => {
         max_iterations: number;
         state: {
           phase_cycle: string[];
+          deep_interview_gate: { status: string; skip_reason: string | null; rationale: string; };
           handoff_artifacts: Record<string, unknown>;
           review_verdict: unknown;
           qa_verdict: unknown;
@@ -575,6 +576,11 @@ describe('keyword detector skill-active-state lifecycle', () => {
       assert.equal(modeState.review_cycle, 0);
       assert.equal(modeState.max_iterations, 10);
       assert.deepEqual(modeState.state.phase_cycle, ['deep-interview', 'ralplan', 'ultragoal', 'code-review', 'ultraqa']);
+      assert.deepEqual(modeState.state.deep_interview_gate, {
+        status: 'required',
+        skip_reason: null,
+        rationale: 'Autopilot starts at the deep-interview gate by default; clear bounded tasks may skip only with an explicit persisted skip reason.',
+      });
       assert.deepEqual(modeState.state.handoff_artifacts, {
         deep_interview: null,
         ralplan: null,
