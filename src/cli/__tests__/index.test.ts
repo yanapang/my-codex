@@ -43,6 +43,7 @@ import {
   shouldAutoIsolateMadmaxLaunch,
   createMadmaxIsolatedRoot,
   buildMadmaxDetachedLaunchContextKey,
+  withMadmaxDetachedContextLock,
   resolveOmxRootForLaunch,
   resolveDisposableWorktreeOmxRootForLaunch,
   prepareCodexHomeForLaunch,
@@ -152,34 +153,34 @@ describe("madmax state isolation", () => {
       const env: NodeJS.ProcessEnv = { OMX_RUNS_DIR: runs };
       const runDir = createMadmaxIsolatedRoot(wd, ["--madmax", "--xhigh", "--tmux"], env);
       const metadata = JSON.parse(await readFile(join(runDir, ".omxbox-run.json"), "utf-8"));
-      const expectedContext = buildMadmaxDetachedLaunchContextKey(wd, ["--madmax", "--xhigh", "--tmux"]);
+      const expectedContext = buildMadmaxDetachedLaunchContextKey(wd, ["--madmax", "--xhigh", "--tmux"], runDir);
       assert.equal(metadata.detached_launch_context, expectedContext);
       assert.equal(env.OMX_MADMAX_DETACHED_CONTEXT, expectedContext);
       assert.equal(
-        expectedContext,
-        buildMadmaxDetachedLaunchContextKey(wd, ["--madmax", "--xhigh"]),
+        buildMadmaxDetachedLaunchContextKey(wd, ["--madmax", "--xhigh", "--tmux"], runDir),
+        buildMadmaxDetachedLaunchContextKey(wd, ["--madmax", "--xhigh"], runDir),
         "explicit --tmux is a transport choice and must not create a second context",
       );
       assert.equal(
-        expectedContext,
-        buildMadmaxDetachedLaunchContextKey(wd, ["--xhigh", "--madmax", "--direct"]),
+        buildMadmaxDetachedLaunchContextKey(wd, ["--madmax", "--xhigh", "--tmux"], runDir),
+        buildMadmaxDetachedLaunchContextKey(wd, ["--xhigh", "--madmax", "--direct"], runDir),
         "argument order and transport choices must not create duplicate detached contexts",
       );
       assert.notEqual(
         expectedContext,
-        buildMadmaxDetachedLaunchContextKey(wd, ["--madmax", "--low"]),
+        buildMadmaxDetachedLaunchContextKey(wd, ["--madmax", "--low"], runDir),
         "different launch semantics may run concurrently",
       );
       assert.notEqual(
-        buildMadmaxDetachedLaunchContextKey(wd, ["--madmax", "--high", "--xhigh"]),
-        buildMadmaxDetachedLaunchContextKey(wd, ["--madmax", "--xhigh", "--high"]),
+        buildMadmaxDetachedLaunchContextKey(wd, ["--madmax", "--high", "--xhigh"], runDir),
+        buildMadmaxDetachedLaunchContextKey(wd, ["--madmax", "--xhigh", "--high"], runDir),
         "last reasoning shorthand wins, so reversed reasoning order is a distinct context",
       );
       const otherWd = await mkdtemp(join(tmpdir(), "omx-madmax-other-source-"));
       try {
         assert.notEqual(
           expectedContext,
-          buildMadmaxDetachedLaunchContextKey(otherWd, ["--madmax", "--xhigh"]),
+          buildMadmaxDetachedLaunchContextKey(otherWd, ["--madmax", "--xhigh"], runDir),
           "different work contexts may run concurrently",
         );
       } finally {
@@ -187,6 +188,95 @@ describe("madmax state isolation", () => {
       }
     } finally {
       await rm(wd, { recursive: true, force: true });
+      await rm(runs, { recursive: true, force: true });
+    }
+  });
+
+  it("gives independent madmax run roots distinct detached launch context locks", async () => {
+    const wd = await mkdtemp(join(tmpdir(), "omx-madmax-source-"));
+    const runs = await mkdtemp(join(tmpdir(), "omx-madmax-runs-"));
+    try {
+      const firstEnv: NodeJS.ProcessEnv = { OMX_RUNS_DIR: runs };
+      const secondEnv: NodeJS.ProcessEnv = { OMX_RUNS_DIR: runs };
+      const firstRunDir = createMadmaxIsolatedRoot(wd, ["--madmax", "--high"], firstEnv);
+      const secondRunDir = createMadmaxIsolatedRoot(wd, ["--madmax", "--high"], secondEnv);
+
+      assert.notEqual(firstRunDir, secondRunDir);
+      assert.notEqual(
+        firstEnv.OMX_MADMAX_DETACHED_CONTEXT,
+        secondEnv.OMX_MADMAX_DETACHED_CONTEXT,
+        "same cwd and argv from independent boxed runs must not contend on one active-detached lock",
+      );
+      assert.equal(
+        firstEnv.OMX_MADMAX_DETACHED_CONTEXT,
+        buildMadmaxDetachedLaunchContextKey(wd, ["--high", "--madmax", "--tmux"], firstRunDir),
+        "transport and order normalization still deduplicates within the same isolated run",
+      );
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+      await rm(runs, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers a madmax detached context lock whose holder pid has already exited", async () => {
+    const runs = await mkdtemp(join(tmpdir(), "omx-madmax-lock-stale-"));
+    try {
+      const contextKey = "stale-context";
+      const lockPath = join(runs, "active-detached", `${contextKey}.lock`);
+      mkdirSync(lockPath, { recursive: true });
+      await writeFile(join(lockPath, "pid"), "2147483647");
+
+      let ran = false;
+      const result = withMadmaxDetachedContextLock(
+        runs,
+        contextKey,
+        () => {
+          ran = true;
+          return "acquired";
+        },
+        { maxAttempts: 2, retryMs: 0 },
+      );
+
+      assert.equal(result, "acquired");
+      assert.equal(ran, true);
+      assert.equal(existsSync(lockPath), false);
+    } finally {
+      await rm(runs, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a live madmax detached context lock and reports holder diagnostics on timeout", async () => {
+    const runs = await mkdtemp(join(tmpdir(), "omx-madmax-lock-live-"));
+    try {
+      const contextKey = "live-context";
+      const lockPath = join(runs, "active-detached", `${contextKey}.lock`);
+      mkdirSync(lockPath, { recursive: true });
+      await writeFile(
+        join(lockPath, "owner.json"),
+        `${JSON.stringify({
+          version: 1,
+          pid: process.pid,
+          context_key: contextKey,
+          acquired_at: new Date().toISOString(),
+        })}\n`,
+      );
+      await writeFile(join(lockPath, "pid"), String(process.pid));
+
+      assert.throws(
+        () => withMadmaxDetachedContextLock(runs, contextKey, () => "should-not-run", { maxAttempts: 1, retryMs: 0 }),
+        (err: unknown) => {
+          assert.ok(err instanceof Error);
+          assert.match(err.message, /timed out waiting for madmax detached launch context lock/);
+          assert.match(err.message, new RegExp(`holder pid ${process.pid} is still running`));
+          assert.match(err.message, /owner context live-context/);
+          assert.match(err.message, /Another madmax detached launch is active for this directory/);
+          assert.match(err.message, /close the existing madmax session or use --worktree for concurrent work/);
+          assert.match(err.message, /Multiple madmax sessions in one directory are unsafe/);
+          return true;
+        },
+      );
+      assert.equal(existsSync(lockPath), true);
+    } finally {
       await rm(runs, { recursive: true, force: true });
     }
   });
@@ -2940,11 +3030,15 @@ describe("detached tmux new-session sequencing", () => {
     assert.doesNotMatch(argsText, /fake-provider-key/);
   });
 
-  it("runCodex builds inside-tmux HUD command with OMX_SESSION_ID", async () => {
+  it("runCodex builds inside-tmux HUD command with OMX_SESSION_ID and OMX_ROOT when set", async () => {
     const source = await readFile(join(repoRoot, 'src', 'cli', 'index.ts'), 'utf-8');
     assert.match(
       source,
-      /buildTmuxPaneCommand\("env",\s*\[\s*`OMX_SESSION_ID=\$\{sessionId\}`,\s*`\$\{OMX_TMUX_HUD_OWNER_ENV\}=1`,\s*"node",\s*omxBin,\s*"hud",\s*"--watch",?\s*\]\)/,
+      /const hudEnvArgs = \[\s*`OMX_SESSION_ID=\$\{sessionId\}`,\s*`\$\{OMX_TMUX_HUD_OWNER_ENV\}=1`,\s*\.\.\.\(currentPaneId \? \[`\$\{OMX_TMUX_HUD_LEADER_PANE_ENV\}=\$\{currentPaneId\}`\] : \[\]\),\s*\.\.\.\(omxRootOverride \? \[`OMX_ROOT=\$\{omxRootOverride\}`\] : \[\]\),\s*\]/,
+    );
+    assert.match(
+      source,
+      /buildTmuxPaneCommand\("env",\s*\[\.\.\.hudEnvArgs,\s*"node",\s*omxBin,\s*"hud",\s*"--watch"\]\)/,
     );
   });
 
@@ -4034,9 +4128,9 @@ exit 0
       (step) => step.name === "reconcile-hud-resize",
     );
 
-    assert.match(registerHook?.args[5] ?? "", />\/dev\/null 2>&1 \|\| true/);
+    assert.match(registerHook?.args[4] ?? "", />\/dev\/null 2>&1 \|\| true/);
     assert.match(
-      registerHook?.args[5] ?? "",
+      registerHook?.args[4] ?? "",
       new RegExp(`-y ${HUD_TMUX_HEIGHT_LINES}\\b`),
     );
     assert.match(schedule?.args[2] ?? "", />\/dev\/null 2>&1 \|\| true/);
@@ -4124,7 +4218,8 @@ exit 0
     assert.equal(steps[0]?.args[2], "-t");
     assert.equal(steps[0]?.args[3], "omx-demo:0");
     assert.match(steps[0]?.args[4] ?? "", /^client-attached\[\d+\]$/);
-    assert.match(steps[1]?.args[5] ?? "", /^window-resized\[\d+\]$/);
+    assert.match(steps[1]?.args[4] ?? "", /^client-resized\[\d+\]$/);
+    assert.doesNotMatch(steps[1]?.args.join(" ") ?? "", /window-resized/);
     assert.deepEqual(steps[2]?.args, ["kill-session", "-t", "omx-demo"]);
   });
 
