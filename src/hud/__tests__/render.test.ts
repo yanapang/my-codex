@@ -240,6 +240,48 @@ describe('renderHud – team', () => {
   });
 });
 
+// ── Ultragoal ────────────────────────────────────────────────────────────────
+
+describe('renderHud – ultragoal', () => {
+  it('renders active ultragoal progress and objective in English', () => {
+    const ctx = {
+      ...emptyCtx(),
+      ultragoal: {
+        active: true,
+        status: 'in_progress',
+        total: 5,
+        complete: 2,
+        pending: 2,
+        inProgress: 1,
+        failed: 0,
+        reviewBlocked: 0,
+        needsUserDecision: 0,
+        progressCurrent: 3,
+        progressTotal: 5,
+        activeGoal: {
+          id: 'G003-tests',
+          title: 'HUD progress display',
+          objective: 'show active ultragoal objective in OMX HUD',
+          status: 'in_progress',
+          index: 3,
+        },
+      },
+      metrics: { total_turns: 12, session_turns: 12, last_activity: '' },
+    };
+
+    const result = stripSgr(renderHud(ctx, 'focused'));
+
+    assert.ok(result.includes('ultragoal 2/5 ▶ G003-tests: HUD progress display'));
+    assert.ok(result.includes('objective: show active ultragoal objective in OMX HUD'));
+    assert.ok(!result.includes('목표'));
+  });
+
+  it('omits ultragoal when null', () => {
+    const result = renderHud(emptyCtx(), 'focused');
+    assert.ok(!result.includes('ultragoal'));
+  });
+});
+
 // ── Metrics – turns ───────────────────────────────────────────────────────────
 
 describe('renderHud – metrics (turns)', () => {

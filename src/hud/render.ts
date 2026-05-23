@@ -124,6 +124,22 @@ function renderTeam(ctx: HudRenderContext): string | null {
   return green('team');
 }
 
+
+function renderUltragoal(ctx: HudRenderContext): string | null {
+  if (!ctx.ultragoal) return null;
+  const total = ctx.ultragoal.progressTotal;
+  const complete = ctx.ultragoal.complete;
+  if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(complete)) return null;
+
+  const progress = `ultragoal ${complete}/${total}`;
+  const id = ctx.ultragoal.activeGoal?.id ? sanitizeDynamicText(ctx.ultragoal.activeGoal.id) : '';
+  const title = ctx.ultragoal.activeGoal?.title ? sanitizeDynamicText(ctx.ultragoal.activeGoal.title) : '';
+  const objective = ctx.ultragoal.activeGoal?.objective ? sanitizeDynamicText(ctx.ultragoal.activeGoal.objective) : '';
+  const heading = [id, title].filter(Boolean).join(': ');
+  const summary = heading ? `${progress} ▶ ${heading}` : progress;
+  return cyan(objective ? `${summary} · objective: ${objective}` : summary);
+}
+
 function renderTurns(ctx: HudRenderContext): string | null {
   if (!ctx.metrics || !isCurrentSessionMetrics(ctx)) return null;
   return dim(`turns:${ctx.metrics.session_turns}`);
@@ -198,6 +214,7 @@ const MINIMAL_ELEMENTS: ElementRenderer[] = [
   renderAutoresearch,
   renderUltraqa,
   renderTeam,
+  renderUltragoal,
   renderTurns,
 ];
 
@@ -211,6 +228,7 @@ const FOCUSED_ELEMENTS: ElementRenderer[] = [
   renderAutoresearch,
   renderUltraqa,
   renderTeam,
+  renderUltragoal,
   renderTurns,
   renderTokens,
   renderQuota,
@@ -228,6 +246,7 @@ const FULL_ELEMENTS: ElementRenderer[] = [
   renderAutoresearch,
   renderUltraqa,
   renderTeam,
+  renderUltragoal,
   renderTurns,
   renderTokens,
   renderQuota,
