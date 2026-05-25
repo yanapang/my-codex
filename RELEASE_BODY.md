@@ -35,4 +35,8 @@
 
 Accepted residual risk: `cargo test` has one known failing `omx-explore` process-group timeout cleanup assertion, waived by release-owner direction for this cut and recorded in `docs/qa/release-readiness-0.18.3.md`.
 
+## Contributors
+
+Thanks to everyone who reported and narrowed the post-`0.18.2` HUD, Team, auth-slot, explore, deep-interview, hook, and agent-catalog follow-ups.
+
 **Full Changelog**: https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.18.2...v0.18.3
