@@ -1,4 +1,4 @@
-# oh-my-codex 0.18.3
+# oh-my-codex v0.18.3
 
 `0.18.3` is a patch release after `0.18.2` for the post-release reliability and operator-experience train on `dev`. It focuses on HUD/tmux lifecycle cleanup, Team diff readability, auth slot hot-swap support, visible explore prompt syntax guidance, deep-interview runtime configuration and handoff authority, plugin-owned hook preservation, and the new Scholastic ontology reviewer agent.
 
@@ -22,7 +22,7 @@
 
 ## Merged PR inventory
 
-#2474, #2476, #2477, #2478, #2481, #2482, #2483, #2484, #2485, #2486, #2487, #2488, #2489, #2491, #2492, #2493, #2494, #2495.
+#2474, #2477, #2478, #2481, #2482, #2483, #2486, #2489, #2491, #2492, #2493, #2495.
 
 ## Validation
 
@@ -37,6 +37,11 @@ Accepted residual risk: `cargo test` has one known failing `omx-explore` process
 
 ## Contributors
 
-Thanks to everyone who reported and narrowed the post-`0.18.2` HUD, Team, auth-slot, explore, deep-interview, hook, and agent-catalog follow-ups.
+Thanks to the contributors who landed the `v0.18.2...v0.18.3` delta:
 
-**Full Changelog**: https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.18.2...v0.18.3
+- [@Yeachan-Heo](https://github.com/Yeachan-Heo) — #2474, #2478, #2486, #2489, #2491, #2492, #2493, #2495
+- [@iqdoctor](https://github.com/iqdoctor) — #2481, #2483
+- [@k-lpmg](https://github.com/k-lpmg) — #2482
+- [@joshvera](https://github.com/joshvera) — #2477
+
+**Full Changelog**: [`v0.18.2...v0.18.3`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.18.2...v0.18.3)
