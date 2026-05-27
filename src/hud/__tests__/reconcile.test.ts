@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { OMX_TMUX_HUD_OWNER_ENV, reconcileHudForPromptSubmit } from '../reconcile.js';
-import { HUD_TMUX_HEIGHT_LINES } from '../constants.js';
+import { HUD_TMUX_HEIGHT_LINES, HUD_TMUX_ULTRAGOAL_HEIGHT_LINES } from '../constants.js';
 import { OMX_TMUX_HUD_LEADER_PANE_ENV } from '../tmux.js';
 
 describe('reconcileHudForPromptSubmit', () => {
@@ -315,6 +315,57 @@ describe('reconcileHudForPromptSubmit', () => {
     assert.equal(resized.length, 1);
     assert.equal(resized[0]?.paneId, '%2');
     assert.equal(resized[0]?.heightLines, HUD_TMUX_HEIGHT_LINES);
+  });
+
+  it('resizes an existing HUD pane to active ultragoal height when ultragoal is active', async () => {
+    const resized: Array<{ paneId: string; heightLines: number }> = [];
+    const result = await reconcileHudForPromptSubmit('/repo', {
+      env: { TMUX: '1', TMUX_PANE: '%1', OMX_SESSION_ID: 'sess-a', [OMX_TMUX_HUD_OWNER_ENV]: '1' },
+      listCurrentWindowPanes: () => [
+        { paneId: '%1', currentCommand: 'codex', startCommand: 'codex' },
+        {
+          paneId: '%2',
+          currentCommand: 'node',
+          startCommand: `env OMX_SESSION_ID='sess-a' ${OMX_TMUX_HUD_LEADER_PANE_ENV}='%1' node omx hud --watch`,
+        },
+      ],
+      readHudConfig: async () => ({ preset: 'focused', git: { display: 'branch' }, statusLine: { preset: 'focused' } }),
+      readAllState: async () => ({
+        version: null,
+        gitBranch: null,
+        ralph: null,
+        ultragoal: {
+          active: true,
+          status: 'in_progress',
+          total: 1,
+          complete: 0,
+          pending: 0,
+          inProgress: 1,
+          failed: 0,
+          reviewBlocked: 0,
+          needsUserDecision: 0,
+          progressTotal: 1,
+        },
+        ultrawork: null,
+        autopilot: null,
+        ralplan: null,
+        deepInterview: null,
+        autoresearch: null,
+        ultraqa: null,
+        team: null,
+        metrics: null,
+        hudNotify: null,
+        session: null,
+      }),
+      resizeTmuxPane: (paneId, heightLines) => {
+        resized.push({ paneId, heightLines });
+        return true;
+      },
+      resolveOmxCliEntryPath: () => '/repo/dist/cli/omx.js',
+    });
+
+    assert.equal(result.status, 'resized');
+    assert.deepEqual(resized, [{ paneId: '%2', heightLines: HUD_TMUX_ULTRAGOAL_HEIGHT_LINES }]);
   });
 
   it('resizes an existing owner-tagged same-leader HUD pane instead of creating a duplicate during prompt revive', async () => {

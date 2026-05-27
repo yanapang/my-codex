@@ -243,6 +243,111 @@ describe('renderHud – team', () => {
 // ── Ultragoal ────────────────────────────────────────────────────────────────
 
 describe('renderHud – ultragoal', () => {
+  it('uses a distinct accent for the current ultragoal only', () => {
+    const ctx = {
+      ...emptyCtx(),
+      ultragoal: {
+        active: true,
+        status: 'in_progress',
+        total: 2,
+        complete: 0,
+        pending: 1,
+        inProgress: 1,
+        failed: 0,
+        reviewBlocked: 0,
+        needsUserDecision: 0,
+        progressTotal: 2,
+        activeGoal: {
+          id: 'G001-active',
+          title: 'Active goal highlight',
+          objective: 'highlight current goal',
+          status: 'in_progress',
+          index: 1,
+        },
+        nextGoals: [{
+          id: 'G002-next',
+          title: 'Next goal',
+          objective: 'lower priority',
+          status: 'pending',
+          index: 2,
+        }],
+      },
+    };
+
+    const result = renderHud(ctx, 'focused', { maxWidth: 220, maxLines: 3 });
+
+    assert.ok(result.includes('\x1b[35mG001-active: Active goal highlight\x1b[0m'));
+    assert.ok(!result.includes('\x1b[35mG002-next'));
+  });
+
+  it('preserves the current ultragoal accent under constrained-width truncation', () => {
+    const ctx = {
+      ...emptyCtx(),
+      ultragoal: {
+        active: true,
+        status: 'in_progress',
+        total: 2,
+        complete: 0,
+        pending: 1,
+        inProgress: 1,
+        failed: 0,
+        reviewBlocked: 0,
+        needsUserDecision: 0,
+        progressTotal: 2,
+        activeGoal: {
+          id: 'G001-active',
+          title: 'Active goal highlight that must stay accented',
+          objective: 'highlight current goal',
+          status: 'in_progress',
+          index: 1,
+        },
+        nextGoals: [{
+          id: 'G002-next',
+          title: 'Lower priority next goal that may be truncated',
+          objective: 'lower priority',
+          status: 'pending',
+          index: 2,
+        }],
+      },
+    };
+
+    const result = renderHud(ctx, 'focused', { maxWidth: 80, maxLines: 6 });
+
+    assert.ok(result.includes('\x1b[35m'), 'active goal accent should survive width truncation');
+    assert.ok(stripSgr(result).split('\n').length <= 3);
+  });
+
+  it('clamps active ultragoal output to the adaptive max even when callers request more lines', () => {
+    const ctx = {
+      ...emptyCtx(),
+      ralplan: { active: true, current_phase: 'review' },
+      ultraqa: { active: true, current_phase: 'adversarial-e2e' },
+      ultragoal: {
+        active: true,
+        status: 'in_progress',
+        total: 2,
+        complete: 0,
+        pending: 1,
+        inProgress: 1,
+        failed: 0,
+        reviewBlocked: 0,
+        needsUserDecision: 0,
+        progressTotal: 2,
+        activeGoal: {
+          id: 'G001-active',
+          title: 'Active HUD work',
+          objective: 'keep active summary compact',
+          status: 'in_progress',
+          index: 1,
+        },
+      },
+    };
+
+    const result = renderHud(ctx, 'focused', { maxWidth: 40, maxLines: 6 });
+
+    assert.ok(result.split('\n').length <= 3);
+  });
+
   it('renders active ultragoal progress and title in English', () => {
     const ctx = {
       ...emptyCtx(),
@@ -278,6 +383,21 @@ describe('renderHud – ultragoal', () => {
   it('omits ultragoal when null', () => {
     const result = renderHud(emptyCtx(), 'focused');
     assert.ok(!result.includes('ultragoal'));
+  });
+
+  it('defaults no-ultragoal rendering to the compact line budget', () => {
+    const result = renderHud({
+      ...emptyCtx(),
+      gitBranch: 'feature/adaptive-hud-line-budget-with-a-very-long-name',
+      ralplan: { active: true, current_phase: 'consensus-complete' },
+      ultraqa: { active: true, current_phase: 'adversarial-verification' },
+      metrics: { total_turns: 100, session_turns: 12, last_activity: '', session_total_tokens: 125000 },
+      hudNotify: { turn_count: 12, last_turn_at: new Date().toISOString() },
+      session: { session_id: 'sess', started_at: new Date().toISOString() },
+    }, 'focused', { maxWidth: 80 });
+
+    assert.ok(!stripSgr(result).includes('ultragoal'));
+    assert.ok(result.split('\n').length <= 2);
   });
 
   it('combines active ultragoal and team into one non-duplicated focused summary', () => {
@@ -400,7 +520,7 @@ describe('renderHud – ultragoal', () => {
     assert.ok(result.split('\n').length <= 3);
   });
 
-  it('renders active ultragoal plus up to three next pending items alongside ralplan and ultraqa when space allows', () => {
+  it('renders active ultragoal and omits lower-priority pending items to protect compactness', () => {
     const ctx = {
       ...emptyCtx(),
       ralplan: { active: true, current_phase: 'review' },
@@ -455,10 +575,10 @@ describe('renderHud – ultragoal', () => {
     assert.ok(result.includes('ralplan:review'));
     assert.ok(result.includes('qa:adversarial-e2e'));
     assert.ok(result.includes('G002-active: Active HUD status'));
-    assert.ok(result.includes('G003-next: Next verification item (pending)'));
-    assert.ok(result.includes('G004-qa: Run UltraQA matrix (pending)'));
-    assert.ok(result.includes('G005-docs: Document compact summary (pending)'));
-    assert.ok(result.split('\n').length <= 6);
+    assert.ok(!result.includes('G003-next: Next verification item (pending)'));
+    assert.ok(!result.includes('G004-qa: Run UltraQA matrix (pending)'));
+    assert.ok(!result.includes('G005-docs: Document compact summary (pending)'));
+    assert.ok(result.split('\n').length <= 3);
   });
 
   it('renders fewer pending ultragoal items without empty separators', () => {
@@ -495,7 +615,7 @@ describe('renderHud – ultragoal', () => {
     const result = stripSgr(renderHud(ctx, 'focused', { maxWidth: 180, maxLines: 3 }));
 
     assert.ok(result.includes('G001-active: Active HUD work'));
-    assert.ok(result.includes('G002-next: Only next item (pending)'));
+    assert.ok(!result.includes('G002-next: Only next item (pending)'));
     assert.ok(!result.includes(' ·  · '));
     assert.ok(!result.includes('objective:'));
   });
@@ -876,7 +996,7 @@ describe('renderHud – wrapping', () => {
     assert.ok(result.split('\n').length <= 5);
   });
 
-  it('caps wrapped HUD output at the requested max line count', () => {
+  it('caps wrapped HUD output at the adaptive no-ultragoal line count', () => {
     const ctx = {
       ...emptyCtx(),
       gitBranch: 'feature/very-long-branch-name',
@@ -900,7 +1020,7 @@ describe('renderHud – wrapping', () => {
       hudNotify: { last_turn_at: new Date().toISOString(), turn_count: 12 },
     };
     const result = stripSgr(renderHud(ctx, 'full', { maxWidth: 22, maxLines: 3 }));
-    assert.equal(result.split('\n').length, 3);
+    assert.equal(result.split('\n').length, 2);
     assert.ok(result.includes('…'));
   });
 });

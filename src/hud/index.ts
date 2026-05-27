@@ -11,9 +11,9 @@
 
 import { execFileSync } from 'child_process';
 import { readAllState, readHudConfig } from './state.js';
-import { renderHud } from './render.js';
+import { getHudRenderMaxLines, renderHud } from './render.js';
 import type { HudFlags, HudPreset, HudRenderContext, ResolvedHudConfig } from './types.js';
-import { HUD_TMUX_HEIGHT_LINES, HUD_TMUX_MAX_HEIGHT_LINES } from './constants.js';
+import { HUD_TMUX_HEIGHT_LINES } from './constants.js';
 import { sleep } from '../utils/sleep.js';
 import { runHudAuthorityTick } from './authority.js';
 import { resolveOmxCliEntryPath } from '../utils/paths.js';
@@ -72,11 +72,26 @@ interface RunWatchModeDependencies {
   readHudConfigFn: (cwd: string) => Promise<ResolvedHudConfig>;
   renderHudFn: (ctx: HudRenderContext, preset: HudPreset, options?: { maxWidth?: number; maxLines?: number }) => string;
   runAuthorityTickFn: (options: { cwd: string }) => Promise<void>;
+  resizeTmuxPaneFn: (paneId: string, heightLines: number) => boolean;
+  registerHudResizeHookFn: (hudPaneId: string, currentPaneId: string | undefined, heightLines: number) => boolean;
   writeStdout: (text: string) => void;
   writeStderr: (text: string) => void;
   registerSigint: (handler: () => void) => void | (() => void);
   setIntervalFn: (handler: () => void, intervalMs: number) => ReturnType<typeof setInterval>;
   clearIntervalFn: (timer: ReturnType<typeof setInterval>) => void;
+}
+
+function reconcileRunningHudPaneHeight(
+  desiredHeight: number,
+  dependencies: Pick<RunWatchModeDependencies, 'env' | 'resizeTmuxPaneFn' | 'registerHudResizeHookFn'>,
+): void {
+  if (!dependencies.env.TMUX || dependencies.env[OMX_TMUX_HUD_OWNER_ENV] !== '1') return;
+  const hudPaneId = dependencies.env.TMUX_PANE?.trim();
+  if (!hudPaneId?.startsWith('%')) return;
+  const leaderPaneId = dependencies.env[OMX_TMUX_HUD_LEADER_PANE_ENV]?.trim() || undefined;
+  if (dependencies.resizeTmuxPaneFn(hudPaneId, desiredHeight) && leaderPaneId) {
+    dependencies.registerHudResizeHookFn(hudPaneId, leaderPaneId, desiredHeight);
+  }
 }
 
 /**
@@ -98,6 +113,8 @@ export async function runWatchMode(
     runAuthorityTickFn: deps.runAuthorityTickFn ?? (async ({ cwd: authorityCwd }) => {
       await runHudAuthorityTick({ cwd: authorityCwd });
     }),
+    resizeTmuxPaneFn: deps.resizeTmuxPaneFn ?? resizeTmuxPane,
+    registerHudResizeHookFn: deps.registerHudResizeHookFn ?? registerHudResizeHook,
     writeStdout: deps.writeStdout ?? ((text: string) => process.stdout.write(text)),
     writeStderr: deps.writeStderr ?? ((text: string) => process.stderr.write(text)),
     registerSigint: deps.registerSigint ?? ((handler: () => void) => {
@@ -121,6 +138,7 @@ export async function runWatchMode(
   let queued = false;
   let stopped = false;
   let timer: ReturnType<typeof setInterval> | undefined;
+  let lastDesiredHeight: number | undefined;
   let resolveDone: () => void = () => {};
   const done = new Promise<void>((resolve) => {
     resolveDone = resolve;
@@ -154,11 +172,16 @@ export async function runWatchMode(
       const config = await dependencies.readHudConfigFn(cwd);
       const ctx = await dependencies.readAllStateFn(cwd, config);
       const preset = flags.preset ?? config.preset;
+      const maxLines = getHudRenderMaxLines(ctx);
+      if (maxLines !== lastDesiredHeight) {
+        reconcileRunningHudPaneHeight(maxLines, dependencies);
+        lastDesiredHeight = maxLines;
+      }
       const line = dependencies.renderHudFn(ctx, preset, {
         maxWidth: process.stdout.columns ?? undefined,
-        maxLines: HUD_TMUX_MAX_HEIGHT_LINES,
+        maxLines,
       });
-      dependencies.writeStdout(line + '\x1b[K\n\x1b[J');
+      dependencies.writeStdout(line + '\x1b[K\x1b[J');
       await dependencies.runAuthorityTickFn({ cwd });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -228,7 +251,7 @@ async function renderOnce(cwd: string, flags: HudFlags): Promise<void> {
 
   console.log(renderHud(ctx, preset, {
     maxWidth: process.stdout.columns ?? undefined,
-    maxLines: HUD_TMUX_MAX_HEIGHT_LINES,
+    maxLines: getHudRenderMaxLines(ctx),
   }));
 }
 
@@ -273,6 +296,7 @@ export function buildTmuxSplitArgs(
   sessionId?: string,
   omxRoot?: string,
   leaderPaneId?: string,
+  heightLines?: number,
 ): string[] {
   // Defense-in-depth: keep preset constrained even if this helper is reused.
   const safePreset = parseHudPreset(preset);
@@ -288,7 +312,10 @@ export function buildTmuxSplitArgs(
   ].filter(Boolean);
   const envPrefix = envAssignments.length > 0 ? `env ${envAssignments.join(' ')} ` : '';
   const cmd = `exec ${envPrefix}${shellEscape(process.execPath)} ${shellEscape(omxBin)} hud --watch${presetArg}`;
-  return ['split-window', '-v', '-l', String(HUD_TMUX_HEIGHT_LINES), '-c', cwd, cmd];
+  const height = Number.isFinite(heightLines) && (heightLines ?? 0) > 0
+    ? Math.floor(heightLines ?? HUD_TMUX_HEIGHT_LINES)
+    : HUD_TMUX_HEIGHT_LINES;
+  return ['split-window', '-v', '-l', String(height), '-c', cwd, cmd];
 }
 
 async function launchTmuxPane(cwd: string, flags: HudFlags): Promise<void> {
@@ -313,8 +340,11 @@ async function launchTmuxPane(cwd: string, flags: HudFlags): Promise<void> {
       })
     : [];
   if (existingHudPaneIds.length === 1) {
-    resizeTmuxPane(existingHudPaneIds[0], HUD_TMUX_HEIGHT_LINES);
-    if (currentPaneId) registerHudResizeHook(existingHudPaneIds[0], currentPaneId, HUD_TMUX_HEIGHT_LINES);
+    const config = await readHudConfig(cwd);
+    const ctx = await readAllState(cwd, config);
+    const desiredHeight = getHudRenderMaxLines(ctx);
+    resizeTmuxPane(existingHudPaneIds[0], desiredHeight);
+    if (currentPaneId) registerHudResizeHook(existingHudPaneIds[0], currentPaneId, desiredHeight);
     console.log('HUD already running in tmux pane. Reused existing HUD pane.');
     return;
   }
@@ -322,7 +352,17 @@ async function launchTmuxPane(cwd: string, flags: HudFlags): Promise<void> {
     killTmuxPane(paneId);
   }
 
-  const args = buildTmuxSplitArgs(cwd, omxBin, flags.preset, process.env.OMX_SESSION_ID, process.env.OMX_ROOT, currentPaneId);
+  const config = await readHudConfig(cwd);
+  const ctx = await readAllState(cwd, config);
+  const args = buildTmuxSplitArgs(
+    cwd,
+    omxBin,
+    flags.preset,
+    process.env.OMX_SESSION_ID,
+    process.env.OMX_ROOT,
+    currentPaneId,
+    getHudRenderMaxLines(ctx),
+  );
 
   try {
     // Split bottom pane at the shared HUD height, running omx hud --watch.

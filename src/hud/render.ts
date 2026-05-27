@@ -5,8 +5,8 @@
  */
 
 import type { HudRenderContext, HudPreset } from './types.js';
-import { green, yellow, cyan, dim, bold, getRalphColor, isColorEnabled, RESET } from './colors.js';
-import { HUD_TMUX_MAX_HEIGHT_LINES } from './constants.js';
+import { green, yellow, cyan, dim, bold, magenta, getRalphColor, isColorEnabled, RESET } from './colors.js';
+import { HUD_TMUX_HEIGHT_LINES, HUD_TMUX_MAX_HEIGHT_LINES, HUD_TMUX_ULTRAGOAL_HEIGHT_LINES } from './constants.js';
 
 const SEP = dim(' | ');
 const CONTROL_CHARS_RE = /[\u0000-\u001f\u007f-\u009f]/g;
@@ -139,6 +139,16 @@ function truncateDynamicText(value: string, maxLength: number): string {
   return normalizeTrailingEllipsis(`${value.slice(0, maxLength - 1).trimEnd()}…`);
 }
 
+export function getHudRenderMaxLines(ctx: Pick<HudRenderContext, 'ultragoal'>): number {
+  return ctx.ultragoal?.active ? HUD_TMUX_ULTRAGOAL_HEIGHT_LINES : HUD_TMUX_HEIGHT_LINES;
+}
+
+function clampHudMaxLines(ctx: Pick<HudRenderContext, 'ultragoal'>, maxLines: number | undefined): number {
+  const adaptiveMaxLines = getHudRenderMaxLines(ctx);
+  if (!Number.isFinite(maxLines ?? Number.NaN) || (maxLines ?? 0) <= 0) return adaptiveMaxLines;
+  return Math.min(Math.floor(maxLines ?? adaptiveMaxLines), adaptiveMaxLines);
+}
+
 function renderUltragoal(ctx: HudRenderContext): string | null {
   if (!ctx.ultragoal?.active) return null;
   const total = ctx.ultragoal.progressTotal;
@@ -146,26 +156,26 @@ function renderUltragoal(ctx: HudRenderContext): string | null {
   if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(complete)) return null;
 
   const teamSummary = formatTeamSummary(ctx);
-  const progress = `ultragoal ${complete}/${total}${teamSummary ? ` + ${teamSummary}` : ''}`;
+  const progress = cyan(`ultragoal ${complete}/${total}${teamSummary ? ` + ${teamSummary}` : ''}`);
   const activeGoal = ctx.ultragoal.activeGoal ?? ctx.ultragoal.ongoingGoals?.[0];
-  const nextGoals = ctx.ultragoal.nextGoals ?? ctx.ultragoal.ongoingGoals?.filter((goal) => goal.id !== activeGoal?.id).slice(0, 3) ?? [];
+  const formatGoal = (goal: typeof activeGoal, titleLength: number): string => {
+    if (!goal) return '';
+    const id = goal.id ? sanitizeDynamicText(goal.id) : '';
+    const title = goal.title ? truncateDynamicText(sanitizeDynamicText(goal.title), titleLength) : '';
+    const status = goal.status ? sanitizeDynamicText(goal.status) : '';
+    const heading = [id, title].filter(Boolean).join(': ');
+    return status && status !== 'in_progress' ? `${heading} (${status})` : heading;
+  };
+  const activeHeading = activeGoal ? formatGoal(activeGoal, 36) : '';
+  const activeSummary = activeHeading ? magenta(activeHeading) : '';
   const ongoingGoals = [
-    ...(activeGoal ? [activeGoal] : []),
-    ...nextGoals.slice(0, 3),
-  ]
-    .map((goal) => {
-      const id = goal.id ? sanitizeDynamicText(goal.id) : '';
-      const title = goal.title ? truncateDynamicText(sanitizeDynamicText(goal.title), 36) : '';
-      const status = goal.status ? sanitizeDynamicText(goal.status) : '';
-      const heading = [id, title].filter(Boolean).join(': ');
-      return status && status !== 'in_progress' ? `${heading} (${status})` : heading;
-    })
-    .filter(Boolean);
+    activeSummary,
+  ].filter(Boolean);
   const rawObjective = activeGoal?.objective ? sanitizeDynamicText(activeGoal.objective) : '';
   const objective = ongoingGoals.length === 0 && rawObjective ? truncateDynamicText(rawObjective, 96) : '';
   const items = ongoingGoals.length > 0 ? ` ▶ ${ongoingGoals.join(' · ')}` : '';
   const summary = `${progress}${items}`;
-  return cyan(objective ? `${summary} ▶ objective: ${objective}` : summary);
+  return objective ? `${summary} ▶ ${dim(`objective: ${objective}`)}` : summary;
 }
 
 
@@ -302,11 +312,51 @@ function ellipsizeSegment(segment: string, maxWidth: number): string {
   const plain = stripAnsi(segment);
   if (plain.length <= maxWidth) return plain;
   if (maxWidth <= 1) return '…';
-  if (maxWidth <= 4) return `${plain.slice(0, Math.max(0, maxWidth - 1))}…`;
+  if (maxWidth <= 4) return `${sliceAnsiVisible(segment, 0, Math.max(0, maxWidth - 1))}…`;
 
   const head = Math.max(1, Math.ceil((maxWidth - 1) / 2));
   const tail = Math.max(1, Math.floor((maxWidth - 1) / 2));
-  return `${plain.slice(0, head)}…${plain.slice(-tail)}`;
+  return `${sliceAnsiVisible(segment, 0, head)}…${sliceAnsiVisible(segment, plain.length - tail, plain.length)}`;
+}
+
+function sliceAnsiVisible(value: string, start: number, end: number): string {
+  if (end <= start) return '';
+
+  let output = '';
+  let visibleIndex = 0;
+  let activeSgr = '';
+  let emittedActiveSgr = false;
+
+  for (let index = 0; index < value.length;) {
+    const sgrMatch = value.slice(index).match(/^\x1b\[[0-9;]*m/);
+    if (sgrMatch) {
+      const code = sgrMatch[0];
+      if (code === RESET || code === '\x1b[0m') {
+        activeSgr = '';
+      } else {
+        activeSgr = code;
+      }
+      if (visibleIndex >= start && visibleIndex < end) {
+        output += code;
+      }
+      index += code.length;
+      continue;
+    }
+
+    const char = value[index] ?? '';
+    if (visibleIndex >= start && visibleIndex < end) {
+      if (!emittedActiveSgr && output.length === 0 && activeSgr) {
+        output += activeSgr;
+      }
+      output += char;
+      emittedActiveSgr = true;
+    }
+    visibleIndex += 1;
+    index += 1;
+    if (visibleIndex >= end) break;
+  }
+
+  return output && activeSgr ? `${output}${RESET}` : output;
 }
 
 function wrapHudParts(
@@ -385,12 +435,16 @@ export function renderHud(
 
   const ver = ctx.version ? `#${ctx.version.replace(/^v/, '')}` : '';
   const label = bold(`[OMX${ver}]`);
+  const renderOptions = {
+    ...options,
+    maxLines: clampHudMaxLines(ctx, options.maxLines),
+  };
 
   if (parts.length === 0) {
-    return wrapHudParts(label, [dim('No active modes.')], options);
+    return wrapHudParts(label, [dim('No active modes.')], renderOptions);
   }
 
-  return wrapHudParts(label, parts, options);
+  return wrapHudParts(label, parts, renderOptions);
 }
 
 export function countRenderedHudLines(text: string): number {

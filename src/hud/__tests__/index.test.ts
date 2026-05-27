@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { hudCommand, runWatchMode } from '../index.js';
 import { renderHud } from '../render.js';
+import { OMX_TMUX_HUD_OWNER_ENV } from '../reconcile.js';
+import { OMX_TMUX_HUD_LEADER_PANE_ENV } from '../tmux.js';
 import type { HudFlags, HudRenderContext } from '../types.js';
 
 const WATCH_FLAGS: HudFlags = {
@@ -207,7 +209,171 @@ describe('runWatchMode', () => {
     assert.equal((plain.match(/ultragoal 1\/3/g) ?? []).length, 1);
     assert.ok(plain.includes('ultragoal 1/3 + team:2 workers'));
     assert.ok(plain.includes('G002-team: Team HUD summary'));
-    assert.ok(plain.includes('G003-next: Next team checkpoint (pending)'));
+    assert.ok(!plain.includes('G003-next: Next team checkpoint (pending)'));
+  });
+
+  it('passes adaptive active-ultragoal line budget to watch rendering', async () => {
+    const maxLines: Array<number | undefined> = [];
+    let sigintHandler: (() => void) | undefined;
+
+    const promise = runWatchMode('/tmp', WATCH_FLAGS, {
+      isTTY: true,
+      env: {},
+      readAllStateFn: async () => ({
+        ...emptyCtx(),
+        ultragoal: {
+          active: true,
+          status: 'in_progress',
+          total: 1,
+          complete: 0,
+          pending: 0,
+          inProgress: 1,
+          failed: 0,
+          reviewBlocked: 0,
+          needsUserDecision: 0,
+          progressTotal: 1,
+        },
+      }),
+      readHudConfigFn: async () => ({ preset: 'focused', git: { display: 'repo-branch' }, statusLine: { preset: 'focused' } }),
+      renderHudFn: (_ctx, _preset, options) => {
+        maxLines.push(options?.maxLines);
+        return 'frame';
+      },
+      writeStdout: () => {},
+      writeStderr: () => {},
+      registerSigint: (handler) => { sigintHandler = handler; },
+      setIntervalFn: () => ({}) as ReturnType<typeof setInterval>,
+      clearIntervalFn: () => {},
+    });
+
+    await flush();
+    sigintHandler?.();
+    await promise;
+
+    assert.deepEqual(maxLines, [3]);
+  });
+
+  it('passes compact no-ultragoal line budget to watch rendering', async () => {
+    const maxLines: Array<number | undefined> = [];
+    let sigintHandler: (() => void) | undefined;
+
+    const promise = runWatchMode('/tmp', WATCH_FLAGS, {
+      isTTY: true,
+      env: {},
+      readAllStateFn: async () => emptyCtx(),
+      readHudConfigFn: async () => ({ preset: 'focused', git: { display: 'repo-branch' }, statusLine: { preset: 'focused' } }),
+      renderHudFn: (_ctx, _preset, options) => {
+        maxLines.push(options?.maxLines);
+        return 'frame';
+      },
+      writeStdout: () => {},
+      writeStderr: () => {},
+      registerSigint: (handler) => { sigintHandler = handler; },
+      setIntervalFn: () => ({}) as ReturnType<typeof setInterval>,
+      clearIntervalFn: () => {},
+    });
+
+    await flush();
+    sigintHandler?.();
+    await promise;
+
+    assert.deepEqual(maxLines, [2]);
+  });
+
+  it('does not write an extra terminal row beyond the rendered watch frame', async () => {
+    const writes: string[] = [];
+    let sigintHandler: (() => void) | undefined;
+
+    const promise = runWatchMode('/tmp', WATCH_FLAGS, {
+      isTTY: true,
+      env: {},
+      readAllStateFn: async () => emptyCtx(),
+      readHudConfigFn: async () => ({ preset: 'focused', git: { display: 'repo-branch' }, statusLine: { preset: 'focused' } }),
+      renderHudFn: () => 'line-one\nline-two',
+      writeStdout: (text) => { writes.push(text); },
+      writeStderr: () => {},
+      registerSigint: (handler) => { sigintHandler = handler; },
+      setIntervalFn: () => ({}) as ReturnType<typeof setInterval>,
+      clearIntervalFn: () => {},
+    });
+
+    await flush();
+    sigintHandler?.();
+    await promise;
+
+    assert.ok(writes.some((chunk) => chunk.includes('line-one\nline-two\x1b[K\x1b[J')));
+    assert.ok(!writes.some((chunk) => chunk.includes('line-two\x1b[K\n\x1b[J')));
+  });
+
+  it('resizes an OMX-owned running HUD pane when the adaptive budget changes', async () => {
+    const resized: Array<{ paneId: string; heightLines: number }> = [];
+    const registered: Array<{ hudPaneId: string; leaderPaneId: string | undefined; heightLines: number }> = [];
+    let sigintHandler: (() => void) | undefined;
+    let timerTick: (() => void) | undefined;
+    let callCount = 0;
+    const secondReadStarted = deferred();
+
+    const promise = runWatchMode('/tmp', WATCH_FLAGS, {
+      isTTY: true,
+      env: {
+        TMUX: '1',
+        TMUX_PANE: '%hud',
+        [OMX_TMUX_HUD_OWNER_ENV]: '1',
+        [OMX_TMUX_HUD_LEADER_PANE_ENV]: '%leader',
+      },
+      readAllStateFn: async () => {
+        callCount += 1;
+        if (callCount === 2) secondReadStarted.resolve();
+        return {
+          ...emptyCtx(),
+          ultragoal: callCount === 1 ? null : {
+            active: true,
+            status: 'in_progress',
+            total: 1,
+            complete: 0,
+            pending: 0,
+            inProgress: 1,
+            failed: 0,
+            reviewBlocked: 0,
+            needsUserDecision: 0,
+            progressTotal: 1,
+          },
+        };
+      },
+      readHudConfigFn: async () => ({ preset: 'focused', git: { display: 'repo-branch' }, statusLine: { preset: 'focused' } }),
+      renderHudFn: () => 'frame',
+      writeStdout: () => {},
+      writeStderr: () => {},
+      registerSigint: (handler) => { sigintHandler = handler; },
+      setIntervalFn: (handler) => {
+        timerTick = handler;
+        return ({}) as ReturnType<typeof setInterval>;
+      },
+      clearIntervalFn: () => {},
+      resizeTmuxPaneFn: (paneId, heightLines) => {
+        resized.push({ paneId, heightLines });
+        return true;
+      },
+      registerHudResizeHookFn: (hudPaneId, leaderPaneId, heightLines) => {
+        registered.push({ hudPaneId, leaderPaneId, heightLines });
+        return true;
+      },
+    });
+
+    await flush();
+    timerTick?.();
+    await withTimeout(secondReadStarted.promise, 'second render should observe active ultragoal');
+    sigintHandler?.();
+    await promise;
+
+    assert.deepEqual(resized, [
+      { paneId: '%hud', heightLines: 2 },
+      { paneId: '%hud', heightLines: 3 },
+    ]);
+    assert.deepEqual(registered, [
+      { hudPaneId: '%hud', leaderPaneId: '%leader', heightLines: 2 },
+      { hudPaneId: '%hud', leaderPaneId: '%leader', heightLines: 3 },
+    ]);
   });
 
   it('runs authority tick after each rendered frame', async () => {

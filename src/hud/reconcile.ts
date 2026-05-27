@@ -1,4 +1,5 @@
-import { readHudConfig } from './state.js';
+import { readAllState, readHudConfig } from './state.js';
+import { getHudRenderMaxLines } from './render.js';
 import { HUD_TMUX_HEIGHT_LINES } from './constants.js';
 import {
   buildHudWatchCommand,
@@ -47,6 +48,7 @@ export interface ReconcileHudForPromptSubmitDeps {
   killTmuxPane?: (paneId: string) => boolean;
   resizeTmuxPane?: (paneId: string, heightLines: number) => boolean;
   readHudConfig?: typeof readHudConfig;
+  readAllState?: typeof readAllState;
   resolveOmxCliEntryPath?: typeof resolveOmxCliEntryPath;
   registerHudResizeHook?: (hudPaneId: string, currentPaneId: string | undefined, heightLines: number) => boolean;
   unregisterHudResizeHook?: (currentPaneId: string | undefined) => boolean;
@@ -113,10 +115,11 @@ export async function reconcileHudForPromptSubmit(
   });
   const duplicateCount = Math.max(0, hudPaneIds.length - 1);
   const nonHudPaneCount = panes.filter((pane) => !isHudWatchPane(pane)).length;
-  const desiredHeight = HUD_TMUX_HEIGHT_LINES;
-
   const readHudConfigFn = deps.readHudConfig ?? readHudConfig;
   const hudConfig = await readHudConfigFn(cwd).catch(() => null);
+  const readAllStateFn = deps.readAllState ?? readAllState;
+  const hudState = hudConfig ? await readAllStateFn(cwd, hudConfig).catch(() => null) : null;
+  const desiredHeight = hudState ? getHudRenderMaxLines(hudState) : HUD_TMUX_HEIGHT_LINES;
   const preset = hudConfig?.preset;
   const hudCmd = buildHudWatchCommand(omxBin, preset, resolvedSessionId, env.OMX_ROOT, currentPaneId);
 
