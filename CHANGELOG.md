@@ -4,6 +4,34 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.18.5] - 2026-05-27
+
+Patch release for the post-`0.18.4` Ultragoal/HUD operator-experience train: clearer Ultragoal status when Codex goal storage is unavailable, more readable and compact HUD summaries, duplicate HUD pane prevention, safer `omx question`/Autopilot user-decision handling, narrower doctor warnings, and mandatory independent final review evidence for Ultragoal completion.
+
+### Changed
+
+- **Ultragoal final review evidence is stricter** — final aggregate completion now requires independent code-reviewer and architect evidence before the Codex goal can be marked complete.
+- **Ultragoal HUD summaries are more useful** — HUD output is compact, avoids duplicate combined-state summaries, and can show next active/pending Ultragoal items instead of only the current line.
+- **Autopilot preserves operator decisions** — deep-interview question handling keeps explicit user decisions intact while waiting through `omx question`.
+
+### Fixed
+
+- **Ultragoal status handles unavailable Codex goal storage** — goal DB unavailability is reported as recovery evidence instead of confusing completion state.
+- **HUD pane ownership converges cleanly** — Team/Ultragoal HUD panes no longer duplicate, and convergence still works when pane environment variables are absent.
+- **Doctor shared-skill warnings are narrower** — doctor avoids noisy shared skill-root warnings outside the relevant ownership boundary.
+
+### PRs
+
+- #2531, #2532, #2535, #2539, #2544, #2545, #2546, #2549, #2553, #2554
+
+### Issues
+
+- No separately closed GitHub issues were found for the `v0.18.4..HEAD` release range; the release scope is represented by the merged PR inventory above.
+
+### Verification
+
+- Release readiness evidence is tracked in `docs/qa/release-readiness-0.18.5.md`.
+
 ## [0.18.4] - 2026-05-26
 
 Patch release for the post-`0.18.3` runtime-safety train: Ultragoal recovery, deprecated explore guidance, Team/HUD ownership fixes, plugin native-agent setup reliability, project-local trust sync, Autopilot question waiting, and ralplan reviewer-contract hardening.
