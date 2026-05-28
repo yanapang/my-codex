@@ -19,6 +19,10 @@ import {
 } from './skill-active.js';
 import { applyRunOutcomeContract } from '../runtime/run-outcome.js';
 import { clearDeepInterviewQuestionObligation } from '../question/deep-interview.js';
+import {
+  buildAutopilotDeepInterviewRalplanGateError,
+  canAdvanceAutopilotDeepInterviewToRalplan,
+} from '../autopilot/deep-interview-gate.js';
 
 interface TransitionStateLike {
   active?: unknown;
@@ -113,8 +117,22 @@ async function completeSourceModeState(
   const completedPaths: string[] = [];
 
   for (const candidatePath of candidatePaths) {
-    const existing = await readJsonIfExists(candidatePath);
+    const existing = await readJsonIfExists(candidatePath, {
+      mode: sourceMode,
+      throwOnParseError: true,
+    });
     if (!existing || existing.active !== true) continue;
+    if (sourceMode === 'deep-interview' && destinationMode === 'ralplan') {
+      const gate = await canAdvanceAutopilotDeepInterviewToRalplan({
+        cwd,
+        sessionId,
+        baseStateDir,
+        deepInterviewState: existing,
+      });
+      if (!gate.allowed) {
+        throw new Error(buildAutopilotDeepInterviewRalplanGateError(gate));
+      }
+    }
 
     const nextCandidate: TransitionStateLike = {
       ...existing,
@@ -144,6 +162,16 @@ async function completeSourceModeState(
     await mkdir(dirname(candidatePath), { recursive: true });
     await writeFile(candidatePath, JSON.stringify(nextState, null, 2));
     completedPaths.push(candidatePath);
+  }
+
+  if (sourceMode === 'deep-interview' && destinationMode === 'ralplan' && completedPaths.length === 0) {
+    const gate = await canAdvanceAutopilotDeepInterviewToRalplan({
+      cwd,
+      sessionId,
+      baseStateDir,
+      deepInterviewState: null,
+    });
+    throw new Error(buildAutopilotDeepInterviewRalplanGateError(gate));
   }
 
   await syncCanonicalSkillStateForMode({
