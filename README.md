@@ -43,7 +43,7 @@ It keeps Codex as the execution engine and makes it easier to:
 | --- | --- | --- |
 | Creator & Lead | Yeachan Heo | [@Yeachan-Heo](https://github.com/Yeachan-Heo) |
 | Maintainer | HaD0Yun | [@HaD0Yun](https://github.com/HaD0Yun) |
-| Contributor | iqdoctor | [@iqdoctor](https://github.com/iqdoctor) |
+| Maintainer | iqdoctor | [@iqdoctor](https://github.com/iqdoctor) |
 
 ## Ambassadors
 
@@ -56,7 +56,6 @@ It keeps Codex as the execution engine and makes it easier to:
 | Name | GitHub |
 | --- | --- |
 | HaD0Yun | [@HaD0Yun](https://github.com/HaD0Yun) |
-| iqdoctor | [@iqdoctor](https://github.com/iqdoctor) |
 | Junho Yeo | [@junhoyeo](https://github.com/junhoyeo) |
 | JiHongKim98 | [@JiHongKim98](https://github.com/JiHongKim98) |
 | Lor | [@gobylor](https://github.com/gobylor) |
@@ -434,7 +433,7 @@ If this happens, try:
 | --- | --- | --- |
 | Creator & Lead | Yeachan Heo | [@Yeachan-Heo](https://github.com/Yeachan-Heo) |
 | Maintainer | HaD0Yun | [@HaD0Yun](https://github.com/HaD0Yun) |
-| Contributor | iqdoctor | [@iqdoctor](https://github.com/iqdoctor) |
+| Maintainer | iqdoctor | [@iqdoctor](https://github.com/iqdoctor) |
 
 ## Star History
 
