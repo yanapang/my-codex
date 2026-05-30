@@ -56,6 +56,7 @@ It keeps Codex as the execution engine and makes it easier to:
 | Name | GitHub |
 | --- | --- |
 | HaD0Yun | [@HaD0Yun](https://github.com/HaD0Yun) |
+| iqdoctor | [@iqdoctor](https://github.com/iqdoctor) |
 | Junho Yeo | [@junhoyeo](https://github.com/junhoyeo) |
 | JiHongKim98 | [@JiHongKim98](https://github.com/JiHongKim98) |
 | Lor | [@gobylor](https://github.com/gobylor) |
