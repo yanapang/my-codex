@@ -431,6 +431,66 @@ describe("codex native hook dispatch", () => {
     );
   });
 
+  it("redacts unterminated prompt-like malformed stdin fields", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-cli-malformed-unterminated-"));
+    try {
+      const privatePrompt = "PRIVATE_UNTERMINATED_PROMPT";
+      const malformed = `{hook_event_name:"PostToolUse", prompt:"${privatePrompt}`;
+      const result = spawnSync(process.execPath, [nativeHookScriptPath()], {
+        cwd,
+        input: malformed,
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.equal(result.stderr, "");
+      const output = parseSingleJsonStdout(result.stdout);
+      assert.equal(output.stopReason, "native_hook_stdin_parse_error");
+
+      const log = await readFile(join(cwd, ".omx", "logs", `native-hook-${new Date().toISOString().split("T")[0]}.jsonl`), "utf-8");
+      const entry = JSON.parse(log.trim()) as Record<string, unknown>;
+      const prefix = String(entry.raw_input_prefix ?? "");
+      assert.doesNotMatch(prefix, new RegExp(privatePrompt));
+      assert.match(prefix, /prompt:"\[REDACTED\]"/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("logs a bounded redacted raw stdin prefix when CLI stdin is malformed", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-cli-malformed-log-prefix-"));
+    try {
+      const secret = "sk-test-secret123456";
+      const promptText = "summarize private launch notes";
+      const malformed = `{hook_event_name:"PostToolUse", access_token:"${secret}", prompt:"${promptText}", text:"${promptText}", bad:"${"x".repeat(400)}"}${String.fromCharCode(10, 0, 7)}`;
+      const result = spawnSync(process.execPath, [nativeHookScriptPath()], {
+        cwd,
+        input: malformed,
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.equal(result.stderr, "");
+      const output = parseSingleJsonStdout(result.stdout);
+      assert.equal(output.stopReason, "native_hook_stdin_parse_error");
+
+      const log = await readFile(join(cwd, ".omx", "logs", `native-hook-${new Date().toISOString().split("T")[0]}.jsonl`), "utf-8");
+      const entry = JSON.parse(log.trim()) as Record<string, unknown>;
+      const prefix = String(entry.raw_input_prefix ?? "");
+      assert.equal(entry.type, "native_hook_stdin_parse_error");
+      assert.equal(entry.raw_input_length, Buffer.byteLength(malformed, "utf-8"));
+      assert.ok(prefix.length <= 240, `prefix should be bounded, got ${prefix.length}`);
+      assert.doesNotMatch(prefix, /[\u0000-\u001f\u007f-\u009f]/);
+      assert.doesNotMatch(prefix, new RegExp(secret));
+      assert.doesNotMatch(prefix, new RegExp(promptText));
+      assert.match(prefix, /\[REDACTED\]/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("emits Stop-schema-safe block JSON when malformed stdin still identifies Stop", () => {
     const stdout = runNativeHookCli('{hook_event_name:"Stop",');
 
@@ -7756,6 +7816,50 @@ exit 0
     }
   });
 
+  it("does not block ordinary non-zero grep output in PostToolUse", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-posttool-grep-nonzero-"));
+    try {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PostToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-grep-nonzero",
+          tool_input: { command: "grep -R missing-pattern src | head -20" },
+          tool_response: "{\"exit_code\":1,\"stdout\":\"src/example.ts:TODO\",\"stderr\":\"\"}",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "post-tool-use");
+      assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("does not block ordinary non-zero diagnostic output in PostToolUse", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-posttool-diagnostic-nonzero-"));
+    try {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PostToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-diagnostic-nonzero",
+          tool_input: { command: "find src -name nope -print" },
+          tool_response: "{\"exit_code\":1,\"stdout\":\"searched 10 files\",\"stderr\":\"\"}",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "post-tool-use");
+      assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("treats stderr-only informative non-zero output as reviewable instead of a generic failure", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-posttool-informative-stderr-"));
     try {
@@ -7811,6 +7915,84 @@ exit 0
             "The Bash output appears informative despite the non-zero exit code. Review and report the output before retrying instead of assuming the command simply failed.",
         },
       });
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("treats wrapped gh pr checks output as reviewable", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-posttool-gh-wrapped-"));
+    try {
+      for (const command of [
+        "GH_PAGER=cat gh pr checks",
+        "env GH_TOKEN=ghp_testtoken gh pr checks",
+        "/usr/bin/env gh pr checks",
+        "env -- gh pr checks",
+        "env -C repo gh pr checks",
+        "/usr/bin/gh pr checks",
+        "gh --repo owner/repo pr checks",
+        "echo a; gh pr checks",
+        "cd repo && gh pr checks",
+      ]) {
+        const result = await dispatchCodexNativeHook(
+          {
+            hook_event_name: "PostToolUse",
+            cwd,
+            tool_name: "Bash",
+            tool_use_id: `tool-useful-${command}`,
+            tool_input: { command },
+            tool_response: "{\"exit_code\":8,\"stdout\":\"build pending\",\"stderr\":\"\"}",
+          },
+          { cwd },
+        );
+
+        assert.equal(result.omxEventName, "post-tool-use");
+        assert.equal((result.outputJson as { decision?: string } | null)?.decision, "block", command);
+      }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat heredoc gh pr checks text as a reviewable command", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-posttool-gh-heredoc-"));
+    try {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PostToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-heredoc-gh-checks",
+          tool_input: { command: "cat <<'EOF'\ngh pr checks\nEOF\nfalse" },
+          tool_response: "{\"exit_code\":1,\"stdout\":\"gh pr checks\",\"stderr\":\"\"}",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "post-tool-use");
+      assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat echoed gh pr checks text as a reviewable command", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-posttool-gh-echo-"));
+    try {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PostToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-echo-gh-checks",
+          tool_input: { command: "echo gh pr checks" },
+          tool_response: "{\"exit_code\":1,\"stdout\":\"gh pr checks\",\"stderr\":\"\"}",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "post-tool-use");
+      assert.equal(result.outputJson, null);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
