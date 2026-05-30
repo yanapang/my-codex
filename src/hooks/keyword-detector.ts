@@ -758,7 +758,51 @@ function shouldReusePreviousSkillForContinuation(
 }
 
 function isAutopilotSupervisedChildSkill(skill: string): boolean {
-  return skill === 'code-review';
+  return skill === 'code-review'
+    || skill === 'ultraqa'
+    || skill === 'ralplan'
+    || skill === 'ultragoal'
+    || skill === 'deep-interview';
+}
+
+const AUTOPILOT_SUPERVISED_TRACKED_CHILD_SKILLS: TrackedWorkflowMode[] = [
+  'deep-interview',
+  'ralplan',
+  'ultragoal',
+  'ultraqa',
+];
+
+async function reconcileAutopilotSupervisedChildModeStates(
+  cwd: string,
+  stateDir: string,
+  sessionId: string | undefined,
+  childSkill: string,
+  nowIso: string,
+): Promise<string[]> {
+  if (!isTrackedWorkflowMode(childSkill)) return [];
+
+  const activeChildModes: TrackedWorkflowMode[] = [];
+  for (const mode of AUTOPILOT_SUPERVISED_TRACKED_CHILD_SKILLS) {
+    const candidatePaths = [
+      resolveSeedStateFilePath(stateDir, mode as StatefulSkillMode, sessionId).absolutePath,
+    ];
+    for (const candidatePath of candidatePaths) {
+      const existing = await readJsonStateIfExists(candidatePath);
+      if (!existing || existing.active !== true || safeString(existing.mode).trim() !== mode) continue;
+      activeChildModes.push(mode);
+      break;
+    }
+  }
+
+  const transition = await reconcileWorkflowTransition(cwd, childSkill, {
+    action: 'activate',
+    baseStateDir: stateDir,
+    currentModes: activeChildModes,
+    nowIso,
+    sessionId,
+    source: 'autopilot-supervised-child',
+  });
+  return transition.completedPaths;
 }
 
 function isDeepInterviewRuntimeConfig(value: unknown): value is DeepInterviewRuntimeConfig {
@@ -950,6 +994,56 @@ export async function recordSkillActivation(input: RecordSkillActivationInput): 
     ? reusableDeepInterviewConfig ?? resolveDeepInterviewRuntimeConfig({ cwd: sourceCwd, text: input.text })
     : null;
 
+  if (previous?.active === true && previous.skill === 'autopilot' && isAutopilotSupervisedChildSkill(match.skill)) {
+    const nextState: SkillActiveState = {
+      ...previous,
+      version: 1,
+      active: true,
+      updated_at: nowIso,
+      source: 'keyword-detector',
+      session_id: input.sessionId ?? previous.session_id,
+      thread_id: input.threadId ?? previous.thread_id,
+      turn_id: input.turnId ?? previous.turn_id,
+      active_skills: listActiveSkills(previous).map((entry) => (
+        entry.skill === 'autopilot'
+          ? {
+              ...entry,
+              active: true,
+              updated_at: nowIso,
+              session_id: input.sessionId ?? entry.session_id,
+              thread_id: input.threadId ?? entry.thread_id,
+              turn_id: input.turnId ?? entry.turn_id,
+            }
+          : entry
+      )),
+      supervised_child_keyword: match.keyword,
+      supervised_child_skill: match.skill,
+    };
+    try {
+      await reconcileAutopilotSupervisedChildModeStates(sourceCwd, input.stateDir, input.sessionId ?? previous.session_id, match.skill, nowIso);
+      await writeSkillActiveStateCopiesForStateDir(
+        input.stateDir,
+        nextState,
+        input.sessionId,
+        selectRootSkillStateCopy(previousRoot, nextState, input.sessionId),
+      );
+    } catch (error) {
+      return {
+        ...previous,
+        version: 1,
+        active: true,
+        updated_at: nowIso,
+        source: 'keyword-detector',
+        session_id: input.sessionId ?? previous.session_id,
+        thread_id: input.threadId ?? previous.thread_id,
+        turn_id: input.turnId ?? previous.turn_id,
+        active_skills: listActiveSkills(previous),
+        transition_error: error instanceof Error ? error.message : String(error),
+      };
+    }
+    return nextState;
+  }
+
   if (isTrackedWorkflowMatch) {
     let nextWorkflowEntries = previousWorkflowEntries.map((entry) => ({ ...entry }));
     const transitionMessages: string[] = [];
@@ -1120,44 +1214,6 @@ export async function recordSkillActivation(input: RecordSkillActivationInput): 
     }
 
     return workflowState;
-  }
-
-  if (previous?.active === true && previous.skill === 'autopilot' && isAutopilotSupervisedChildSkill(match.skill)) {
-    const nextState: SkillActiveState = {
-      ...previous,
-      version: 1,
-      active: true,
-      updated_at: nowIso,
-      source: 'keyword-detector',
-      session_id: input.sessionId ?? previous.session_id,
-      thread_id: input.threadId ?? previous.thread_id,
-      turn_id: input.turnId ?? previous.turn_id,
-      active_skills: listActiveSkills(previous).map((entry) => (
-        entry.skill === 'autopilot'
-          ? {
-              ...entry,
-              active: true,
-              updated_at: nowIso,
-              session_id: input.sessionId ?? entry.session_id,
-              thread_id: input.threadId ?? entry.thread_id,
-              turn_id: input.turnId ?? entry.turn_id,
-            }
-          : entry
-      )),
-      supervised_child_keyword: match.keyword,
-      supervised_child_skill: match.skill,
-    };
-    try {
-      await writeSkillActiveStateCopiesForStateDir(
-        input.stateDir,
-        nextState,
-        input.sessionId,
-        selectRootSkillStateCopy(previousRoot, nextState, input.sessionId),
-      );
-    } catch (error) {
-      console.warn('[omx] warning: failed to persist keyword activation state', error);
-    }
-    return nextState;
   }
 
   const state: SkillActiveState = {
