@@ -121,7 +121,7 @@ The release was completed on 2026-06-01. This section supersedes the original pr
 - [x] Tag-triggered release workflow: run `26742594280` built/uploaded native assets, smoke-verified native assets, and passed packed global install smoke. Its npm provenance publish step failed because Fulcio repeatedly reset TLS during signing-certificate creation.
 - [x] GitHub release proof: `v0.18.8` is non-draft/non-prerelease with native assets including `native-release-manifest.json`.
 - [x] npm latest proof: fallback run `26744847619` published the exact `v0.18.8` tag artifact without provenance after the Fulcio outage; `npm view oh-my-codex version dist-tags --json` returned `0.18.8` / `latest: 0.18.8`.
-- [x] Final dev sync: `dev` and `main` both point to `320fe7692683c47db5c78cd36a4106ab77b45320`, a docs-only post-publish evidence commit. The shipped source tag remains `v0.18.8` at `a5cf84243f509c4b29db59dd62d7cda6f3a2fc37`.
+- [x] Final dev sync: `dev` and `main` both point to `dd7f369f1babc55be09306e3c6b6bc46d8204d12`, a docs-only post-publish evidence cleanup commit. The shipped source tag remains `v0.18.8` at `a5cf84243f509c4b29db59dd62d7cda6f3a2fc37`.
 
 ## No-publish / no-tag evidence before final tag
 
@@ -142,4 +142,4 @@ Release 0.18.8 is shipped. GitHub release and npm publication are complete. The 
 - Temporary fallback workflow run `26744847619` checked out `v0.18.8`, verified package version `0.18.8`, and published to npm with `npm publish --access public --provenance=false` using the repository `NPM_TOKEN`. This fallback was required because Fulcio was unreachable from the self-hosted runner and local curl checks also returned TLS connection resets.
 - npm proof after fallback: `npm view oh-my-codex version dist-tags --json` returned `{"version":"0.18.8","dist-tags":{"latest":"0.18.8"}}`.
 - GitHub release proof: `gh release view v0.18.8` returned `isDraft=false`, `isPrerelease=false`, and uploaded native release assets including `native-release-manifest.json`.
-- A temporary fallback workflow was added after the release tag only to complete npm publication during the Fulcio outage; it was removed immediately after publish proof. The intended shipped source remains the `v0.18.8` tag, while `main`/`dev` may contain this docs-only evidence update after cleanup.
+- A temporary fallback workflow was added after the release tag only to complete npm publication during the Fulcio outage; it was removed immediately after publish proof. The intended shipped source remains the `v0.18.8` tag, while `main`/`dev` contain only docs-only post-publish evidence updates after the tag.
