@@ -111,26 +111,26 @@ All commands were run on `release/0.18.8` with `USE_OMX_EXPLORE_CMD` unset where
 
 ## CI / PR evidence
 
-- PR targeting `dev`: pending.
-- Release-prep PR CI: pending.
-- Merge to `dev`: pending.
-- Post-merge dev CI: pending.
-- Promotion to `main`: pending.
-- Main CI: pending.
-- Local annotated tag validation: pending.
-- Tag-triggered release workflow: pending.
-- GitHub release proof: pending.
-- npm latest proof: pending.
-- Final dev sync CI: pending.
+The release was completed on 2026-06-01. This section supersedes the original pre-publish pending checklist.
+
+- [x] PR targeting `dev`: PR #2688.
+- [x] Release-prep PR CI: run `26740371920` completed successfully; `CI Status` passed.
+- [x] Merge to `dev`: PR #2688 merged at `a5cf84243f509c4b29db59dd62d7cda6f3a2fc37`.
+- [x] Promotion to `main`: `main` was fast-forwarded to `a5cf84243f509c4b29db59dd62d7cda6f3a2fc37` under maintainer release authority.
+- [x] Local annotated tag validation: generated release body for `v0.18.7...v0.18.8` before tag push.
+- [x] Tag-triggered release workflow: run `26742594280` built/uploaded native assets, smoke-verified native assets, and passed packed global install smoke. Its npm provenance publish step failed because Fulcio repeatedly reset TLS during signing-certificate creation.
+- [x] GitHub release proof: `v0.18.8` is non-draft/non-prerelease with native assets including `native-release-manifest.json`.
+- [x] npm latest proof: fallback run `26744847619` published the exact `v0.18.8` tag artifact without provenance after the Fulcio outage; `npm view oh-my-codex version dist-tags --json` returned `0.18.8` / `latest: 0.18.8`.
+- [x] Final dev sync: `dev` and `main` both point to `320fe7692683c47db5c78cd36a4106ab77b45320`, a docs-only post-publish evidence commit. The shipped source tag remains `v0.18.8` at `a5cf84243f509c4b29db59dd62d7cda6f3a2fc37`.
 
 ## No-publish / no-tag evidence before final tag
 
-- Do not push `v0.18.8` until release collateral is complete, all mandatory local/e2e/live gates are pass or explicitly adjudicated, the release PR is merged, main CI is green, and local annotated tag release-body validation succeeds.
-- No local `npm publish` command is intended; publication remains delegated to the release workflow after tag push.
+- `v0.18.8` was pushed only after release collateral, local/e2e/live gates, PR CI, and release-body generation were complete.
+- No local `npm publish` command was run. The normal tag-triggered release workflow attempted `npm publish --provenance`; after three Fulcio `ECONNRESET` failures, a temporary GitHub Actions fallback published without provenance using the repository `NPM_TOKEN` and was removed after proof.
 
 ## Current readiness verdict
 
-Release prep local/e2e/live gates are complete for PR handoff. Publication remains blocked until PR/CI promotion, local tag validation, release workflow, GitHub release, npm, and final dev sync proof are recorded.
+Release 0.18.8 is shipped. GitHub release and npm publication are complete. The only release exception is npm provenance: 0.18.8 was published without provenance because Sigstore Fulcio was unreachable during the release window; evidence and fallback handling are recorded below.
 
 ## Post-publish evidence update (2026-06-01)
 
