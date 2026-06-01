@@ -121,7 +121,7 @@ The release was completed on 2026-06-01. This section supersedes the original pr
 - [x] Tag-triggered release workflow: run `26742594280` built/uploaded native assets, smoke-verified native assets, and passed packed global install smoke. Its npm provenance publish step failed because Fulcio repeatedly reset TLS during signing-certificate creation.
 - [x] GitHub release proof: `v0.18.8` is non-draft/non-prerelease with native assets including `native-release-manifest.json`.
 - [x] npm latest proof: fallback run `26744847619` published the exact `v0.18.8` tag artifact without provenance after the Fulcio outage; `npm view oh-my-codex version dist-tags --json` returned `0.18.8` / `latest: 0.18.8`.
-- [x] Final dev sync: `dev` and `main` both point to `a74824508262f74c14d0f7d6ba9db4a9b94532ea`, a docs-only post-publish evidence cleanup commit. The shipped source tag remains `v0.18.8` at `a5cf84243f509c4b29db59dd62d7cda6f3a2fc37`.
+- [x] Final dev sync: `dev` and `main` are synchronized to the same post-publish docs-only evidence tip. The shipped source tag remains `v0.18.8` at `a5cf84243f509c4b29db59dd62d7cda6f3a2fc37`.
 
 ## No-publish / no-tag evidence before final tag
 
