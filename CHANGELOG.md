@@ -3,6 +3,35 @@
 All notable changes to this project are documented in this file.
 
 ## [Unreleased]
+## [0.18.8] - 2026-06-01
+
+Patch release for the post-`0.18.7` runtime reliability train: HUD/session ownership under native session drift, Autopilot replay and context-snapshot hardening, plugin hook/cache correctness, Team startup/disablement safety, native subagent guidance, and release/CI evidence improvements.
+
+### Changed
+
+- **HUD ownership is more session-authoritative** — source-pane scoping, resize-hook scoping, native session-id drift preservation, prompt-revive dedupe, and deleted-cwd safeguards reduce duplicate or stale HUD panes.
+- **Autopilot context and replay behavior is clearer** — terminal turn replay no longer reactivates completed Autopilot state, context snapshots are seeded/hardened, and task-seed provenance is documented.
+- **Team/native-agent guidance is tighter** — Team mode can be disabled, tmux worktree startup compatibility is fixed, native executor lanes stay leaf-only, and default native subagent routing guidance is corrected.
+- **Release and CI lanes are more explicit** — self-hosted Linux runner selection and GJC evidence lane optimization reduce avoidable broad CI churn.
+
+### Fixed
+
+- **Plugin hook cache and mirror behavior is safer** — stale hook cache refresh, setup-mode preservation, oversized Stop semantics, JSON fallback, and plugin hook metadata verification are protected.
+- **HUD edge cases are covered** — fallback authority respawn storms, escaped tmux separators, legacy focused panes, native session drift, and doctor panes for deleted cwd are handled.
+- **State and operator help improved** — state operation help and UltraQA temporary harness guidance are updated.
+
+### PRs
+
+- #2686, #2685, #2684, #2677, #2676, #2675, #2672, #2657, #2652, #2671, #2664, #2660, #2670, #2667, #2666, #2661, #2665, #2656, #2654, #2655, #2651, #2643, #2650, #2649, #2648, #2642, #2636, #2646, #2640, #2596
+
+### Issues
+
+- No separately closed GitHub issues were found for the `v0.18.7..HEAD` release range; the release scope is represented by the merged PR inventory above.
+
+### Verification
+
+- Release readiness evidence is tracked in `docs/qa/release-readiness-0.18.8.md`.
+
 ## [0.18.7] - 2026-05-29
 
 Patch release for the post-`0.18.6` runtime reliability train: duplicate HUD and question-renderer pane prevention, HUD ownership preservation across native tmux session replacement, Stop-hook duplicate suppression safety, Autopilot/ralplan gate hardening, Hermes MCP pane routing, and Team coordination protocol updates.
