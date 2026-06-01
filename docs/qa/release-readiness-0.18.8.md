@@ -100,7 +100,7 @@ All commands were run on `release/0.18.8` with `USE_OMX_EXPLORE_CMD` unset where
 - [x] `omx exec --skip-git-repo-check -C . "Reply with exactly OMX-EXEC-OK"` — PASS, `.omx/release-0.18.8/logs/omx-exec-ok.log`.
 - [x] `npm run test:reply-listener:live` — PASS, `.omx/release-0.18.8/logs/reply-listener-live.log`.
 - [x] tmux live team/HUD path — PASS via `WORKER_COUNT=5 bash src/scripts/demo-team-e2e.sh`, which created worker panes, reported leader/HUD/worker pane ids, exercised team API task/mailbox flow, and force-cleaned demo state.
-- [ ] Generated release body check for `v0.18.7...v0.18.8` — pending local annotated tag after main CI.
+- [x] Generated release body check for `v0.18.7...v0.18.8` — PASS before tag push, `/tmp/RELEASE_BODY-0.18.8.generated.md` and `.omx/release-0.18.8/logs/release-body-generate-pretag.log`.
 - [x] `git diff --check` — PASS, `.omx/release-0.18.8/logs/git-diff-check-targeted-final.log`.
 - [x] `npm pack --dry-run` — PASS, `.omx/release-0.18.8/logs/npm-pack-dry-run-targeted-final.log`.
 
@@ -121,7 +121,7 @@ The release was completed on 2026-06-01. This section supersedes the original pr
 - [x] Tag-triggered release workflow: run `26742594280` built/uploaded native assets, smoke-verified native assets, and passed packed global install smoke. Its npm provenance publish step failed because Fulcio repeatedly reset TLS during signing-certificate creation.
 - [x] GitHub release proof: `v0.18.8` is non-draft/non-prerelease with native assets including `native-release-manifest.json`.
 - [x] npm latest proof: fallback run `26744847619` published the exact `v0.18.8` tag artifact without provenance after the Fulcio outage; `npm view oh-my-codex version dist-tags --json` returned `0.18.8` / `latest: 0.18.8`.
-- [x] Final dev sync: `dev` and `main` both point to `dd7f369f1babc55be09306e3c6b6bc46d8204d12`, a docs-only post-publish evidence cleanup commit. The shipped source tag remains `v0.18.8` at `a5cf84243f509c4b29db59dd62d7cda6f3a2fc37`.
+- [x] Final dev sync: `dev` and `main` both point to `a74824508262f74c14d0f7d6ba9db4a9b94532ea`, a docs-only post-publish evidence cleanup commit. The shipped source tag remains `v0.18.8` at `a5cf84243f509c4b29db59dd62d7cda6f3a2fc37`.
 
 ## No-publish / no-tag evidence before final tag
 
