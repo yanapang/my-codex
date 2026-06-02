@@ -48,6 +48,7 @@ describe('package bin contract', () => {
     assert.equal(pkg.scripts?.['verify:plugin-bundle'], 'node dist/scripts/sync-plugin-mirror.js --check');
     assert.equal(pkg.scripts?.['verify:native-agents'], 'node dist/scripts/verify-native-agents.js');
     assert.equal(pkg.scripts?.prepack, 'npm run build && npm run verify:native-agents && npm run sync:plugin && npm run verify:plugin-bundle && npm run clean:native-package-assets');
+    assert.equal(pkg.scripts?.prepare, 'node src/scripts/prepare-build.js');
     assert.equal(pkg.scripts?.postinstall, 'node src/scripts/postinstall-bootstrap.js');
     assert.equal(pkg.scripts?.postpack, 'npm run clean:native-package-assets');
     assert.equal(pkg.scripts?.['test:explore'], 'cargo test -p omx-explore-harness && node --test dist/cli/__tests__/explore.test.js dist/hooks/__tests__/explore-routing.test.js dist/hooks/__tests__/explore-sparkshell-guidance-contract.test.js');
@@ -100,6 +101,11 @@ describe('package bin contract', () => {
     const binPath = join(process.cwd(), 'dist', 'cli', 'omx.js');
     const compiledCliPath = join(process.cwd(), 'dist', 'cli', 'index.js');
 
+    const prepareBuildSource = readFileSync(join(process.cwd(), 'src', 'scripts', 'prepare-build.js'), 'utf-8');
+    assert.match(prepareBuildSource, /dist.*cli.*omx\.js/s);
+    assert.match(prepareBuildSource, /dist.*scripts.*postinstall\.js/s);
+    assert.match(prepareBuildSource, /npm.*run.*build/s);
+
     const binSource = readFileSync(binPath, 'utf-8');
     const compiledCliSource = readFileSync(compiledCliPath, 'utf-8');
     assert.match(binSource, /^#!\/usr\/bin\/env node/);
@@ -143,7 +149,9 @@ describe('package bin contract', () => {
         `${target} initialize response should include serverInfo`,
       );
     }
-    assert.match(compiledCliSource, /omx update\s+Check npm now, update the global install immediately, then refresh setup/);
+    assert.match(compiledCliSource, /omx update\s+Install the stable channel now, then refresh setup/);
+    assert.match(compiledCliSource, /omx update --stable\s+Install\/rollback to npm stable \(oh-my-codex@latest\), then refresh setup/);
+    assert.match(compiledCliSource, /omx update --dev\s+Install the upstream dev branch, then refresh setup/);
     assert.match(compiledCliSource, /case "update"/);
 
     rmSync(packagedSparkShellPath, { force: true });

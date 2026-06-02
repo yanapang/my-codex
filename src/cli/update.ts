@@ -23,6 +23,9 @@ export interface UpdateState {
 export interface UserInstallStamp {
   installed_version: string;
   setup_completed_version?: string;
+  install_channel?: UpdateChannel;
+  install_source?: string;
+  install_revision?: string;
   updated_at: string;
 }
 
@@ -41,6 +44,13 @@ export interface UpdateExecutionResult {
   latestVersion: string | null;
 }
 
+export type UpdateChannel = 'stable' | 'dev';
+
+export interface UpdateChannelConfig {
+  channel: UpdateChannel;
+  installSource: string;
+}
+
 type RunGlobalUpdateResult = { ok: boolean; stderr: string };
 type RunSetupRefreshResult = { ok: boolean; stderr: string };
 type RunDeferredUpdateResult = { ok: boolean; stderr: string; logPath?: string };
@@ -51,6 +61,15 @@ export type AutoUpdateMode = 'disabled' | 'prompt' | 'defer';
 
 const PACKAGE_NAME = 'oh-my-codex';
 const CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000; // 12h
+const STABLE_INSTALL_SOURCE = `${PACKAGE_NAME}@latest`;
+const DEV_INSTALL_SOURCE = 'github:Yeachan-Heo/oh-my-codex#dev';
+
+export function resolveUpdateChannelConfig(channel: UpdateChannel = 'stable'): UpdateChannelConfig {
+  if (channel === 'dev') {
+    return { channel: 'dev', installSource: DEV_INSTALL_SOURCE };
+  }
+  return { channel: 'stable', installSource: STABLE_INSTALL_SOURCE };
+}
 
 export function resolveAutoUpdateMode(value = process.env.OMX_AUTO_UPDATE): AutoUpdateMode {
   const normalized = (value ?? '').trim().toLowerCase();
@@ -157,11 +176,27 @@ function spawnNpmSync(
 }
 
 export function runGlobalUpdate(
-  spawnProcess: SpawnSyncLike = spawnSync,
+  installSourceOrSpawnProcess: string | SpawnSyncLike = STABLE_INSTALL_SOURCE,
+  spawnProcessOrPlatform: SpawnSyncLike | NodeJS.Platform = spawnSync,
   platform: NodeJS.Platform = process.platform,
 ): RunGlobalUpdateResult {
+  const legacySpawnFirst = typeof installSourceOrSpawnProcess === 'function';
+  const installSource = legacySpawnFirst ? STABLE_INSTALL_SOURCE : installSourceOrSpawnProcess;
+  const spawnProcess = legacySpawnFirst
+    ? installSourceOrSpawnProcess
+    : typeof spawnProcessOrPlatform === 'function'
+      ? spawnProcessOrPlatform
+      : spawnSync;
+  const resolvedPlatform = legacySpawnFirst
+    ? typeof spawnProcessOrPlatform === 'string'
+      ? spawnProcessOrPlatform
+      : platform
+    : typeof spawnProcessOrPlatform === 'string'
+      ? spawnProcessOrPlatform
+      : platform;
+
   const result = spawnNpmSync(
-    ['install', '-g', `${PACKAGE_NAME}@latest`],
+    ['install', '-g', installSource],
     {
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -169,7 +204,7 @@ export function runGlobalUpdate(
       windowsHide: true,
     },
     spawnProcess,
-    platform,
+    resolvedPlatform,
   );
 
   if (result.error) {
@@ -314,13 +349,17 @@ function formatDeferredUpdateFailure(stderr: string, logPath?: string): string {
   ].filter((line): line is string => typeof line === 'string').join('\n');
 }
 
-function summarizeUpdateFailure(stderr: string, logPath?: string): string {
+function summarizeUpdateFailure(
+  stderr: string,
+  installSource = STABLE_INSTALL_SOURCE,
+  logPath?: string,
+): string {
   const details = stderr.trim().split(/\r?\n/).filter(Boolean).slice(0, 3).join(' | ');
   return [
-    '[omx] Update failed while running npm install -g oh-my-codex@latest.',
+    `[omx] Update failed while running npm install -g ${installSource}.`,
     details ? `[omx] npm stderr: ${details}` : undefined,
     logPath ? `[omx] Full log: ${logPath}` : undefined,
-    '[omx] You can retry manually with: npm install -g oh-my-codex@latest && omx setup',
+    `[omx] You can retry manually with: npm install -g ${installSource} && omx setup`,
   ].filter((line): line is string => typeof line === 'string').join('\n');
 }
 
@@ -339,8 +378,10 @@ interface UpdateDependencies {
   askYesNo: typeof askYesNo;
   fetchLatestVersion: typeof fetchLatestVersion;
   getCurrentVersion: typeof getCurrentVersion;
+  getInstalledVersionAfterUpdate: typeof getInstalledVersionAfterUpdate;
+  getInstalledRevisionAfterUpdate: typeof getInstalledRevisionAfterUpdate;
   readUserInstallStamp: typeof readUserInstallStamp;
-  runGlobalUpdate: typeof runGlobalUpdate;
+  runGlobalUpdate: (installSource: string) => RunGlobalUpdateResult;
   runDeferredGlobalUpdate: typeof runDeferredGlobalUpdate;
   runSetupRefresh: (cwd: string) => Promise<RunSetupRefreshResult>;
   writeUpdateState: typeof writeUpdateState;
@@ -350,6 +391,8 @@ const defaultUpdateDependencies: UpdateDependencies = {
   askYesNo,
   fetchLatestVersion,
   getCurrentVersion,
+  getInstalledVersionAfterUpdate,
+  getInstalledRevisionAfterUpdate,
   readUserInstallStamp,
   runGlobalUpdate,
   runDeferredGlobalUpdate,
@@ -363,10 +406,18 @@ function stripLeadingV(version: string): string {
 
 async function writeSuccessfulInstallStamp(
   installedVersion: string,
+  metadata: {
+    channel?: UpdateChannel;
+    source?: string;
+    revision?: string | null;
+  } = {},
 ): Promise<void> {
   await writeUserInstallStamp({
     installed_version: stripLeadingV(installedVersion),
     setup_completed_version: stripLeadingV(installedVersion),
+    ...(metadata.channel ? { install_channel: metadata.channel } : {}),
+    ...(metadata.source ? { install_source: metadata.source } : {}),
+    ...(metadata.revision ? { install_revision: metadata.revision } : {}),
     updated_at: new Date().toISOString(),
   });
 }
@@ -385,6 +436,15 @@ export async function readUserInstallStamp(
       installed_version: parsed.installed_version,
       ...(typeof parsed.setup_completed_version === 'string'
         ? { setup_completed_version: parsed.setup_completed_version }
+        : {}),
+      ...(parsed.install_channel === 'stable' || parsed.install_channel === 'dev'
+        ? { install_channel: parsed.install_channel }
+        : {}),
+      ...(typeof parsed.install_source === 'string'
+        ? { install_source: parsed.install_source }
+        : {}),
+      ...(typeof parsed.install_revision === 'string'
+        ? { install_revision: parsed.install_revision }
         : {}),
       updated_at: parsed.updated_at,
     };
@@ -439,6 +499,37 @@ export function resolveGlobalInstallRoot(
 
   const root = String(result.stdout || '').trim();
   return root === '' ? null : root;
+}
+
+async function getInstalledVersionAfterUpdate(): Promise<string | null> {
+  const globalInstallRoot = resolveGlobalInstallRoot();
+  if (!globalInstallRoot) return null;
+
+  try {
+    const packageJsonPath = join(globalInstallRoot, PACKAGE_NAME, 'package.json');
+    const content = await readFile(packageJsonPath, 'utf-8');
+    const pkg = JSON.parse(content) as PackageManifest;
+    return typeof pkg.version === 'string' && pkg.version.trim() !== ''
+      ? pkg.version
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function getInstalledRevisionAfterUpdate(): Promise<string | null> {
+  const globalInstallRoot = resolveGlobalInstallRoot();
+  if (!globalInstallRoot) return null;
+
+  try {
+    const packageJsonPath = join(globalInstallRoot, PACKAGE_NAME, 'package.json');
+    const content = await readFile(packageJsonPath, 'utf-8');
+    const pkg = JSON.parse(content) as { gitHead?: string };
+    const revision = typeof pkg.gitHead === 'string' ? pkg.gitHead.trim() : '';
+    return /^[0-9a-f]{7,40}$/i.test(revision) ? revision.slice(0, 12) : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function resolveInstalledCliEntry(globalInstallRoot: string): Promise<string | null> {
@@ -519,13 +610,24 @@ async function executeUpdate(
     dependencies: UpdateDependencies;
     prompt: boolean;
     immediate: boolean;
+    channel?: UpdateChannel;
+    forceInstall?: boolean;
     nowMs?: number;
   },
 ): Promise<UpdateExecutionResult> {
-  const { cwd, dependencies, prompt, immediate, nowMs = Date.now() } = options;
+  const {
+    cwd,
+    dependencies,
+    prompt,
+    immediate,
+    channel = 'stable',
+    forceInstall = false,
+    nowMs = Date.now(),
+  } = options;
+  const channelConfig = resolveUpdateChannelConfig(channel);
   const [current, latest] = await Promise.all([
     dependencies.getCurrentVersion(),
-    dependencies.fetchLatestVersion(),
+    channel === 'stable' || !forceInstall ? dependencies.fetchLatestVersion() : Promise.resolve(null),
   ]);
 
   try {
@@ -538,14 +640,14 @@ async function executeUpdate(
     // just because the current working directory is read-only or unavailable.
   }
 
-  if (!current || !latest) {
+  if (!forceInstall && (!current || !latest)) {
     if (immediate) {
       console.log('[omx] Unable to determine the latest oh-my-codex version. Try again later.');
     }
     return { status: 'unavailable', currentVersion: current, latestVersion: latest };
   }
 
-  if (!isNewerVersion(current, latest)) {
+  if (!forceInstall && current && latest && !isNewerVersion(current, latest)) {
     if (immediate) {
       const installStamp = await dependencies.readUserInstallStamp();
       if (!doesSetupStampMatchVersion(current, installStamp)) {
@@ -595,11 +697,13 @@ async function executeUpdate(
     return { status: 'scheduled', currentVersion: current, latestVersion: latest };
   }
 
-  console.log(`[omx] Running: npm install -g ${PACKAGE_NAME}@latest`);
-  const result = dependencies.runGlobalUpdate();
+  console.log(`[omx] Selected update channel: ${channelConfig.channel}`);
+  console.log(`[omx] Install source: ${channelConfig.installSource}`);
+  console.log(`[omx] Running: npm install -g ${channelConfig.installSource}`);
+  const result = dependencies.runGlobalUpdate(channelConfig.installSource);
 
   if (!result.ok) {
-    console.log(summarizeUpdateFailure(result.stderr));
+    console.log(summarizeUpdateFailure(result.stderr, channelConfig.installSource));
     return { status: 'failed', currentVersion: current, latestVersion: latest };
   }
 
@@ -611,14 +715,37 @@ async function executeUpdate(
     return { status: 'failed', currentVersion: current, latestVersion: latest };
   }
 
-  await writeSuccessfulInstallStamp(latest);
-  console.log(`[omx] Updated to v${latest}. Restart to use new code.`);
+  const installedVersion = await dependencies.getInstalledVersionAfterUpdate();
+  const installedRevision = channelConfig.channel === 'dev'
+    ? await dependencies.getInstalledRevisionAfterUpdate()
+    : null;
+  const stampVersion = channelConfig.channel === 'stable'
+    ? (latest ?? installedVersion ?? current)
+    : installedVersion;
+  if (stampVersion) {
+    await writeSuccessfulInstallStamp(stampVersion, {
+      channel: channelConfig.channel,
+      source: channelConfig.installSource,
+      revision: channelConfig.channel === 'dev' ? installedRevision : null,
+    });
+  } else if (channelConfig.channel === 'dev') {
+    console.log(
+      '[omx] Dev update completed, but the installed package version could not be determined for the setup stamp.',
+    );
+  }
+  const versionSummary = channelConfig.channel === 'stable' && latest
+    ? ` to v${latest}`
+    : '';
+  console.log(
+    `[omx] Updated ${channelConfig.channel} channel${versionSummary}. Restart to use new code.`,
+  );
   return { status: 'updated', currentVersion: current, latestVersion: latest };
 }
 
 export async function runImmediateUpdate(
   cwd = process.cwd(),
   dependencies: Partial<UpdateDependencies> = {},
+  options: { channel?: UpdateChannel } = {},
 ): Promise<UpdateExecutionResult> {
   const updateDependencies = { ...defaultUpdateDependencies, ...dependencies };
   return executeUpdate({
@@ -626,6 +753,8 @@ export async function runImmediateUpdate(
     dependencies: updateDependencies,
     prompt: false,
     immediate: true,
+    channel: options.channel ?? 'stable',
+    forceInstall: true,
   });
 }
 
