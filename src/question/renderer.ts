@@ -2,14 +2,14 @@ import { execFileSync, spawn, type ChildProcess, type SpawnOptions } from 'node:
 import { existsSync, readdirSync, renameSync, writeFileSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { stdin as processStdin, stdout as processStdout } from 'node:process';
-import { parsePaneIdFromTmuxOutput } from '../hud/tmux.js';
+import { parsePaneIdFromTmuxOutput, shellEscapeSingle } from '../hud/tmux.js';
 import { buildSendPaneArgvs } from '../notifications/tmux-detector.js';
 import { sleepSync } from '../utils/sleep.js';
 import { sanitizeReplyInput } from '../notifications/reply-listener.js';
 import { getCurrentTmuxPaneId } from '../notifications/tmux.js';
 import { getStateDir, getStatePath } from '../mcp/state-paths.js';
 import { TRACKED_WORKFLOW_MODES } from '../state/workflow-transition.js';
-import { resolveTmuxBinaryForPlatform } from '../utils/platform-command.js';
+import { isRunningUnderCmux, resolveTmuxBinaryForPlatform } from '../utils/platform-command.js';
 import { resolveOmxCliEntryPath } from '../utils/paths.js';
 import { createInitialInteractiveSelectionState, createInitialQuestionWizardState, renderInteractiveQuestionFrame, renderQuestionWizardFrame } from './ui.js';
 import type { NormalizedQuestionItem, QuestionAnswer, QuestionRecord, QuestionRendererState } from './types.js';
@@ -334,25 +334,51 @@ function resolveQuestionUiProcessArgs(
   return [omxBin, 'question', '--ui', '--state-path', recordPath];
 }
 
-function buildQuestionUiTmuxArgs(
+export function buildQuestionUiTmuxArgs(
   recordPath: string,
   options: {
     cwd: string;
     env?: NodeJS.ProcessEnv;
     sessionId?: string;
     returnTarget?: string;
+    underCmux?: boolean;
   },
 ): string[] {
+  const envEntries: Array<[string, string]> = [];
+  if (options.sessionId) envEntries.push(['OMX_SESSION_ID', options.sessionId]);
+  if (options.returnTarget) {
+    envEntries.push(['OMX_QUESTION_RETURN_TARGET', options.returnTarget]);
+    envEntries.push(['OMX_QUESTION_RETURN_TRANSPORT', 'tmux-send-keys']);
+  }
+  const command = [process.execPath, ...resolveQuestionUiProcessArgs(recordPath, options)];
+
+  if (options.underCmux) {
+    // cmux's tmux-compat shim does not consume `split-window -e KEY=VALUE`; it leaks
+    // the flags into the spawned pane's shell command, which fails with
+    // `command not found: -e`. Deliver env through an `env KEY=VALUE ...` prefix on
+    // the pane command instead.
+    //
+    // Two properties keep this robust:
+    //  1. `env` (not an `export ... &&` prefix) is shell-neutral. The pane shell may
+    //     be fish or another non-POSIX shell where `export FOO=bar` is a syntax error
+    //     parsed before node ever starts; `env FOO=bar cmd` is just arguments to the
+    //     external `env` binary and works in every shell.
+    //  2. The command is returned as a SINGLE shell-command argument. tmux runs a
+    //     one-argument command through the shell, so this stays correct on both the
+    //     cmux shim (which prepends `cd -- '<cwd>' &&` from `-c`) and a real tmux that
+    //     happens to inherit cmux env vars (e.g. a nested native tmux), where it runs
+    //     via `sh -c`. Multiple arguments would instead be exec'd directly with the
+    //     single quotes intact. Every value and command token is single-quoted to
+    //     survive shell word-splitting.
+    const envPrefix = envEntries.length > 0
+      ? `env ${envEntries.map(([key, value]) => `${key}=${shellEscapeSingle(value)}`).join(' ')} `
+      : '';
+    return [envPrefix + command.map((token) => shellEscapeSingle(token)).join(' ')];
+  }
+
   return [
-    ...(options.sessionId ? ['-e', `OMX_SESSION_ID=${options.sessionId}`] : []),
-    ...(options.returnTarget ? [
-      '-e',
-      `OMX_QUESTION_RETURN_TARGET=${options.returnTarget}`,
-      '-e',
-      'OMX_QUESTION_RETURN_TRANSPORT=tmux-send-keys',
-    ] : []),
-    process.execPath,
-    ...resolveQuestionUiProcessArgs(recordPath, options),
+    ...envEntries.flatMap(([key, value]) => ['-e', `${key}=${value}`]),
+    ...command,
   ];
 }
 
@@ -735,6 +761,7 @@ export function launchQuestionRenderer(
     env: options.env,
     sessionId: options.sessionId,
     returnTarget,
+    underCmux: isRunningUnderCmux(env),
   });
 
   if (strategy === 'inside-tmux') {
