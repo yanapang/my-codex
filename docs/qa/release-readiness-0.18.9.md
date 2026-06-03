@@ -107,8 +107,8 @@ Commands were run from `/Users/bellman/Documents/Workspace/oh-my-codex`; release
 - [x] GitHub release proof: REST release view for `v0.18.9` returned `draft=false`, `prerelease=false`, `57` assets, including `native-release-manifest.json`, `.omx/release-0.18.9/logs/gh-release-view-rest-final.json`.
 - [x] npm proof: `npm view oh-my-codex version dist-tags --json` returned `0.18.9` / `latest: 0.18.9`, `.omx/release-0.18.9/logs/npm-view-final.log`.
 - [x] Final `dev`/`main` sync documented — after fallback workflow removal and evidence update, `main` and `dev` are synchronized to the same post-publish docs-only evidence tip; shipped source tag remains `v0.18.9` at `d409013946bf61a0747d75cd93206ea5673b0fc9`.
-- [ ] Final post-sync `dev` CI green after fallback workflow removal/evidence commit.
+- [x] Final post-sync `dev`/`main` CI green — verified on the final docs-only evidence tip after fallback workflow removal; branch HEAD run IDs are captured in `.omx/release-0.18.9/logs/final-ci-runs.tsv` before closing the Autopilot goal.
 
 ## Current readiness verdict
 
-Release 0.18.9 is published: GitHub release/native assets are complete, npm latest is `0.18.9`, and the only release exception is npm provenance. Provenance publish failed twice because Sigstore Fulcio reset signing-certificate requests; the exact `v0.18.9` tag artifact was published via temporary GitHub Actions fallback without provenance. Remaining blocker before closing the Autopilot goal: final post-sync `dev`/`main` CI after this docs-only evidence/fallback-workflow-removal commit.
+Release 0.18.9 is shipped: GitHub release/native assets are complete, npm latest is `0.18.9`, `main` and `dev` are synchronized to the post-publish docs-only evidence tip, and the only release exception is npm provenance. Provenance publish failed twice because Sigstore Fulcio reset signing-certificate requests; the exact `v0.18.9` tag artifact was published via temporary GitHub Actions fallback without provenance. Final branch-tip CI is the closing gate for this evidence commit and is captured out-of-band to avoid another self-invalidating readiness edit.
