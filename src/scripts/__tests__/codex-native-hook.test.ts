@@ -441,23 +441,77 @@ describe("codex native hook dispatch", () => {
     );
   });
 
-  it("emits schema-safe JSON stdout when CLI stdin is malformed", () => {
-    const stdout = runNativeHookCli("{");
+  it("emits Stop-schema-safe block JSON when unidentifiable malformed stdin has native Stop runtime surface", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-cli-malformed-stop-surface-"));
+    try {
+      await mkdir(join(cwd, ".omx"), { recursive: true });
+      const result = spawnSync(process.execPath, [nativeHookScriptPath()], {
+        cwd,
+        input: "{",
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+      });
 
-    const output = parseSingleJsonStdout(stdout) as {
-      continue?: boolean;
-      stopReason?: string;
-      systemMessage?: string;
-      hookSpecificOutput?: unknown;
-    };
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.equal(result.stderr, "");
+      const output = parseSingleJsonStdout(result.stdout) as {
+        decision?: string;
+        continue?: boolean;
+        reason?: string;
+        stopReason?: string;
+        systemMessage?: string;
+        hookSpecificOutput?: unknown;
+      };
 
-    assert.equal(output.continue, false);
-    assert.equal(output.stopReason, "native_hook_stdin_parse_error");
-    assert.equal(output.hookSpecificOutput, undefined);
-    assert.match(
-      String(output.systemMessage ?? ""),
-      /stdin JSON parsing failed inside codex-native-hook:/,
-    );
+      assert.equal(output.decision, "block");
+      assert.equal(output.continue, undefined);
+      assert.equal(
+        output.reason,
+        "OMX native hook received malformed JSON input. Preserve runtime state, inspect the emitting hook payload yourself, and retry with valid JSON.",
+      );
+      assert.equal(output.stopReason, "native_hook_stdin_parse_error");
+      assert.equal(output.hookSpecificOutput, undefined);
+      assert.match(
+        String(output.systemMessage ?? ""),
+        /stdin JSON parsing failed inside codex-native-hook:/,
+      );
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves non-Stop fail-closed JSON when malformed stdin identifies a non-Stop hook", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-cli-malformed-nonstop-"));
+    try {
+      await mkdir(join(cwd, ".omx"), { recursive: true });
+      const result = spawnSync(process.execPath, [nativeHookScriptPath()], {
+        cwd,
+        input: '{hook_event_name:"PreToolUse",',
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.equal(result.stderr, "");
+      const output = parseSingleJsonStdout(result.stdout) as {
+        continue?: boolean;
+        decision?: string;
+        stopReason?: string;
+        systemMessage?: string;
+        hookSpecificOutput?: unknown;
+      };
+
+      assert.equal(output.continue, false);
+      assert.equal(output.decision, undefined);
+      assert.equal(output.stopReason, "native_hook_stdin_parse_error");
+      assert.equal(output.hookSpecificOutput, undefined);
+      assert.match(
+        String(output.systemMessage ?? ""),
+        /stdin JSON parsing failed inside codex-native-hook:/,
+      );
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 
   it("redacts unterminated prompt-like malformed stdin fields", async () => {
