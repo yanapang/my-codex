@@ -20,6 +20,7 @@ import { existsSync } from "fs";
 import { spawnSync } from "child_process";
 import { createInterface } from "readline/promises";
 import { homedir } from "os";
+import TOML from "@iarna/toml";
 import {
 	codexHome,
 	codexConfigPath,
@@ -47,6 +48,7 @@ import {
 	upsertPluginModeRuntimeFeatureFlags,
 	upsertManagedCodexHookTrustState,
 	stripManagedCodexHookTrustState,
+	OMX_DEVELOPER_INSTRUCTIONS,
 	OMX_PLUGIN_DEVELOPER_INSTRUCTIONS,
 	hasFirstPartyOmxMcpRegistrations,
 	extractFirstPartyOmxMcpSections,
@@ -143,6 +145,14 @@ import {
 	upsertAgentsModelTable,
 } from "../utils/agents-model-table.js";
 
+type PluginDeveloperInstructionsDecisionAction = "add" | "update" | "preserve";
+
+interface PluginDeveloperInstructionsDecision {
+	action: PluginDeveloperInstructionsDecisionAction;
+	state: "missing" | "current" | "historical" | "custom";
+	reason: string;
+}
+
 interface SetupOptions {
 	codexFeaturesProbe?: () => string | null;
 	codexVersionProbe?: () => string | null;
@@ -167,10 +177,9 @@ interface SetupOptions {
 		targetModel: string,
 	) => Promise<boolean>;
 	pluginAgentsMdPrompt?: (destinationPath: string) => Promise<boolean>;
-	pluginDeveloperInstructionsPrompt?: (configPath: string) => Promise<boolean>;
-	pluginDeveloperInstructionsOverwritePrompt?: (
+	pluginDeveloperInstructionsPrompt?: (
 		configPath: string,
-	) => Promise<boolean>;
+	) => Promise<boolean | "skip" | "preserve-or-add" | "refresh">;
 	firstPartyMcpRemovalPrompt?: (
 		configPath: string,
 		registrationKinds: string[],
@@ -871,9 +880,49 @@ async function promptForPluginAgentsMdDefault(
 	}
 }
 
-async function promptForPluginDeveloperInstructionsDefault(
-	configPath: string,
-): Promise<boolean> {
+const LEGACY_PLUGIN_DEVELOPER_INSTRUCTIONS =
+	"You have oh-my-codex installed through Codex plugin mode. AGENTS.md is the orchestration brain and main control surface. Follow AGENTS.md for skill/keyword routing and $name workflow invocation. When spawning native subagents, set `agent_type` to an installed role and never omit it for OMX work. Registered Codex plugin marketplace surfaces supply OMX workflows and plugin-scoped companion resources when the plugin is installed; native agent roles are installed as setup-owned Codex agent TOML files in plugin mode so agent_type routing works. User-installed skills may still live under ~/.codex/skills. Use outcome-first, concise progress updates: state the target result, constraints, validation evidence, and stop condition before adding process detail.";
+
+function normalizeDeveloperInstructionsText(value: string): string {
+	return value.replace(/\r\n/g, "\n").trim();
+}
+
+function classifyPluginDeveloperInstructions(
+	value: unknown,
+): PluginDeveloperInstructionsDecision["state"] {
+	if (typeof value !== "string") return "custom";
+	const normalized = normalizeDeveloperInstructionsText(value);
+	if (
+		normalized ===
+		normalizeDeveloperInstructionsText(OMX_PLUGIN_DEVELOPER_INSTRUCTIONS)
+	) {
+		return "current";
+	}
+	if (
+		normalized ===
+		normalizeDeveloperInstructionsText(LEGACY_PLUGIN_DEVELOPER_INSTRUCTIONS)
+	) {
+		return "current";
+	}
+	if (
+		normalized === normalizeDeveloperInstructionsText(OMX_DEVELOPER_INSTRUCTIONS)
+	) {
+		return "historical";
+	}
+	return "custom";
+}
+
+function readRootDeveloperInstructions(config: string): unknown | undefined {
+	if (!rootHasTomlKey(config, "developer_instructions")) return undefined;
+	try {
+		const parsed = TOML.parse(config) as Record<string, unknown>;
+		return parsed.developer_instructions;
+	} catch {
+		return Symbol.for("omx.invalid-developer-instructions");
+	}
+}
+
+async function askYesNoDefaultYes(question: string): Promise<boolean> {
 	if (!process.stdin.isTTY || !process.stdout.isTTY) {
 		return false;
 	}
@@ -882,41 +931,102 @@ async function promptForPluginDeveloperInstructionsDefault(
 		output: process.stdout,
 	});
 	try {
-		const answer = (
-			await rl.question(
-				`Plugin mode: add OMX developer_instructions defaults to "${configPath}"? [y/N]: `,
-			)
-		)
-			.trim()
-			.toLowerCase();
-		return answer === "y" || answer === "yes";
+		const answer = (await rl.question(question)).trim().toLowerCase();
+		return answer === "" || answer === "y" || answer === "yes";
 	} finally {
 		rl.close();
 	}
 }
 
-async function promptForPluginDeveloperInstructionsOverwrite(
+function legacyPluginDeveloperInstructionsDecision(
+	choice: boolean | "skip" | "preserve-or-add" | "refresh",
+): PluginDeveloperInstructionsDecision {
+	if (choice === "refresh") {
+		return {
+			action: "update",
+			state: "historical",
+			reason: "legacy explicit refresh policy",
+		};
+	}
+	if (choice === true || choice === "preserve-or-add") {
+		return {
+			action: "add",
+			state: "missing",
+			reason: "legacy explicit add-if-missing policy",
+		};
+	}
+	return {
+		action: "preserve",
+		state: "custom",
+		reason: "legacy explicit skip policy",
+	};
+}
+
+async function resolvePluginDeveloperInstructionsDecision(
 	configPath: string,
-): Promise<boolean> {
-	if (!process.stdin.isTTY || !process.stdout.isTTY) {
-		return false;
+	options: Pick<SetupOptions, "pluginDeveloperInstructionsPrompt">,
+): Promise<PluginDeveloperInstructionsDecision> {
+	const existing = existsSync(configPath)
+		? await readFile(configPath, "utf-8")
+		: "";
+	const value = readRootDeveloperInstructions(existing);
+	if (value === undefined) {
+		if (options.pluginDeveloperInstructionsPrompt) {
+			return legacyPluginDeveloperInstructionsDecision(
+				await options.pluginDeveloperInstructionsPrompt(configPath),
+			);
+		}
+		const install = await askYesNoDefaultYes(
+			`Plugin mode: add OMX developer_instructions bootstrap to "${configPath}"? [Y/n]: `,
+		);
+		return install
+			? {
+					action: "add",
+					state: "missing",
+					reason: "missing developer_instructions",
+				}
+			: {
+					action: "preserve",
+					state: "missing",
+					reason: "missing developer_instructions skipped",
+				};
 	}
-	const rl = createInterface({
-		input: process.stdin,
-		output: process.stdout,
-	});
-	try {
-		const answer = (
-			await rl.question(
-				`Plugin mode: overwrite existing developer_instructions in "${configPath}" with OMX defaults? [y/N]: `,
-			)
-		)
-			.trim()
-			.toLowerCase();
-		return answer === "y" || answer === "yes";
-	} finally {
-		rl.close();
+
+	const state = classifyPluginDeveloperInstructions(value);
+	if (state === "current") {
+		return {
+			action: "preserve",
+			state,
+			reason: "current OMX developer_instructions already installed",
+		};
 	}
+
+	if (state === "historical") {
+		const update = options.pluginDeveloperInstructionsPrompt
+			? legacyPluginDeveloperInstructionsDecision(
+					await options.pluginDeveloperInstructionsPrompt(configPath),
+				).action === "update"
+			: await askYesNoDefaultYes(
+					`Plugin mode: update OMX developer_instructions bootstrap at "${configPath}"? [Y/n]: `,
+				);
+		return update
+			? {
+					action: "update",
+					state,
+					reason: "recognized historical OMX developer_instructions",
+				}
+			: {
+					action: "preserve",
+					state,
+					reason: "historical OMX developer_instructions preserved",
+				};
+	}
+
+	return {
+		action: "preserve",
+		state: "custom",
+		reason: "custom or unknown developer_instructions preserved",
+	};
 }
 
 async function resolveSetupScope(
@@ -1435,20 +1545,67 @@ function rootHasTomlKey(config: string, key: string): boolean {
 }
 
 function replaceRootTomlKey(config: string, key: string, line: string): string {
-	const lines = config.trimEnd().split(/\r?\n/);
-	const firstTableIndex = lines.findIndex((entry) => /^\s*\[/.test(entry));
-	const boundary = firstTableIndex < 0 ? lines.length : firstTableIndex;
-	const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	const pattern = new RegExp(`^\\s*${escapedKey}\\s*=`);
+	const range = findRootTomlKeyRange(config, key);
+	if (!range) return insertRootTomlKey(config, line);
+	const before = config.slice(0, range.start);
+	const after = config.slice(range.end).replace(/^\r?\n?/, "\n");
+	return `${before}${line}${after}`.replace(/\n?$/, "\n");
+}
 
-	for (let i = 0; i < boundary; i++) {
-		if (pattern.test(lines[i])) {
-			lines[i] = line;
-			return lines.join("\n") + "\n";
+function findRootTomlKeyRange(
+	config: string,
+	key: string,
+): { start: number; end: number } | null {
+	const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const keyPattern = new RegExp(`^\\s*${escapedKey}\\s*=`);
+	const nextRootKeyPattern = /^\s*[A-Za-z0-9_-]+\s*=/;
+	const tablePattern = /^\s*\[/;
+	const linePattern = /.*(?:\r?\n|$)/g;
+	let match: RegExpExecArray | null;
+	let found: { start: number; end: number } | null = null;
+	let inMultiline = false;
+	let multilineDelimiter: '"""' | "'''" | null = null;
+
+	while ((match = linePattern.exec(config)) && match[0] !== "") {
+		const line = match[0];
+		const lineStart = match.index;
+		const lineEnd = lineStart + line.length;
+		const trimmedLine = line.replace(/\r?\n$/, "");
+
+		if (!found) {
+			if (tablePattern.test(trimmedLine)) return null;
+			if (keyPattern.test(trimmedLine)) {
+				found = { start: lineStart, end: lineEnd };
+				const valuePart = trimmedLine.slice(trimmedLine.indexOf("=") + 1);
+				const delimiter = valuePart.includes('"""')
+					? '"""'
+					: valuePart.includes("'''")
+						? "'''"
+						: null;
+				if (delimiter && valuePart.split(delimiter).length - 1 === 1) {
+					inMultiline = true;
+					multilineDelimiter = delimiter;
+				} else {
+					return found;
+				}
+			}
+			continue;
+		}
+
+		found.end = lineEnd;
+		if (inMultiline && multilineDelimiter) {
+			if (trimmedLine.includes(multilineDelimiter)) {
+				return found;
+			}
+			continue;
+		}
+		if (tablePattern.test(trimmedLine) || nextRootKeyPattern.test(trimmedLine)) {
+			found.end = lineStart;
+			return found;
 		}
 	}
 
-	return insertRootTomlKey(config, line);
+	return found;
 }
 
 function insertRootTomlKey(config: string, line: string): string {
@@ -1652,32 +1809,36 @@ async function applyPluginDeveloperInstructionsDefault(
 	configPath: string,
 	backupContext: SetupBackupContext,
 	summary: SetupCategorySummary,
-	options: Pick<
-		SetupOptions,
-		"dryRun" | "verbose" | "pluginDeveloperInstructionsOverwritePrompt"
-	>,
+	options: Pick<SetupOptions, "dryRun" | "verbose"> & {
+		decision: PluginDeveloperInstructionsDecision;
+	},
 ): Promise<"updated" | "exists" | "skipped"> {
 	const existing = existsSync(configPath)
 		? await readFile(configPath, "utf-8")
 		: "";
+	if (options.decision.action === "preserve") {
+		summary.skipped += 1;
+		if (options.verbose) {
+			console.log(
+				`  preserved plugin developer_instructions default: ${options.decision.reason}`,
+			);
+		}
+		return options.decision.state === "missing" ? "skipped" : "exists";
+	}
+
 	const line = `developer_instructions = ${JSON.stringify(OMX_PLUGIN_DEVELOPER_INSTRUCTIONS)}`;
 	const hasExistingDeveloperInstructions = rootHasTomlKey(
 		existing,
 		"developer_instructions",
 	);
-	if (hasExistingDeveloperInstructions) {
-		const overwrite = options.pluginDeveloperInstructionsOverwritePrompt
-			? await options.pluginDeveloperInstructionsOverwritePrompt(configPath)
-			: await promptForPluginDeveloperInstructionsOverwrite(configPath);
-		if (!overwrite) {
-			summary.skipped += 1;
-			if (options.verbose) {
-				console.log(
-					"  skipped plugin developer_instructions default: root developer_instructions already exists",
-				);
-			}
-			return "exists";
+	if (hasExistingDeveloperInstructions && options.decision.action === "add") {
+		summary.skipped += 1;
+		if (options.verbose) {
+			console.log(
+				"  skipped plugin developer_instructions default: root developer_instructions already exists",
+			);
 		}
+		return "exists";
 	}
 
 	const nextConfig = hasExistingDeveloperInstructions
@@ -1765,7 +1926,6 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 		modelUpgradePrompt,
 		pluginAgentsMdPrompt,
 		pluginDeveloperInstructionsPrompt,
-		pluginDeveloperInstructionsOverwritePrompt,
 		firstPartyMcpRemovalPrompt,
 	} = options;
 	const pkgRoot = getPackageRoot();
@@ -1878,13 +2038,17 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 		resolvedScope.scope === "project"
 			? join(projectRoot, "AGENTS.md")
 			: join(scopeDirs.codexHomeDir, "AGENTS.md");
-	const usePluginDeveloperInstructionsDefault = isPluginInstallMode
-		? pluginDeveloperInstructionsPrompt
-			? await pluginDeveloperInstructionsPrompt(scopeDirs.codexConfigFile)
-			: await promptForPluginDeveloperInstructionsDefault(
+	const pluginDeveloperInstructionsDecision: PluginDeveloperInstructionsDecision =
+		isPluginInstallMode
+			? await resolvePluginDeveloperInstructionsDecision(
 					scopeDirs.codexConfigFile,
+					{ pluginDeveloperInstructionsPrompt },
 				)
-		: false;
+			: {
+					action: "preserve",
+					state: "custom",
+					reason: "non-plugin setup mode",
+				};
 	let pluginAgentsMdPathExists = false;
 	let pluginAgentsMdIsSymlink = false;
 	try {
@@ -2296,7 +2460,7 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 				: `  Native Codex hooks fallback and runtime feature flags refresh complete (${scopeDirs.codexHooksFile}; hooks, goals).\n`,
 		);
 
-		if (usePluginDeveloperInstructionsDefault) {
+		if (pluginDeveloperInstructionsDecision.action !== "preserve") {
 			const developerInstructionsResult =
 				await applyPluginDeveloperInstructionsDefault(
 					scopeDirs.codexConfigFile,
@@ -2305,7 +2469,7 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 					{
 						dryRun,
 						verbose,
-						pluginDeveloperInstructionsOverwritePrompt,
+						decision: pluginDeveloperInstructionsDecision,
 					},
 				);
 			if (developerInstructionsResult === "updated") {
@@ -2322,7 +2486,7 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 			}
 		} else {
 			console.log(
-				"  Plugin-mode developer_instructions default not selected.\n",
+				`  Plugin-mode developer_instructions default preserved (${pluginDeveloperInstructionsDecision.reason}).\n`,
 			);
 		}
 	} else {
