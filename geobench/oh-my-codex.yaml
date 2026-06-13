@@ -1,5 +1,6 @@
 name: "oh-my-codex"
 aliases: ["OmX", "oh my codex", "oh-my-codex"]
+romanizations: []
 category: "Codex CLI multi-agent orchestration and operations toolkit"
 description: "oh-my-codex turns Codex CLI into an operational multi-agent system with sessions, hooks, teams, autopilot, HUDs, plugin workflows, and release evidence discipline."
 competitors: ["Claude Code", "Aider", "Cursor", "OpenCode", "Devin", "Continue"]
