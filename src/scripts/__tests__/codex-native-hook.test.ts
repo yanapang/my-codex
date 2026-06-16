@@ -5903,6 +5903,219 @@ exit 0
     }
   });
 
+  it("allows read-only diagnostics mentioning apply_patch while deep-interview blocks real apply_patch invocations", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-deep-interview-grep-apply-patch-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const sessionDir = join(stateDir, "sessions", "sess-di-grep");
+      await mkdir(sessionDir, { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: "sess-di-grep", cwd });
+      await writeJson(join(sessionDir, "skill-active-state.json"), {
+        version: 1,
+        active: true,
+        skill: "deep-interview",
+        phase: "planning",
+        session_id: "sess-di-grep",
+        active_skills: [{ skill: "deep-interview", phase: "planning", active: true, session_id: "sess-di-grep" }],
+      });
+      await writeJson(join(sessionDir, "deep-interview-state.json"), {
+        active: true,
+        mode: "deep-interview",
+        current_phase: "intent-first",
+        session_id: "sess-di-grep",
+      });
+
+      const allowedGrep = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-grep",
+          tool_name: "Bash",
+          tool_use_id: "tool-di-grep",
+          tool_input: { command: 'grep -n "apply_patch" dist/scripts/codex-native-hook.js' },
+        },
+        { cwd },
+      );
+      assert.equal(allowedGrep.outputJson, null);
+
+      const allowedSubshellGrep = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-grep",
+          tool_name: "Bash",
+          tool_use_id: "tool-di-grep-subshell",
+          tool_input: { command: '(grep -n "apply_patch" dist/scripts/codex-native-hook.js)' },
+        },
+        { cwd },
+      );
+      assert.equal(allowedSubshellGrep.outputJson, null);
+
+      // Double-quoted spans that merely mention the literal token, expand a
+      // parameter, or run a substitution that is not `apply_patch` stay allowed
+      // — the quoted-substitution fix must not over-block read-only diagnostics.
+      const allowedQuotedMention = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-grep",
+          tool_name: "Bash",
+          tool_use_id: "tool-di-grep-quoted-mention",
+          tool_input: { command: 'echo "${apply_patch} $(echo apply_patch)"' },
+        },
+        { cwd },
+      );
+      assert.equal(allowedQuotedMention.outputJson, null);
+
+      const blockedApplyPatch = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-grep",
+          tool_name: "Bash",
+          tool_use_id: "tool-di-apply-patch-invoke",
+          tool_input: { command: "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: src/leak.ts\n+export const x = 1;\n*** End Patch\nEOF" },
+        },
+        { cwd },
+      );
+      assert.equal((blockedApplyPatch.outputJson as { decision?: string } | null)?.decision, "block");
+
+      const blockedEnvAssignmentApplyPatch = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-grep",
+          tool_name: "Bash",
+          tool_use_id: "tool-di-apply-patch-env-assignment",
+          tool_input: { command: "FOO=bar apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: src/leak.ts\n+export const x = 1;\n*** End Patch\nEOF" },
+        },
+        { cwd },
+      );
+      assert.equal((blockedEnvAssignmentApplyPatch.outputJson as { decision?: string } | null)?.decision, "block");
+
+      const blockedEnvWrapperApplyPatch = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-grep",
+          tool_name: "Bash",
+          tool_use_id: "tool-di-apply-patch-env-wrapper",
+          tool_input: { command: "env FOO=bar apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: src/leak.ts\n+export const x = 1;\n*** End Patch\nEOF" },
+        },
+        { cwd },
+      );
+      assert.equal((blockedEnvWrapperApplyPatch.outputJson as { decision?: string } | null)?.decision, "block");
+
+      const heredocBody = "\n*** Begin Patch\n*** Add File: src/leak.ts\n+export const x = 1;\n*** End Patch\nEOF";
+      const blockedRealApplyPatchForms: Array<{ id: string; command: string }> = [
+        { id: "tool-di-apply-patch-env-i", command: `env -i apply_patch <<'EOF'${heredocBody}` },
+        { id: "tool-di-apply-patch-env-unset", command: `env -u FOO apply_patch <<'EOF'${heredocBody}` },
+        { id: "tool-di-apply-patch-env-i-assignment", command: `env -i FOO=bar apply_patch <<'EOF'${heredocBody}` },
+        { id: "tool-di-apply-patch-assignment-env", command: `FOO=bar env apply_patch <<'EOF'${heredocBody}` },
+        { id: "tool-di-apply-patch-exec-env-assignment", command: `exec env FOO=bar apply_patch <<'EOF'${heredocBody}` },
+        { id: "tool-di-apply-patch-absolute-path", command: `/usr/bin/apply_patch <<'EOF'${heredocBody}` },
+        { id: "tool-di-apply-patch-relative-path", command: `./apply_patch <<'EOF'${heredocBody}` },
+        { id: "tool-di-apply-patch-subshell", command: `(apply_patch <<'EOF'${heredocBody}\n)` },
+        { id: "tool-di-apply-patch-subshell-spaced", command: `( apply_patch <<'EOF'${heredocBody}\n)` },
+        { id: "tool-di-apply-patch-double-subshell", command: `((apply_patch <<'EOF'${heredocBody}\n))` },
+        { id: "tool-di-apply-patch-pipe-subshell", command: `true | (apply_patch <<'EOF'${heredocBody}\n)` },
+        { id: "tool-di-apply-patch-subshell-env", command: `(env apply_patch <<'EOF'${heredocBody}\n)` },
+        { id: "tool-di-apply-patch-command-substitution", command: `x=$(apply_patch <<'EOF'${heredocBody}\n)` },
+        { id: "tool-di-apply-patch-brace-group", command: `{ apply_patch <<'EOF'${heredocBody}\n}` },
+        // Command substitution runs even inside double quotes, so quoting the
+        // already-blocked `$(…)` / `` `…` `` form must not bypass the guard.
+        { id: "tool-di-apply-patch-quoted-command-substitution", command: `echo "$(apply_patch <<'EOF'${heredocBody}\n)"` },
+        { id: "tool-di-apply-patch-quoted-backtick", command: `echo "\`apply_patch <<'EOF'${heredocBody}\`"` },
+        { id: "tool-di-apply-patch-quoted-command-substitution-prefixed", command: `echo "patched: $(apply_patch <<'EOF'${heredocBody}\n) done"` },
+      ];
+      for (const form of blockedRealApplyPatchForms) {
+        const blockedForm = await dispatchCodexNativeHook(
+          {
+            hook_event_name: "PreToolUse",
+            cwd,
+            session_id: "sess-di-grep",
+            tool_name: "Bash",
+            tool_use_id: form.id,
+            tool_input: { command: form.command },
+          },
+          { cwd },
+        );
+        assert.equal(
+          (blockedForm.outputJson as { decision?: string } | null)?.decision,
+          "block",
+          `expected deep-interview to block real apply_patch form: ${form.command}`,
+        );
+      }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("allows deep-interview same-command literal variable redirects to artifacts while blocking variable redirects outside them", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-deep-interview-var-redirect-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const sessionDir = join(stateDir, "sessions", "sess-di-var-redirect");
+      await mkdir(sessionDir, { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: "sess-di-var-redirect", cwd });
+      await writeJson(join(sessionDir, "skill-active-state.json"), {
+        version: 1,
+        active: true,
+        skill: "deep-interview",
+        phase: "planning",
+        session_id: "sess-di-var-redirect",
+        active_skills: [{ skill: "deep-interview", phase: "planning", active: true, session_id: "sess-di-var-redirect" }],
+      });
+      await writeJson(join(sessionDir, "deep-interview-state.json"), {
+        active: true,
+        mode: "deep-interview",
+        current_phase: "intent-first",
+        session_id: "sess-di-var-redirect",
+      });
+
+      const allowedVarRedirect = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-var-redirect",
+          tool_name: "Bash",
+          tool_use_id: "tool-di-var-redirect-allow",
+          tool_input: { command: 'SNAP=".omx/context/example.md"\ncat > "$SNAP" <<\'EOF\'\ncontent\nEOF' },
+        },
+        { cwd },
+      );
+      assert.equal(allowedVarRedirect.outputJson, null);
+
+      const blockedVarRedirect = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-var-redirect",
+          tool_name: "Bash",
+          tool_use_id: "tool-di-var-redirect-block",
+          tool_input: { command: 'SNAP="src/leak.ts"\ncat > "$SNAP" <<\'EOF\'\ncontent\nEOF' },
+        },
+        { cwd },
+      );
+      assert.equal((blockedVarRedirect.outputJson as { decision?: string } | null)?.decision, "block");
+
+      const blockedUnresolvedVarRedirect = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-var-redirect",
+          tool_name: "Bash",
+          tool_use_id: "tool-di-var-redirect-unresolved",
+          tool_input: { command: 'cat > "$SNAP" <<\'EOF\'\ncontent\nEOF' },
+        },
+        { cwd },
+      );
+      assert.equal((blockedUnresolvedVarRedirect.outputJson as { decision?: string } | null)?.decision, "block");
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("allows deep-interview apply_patch artifact writes from freeform patch text while blocking outside paths", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-deep-interview-apply-patch-"));
     try {
