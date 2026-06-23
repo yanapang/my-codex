@@ -248,6 +248,15 @@ schemaVersion: 1
       expect(readPage(tempDir, 'non-existent.md')).toBeNull();
     });
 
+    it('should write and read a nested page', () => {
+      writePage(tempDir, makePage({ filename: '40_Logs/nested-page.md' }));
+
+      const read = readPage(tempDir, '40_Logs/nested-page.md');
+      expect(read).not.toBeNull();
+      expect(read!.filename).toBe('40_Logs/nested-page.md');
+      expect(fs.existsSync(path.join(getWikiDir(tempDir), '40_Logs', 'nested-page.md'))).toBe(true);
+    });
+
     it('should reject path traversal in readPage', () => {
       ensureWikiDir(tempDir);
       expect(readPage(tempDir, '../../etc/passwd')).toBeNull();
@@ -282,6 +291,17 @@ schemaVersion: 1
       expect(pages).toEqual(['page-a.md', 'page-b.md']);
     });
 
+    it('should list nested page files using relative paths', () => {
+      ensureWikiDir(tempDir);
+      const wikiDir = getWikiDir(tempDir);
+      fs.mkdirSync(path.join(wikiDir, '40_Logs'), { recursive: true });
+      fs.writeFileSync(path.join(wikiDir, '40_Logs', 'nested.md'), '---\ntitle: Nested\n---\ncontent');
+      fs.writeFileSync(path.join(wikiDir, 'index.md'), '# Index');
+
+      const pages = listPages(tempDir);
+      expect(pages).toEqual(['40_Logs/nested.md']);
+    });
+
     it('should return empty for non-existent wiki dir', () => {
       expect(listPages(tempDir)).toEqual([]);
     });
@@ -310,6 +330,13 @@ schemaVersion: 1
       const result = deletePage(tempDir, 'test-page.md');
       expect(result).toBe(true);
       expect(readPage(tempDir, 'test-page.md')).toBeNull();
+    });
+
+    it('should delete an existing nested page', () => {
+      writePage(tempDir, makePage({ filename: '40_Logs/test-page.md' }));
+      const result = deletePage(tempDir, '40_Logs/test-page.md');
+      expect(result).toBe(true);
+      expect(readPage(tempDir, '40_Logs/test-page.md')).toBeNull();
     });
 
     it('should return false for non-existent page', () => {
@@ -374,6 +401,19 @@ schemaVersion: 1
       expect(index).toContain('## reference');
       expect(index).toContain('[Arch](arch.md)');
       expect(index).toContain('[Ref](ref.md)');
+    });
+
+    it('should include nested page links in the generated index', () => {
+      writePage(tempDir, makePage({
+        filename: '40_Logs/log-entry.md',
+        frontmatter: { ...makePage().frontmatter, title: 'Log Entry', category: 'debugging' },
+      }));
+
+      withWikiLock(tempDir, () => { updateIndexUnsafe(tempDir); });
+
+      const index = readIndex(tempDir);
+      expect(index).not.toBeNull();
+      expect(index).toContain('[Log Entry](40_Logs/log-entry.md)');
     });
   });
 

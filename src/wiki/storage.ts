@@ -14,7 +14,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'fs';
-import { dirname, join, resolve, sep } from 'path';
+import { dirname, join, relative, resolve, sep } from 'path';
 import { omxLegacyWikiDir, omxWikiDir } from '../utils/paths.js';
 import {
   type WikiLogEntry,
@@ -207,16 +207,47 @@ export function serializePage(page: WikiPage): string {
 }
 
 function safeWikiPath(wikiDir: string, filename: string): string | null {
-  if (filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
+  const normalized = filename.replace(/\\/g, '/');
+  if (
+    normalized.startsWith('/')
+    || normalized.includes('..')
+    || normalized.split('/').some((segment) => segment.length === 0 || segment === '.')
+  ) {
     return null;
   }
-  const filePath = join(wikiDir, filename);
+  const filePath = join(wikiDir, normalized);
   const resolved = resolve(filePath);
   const resolvedWikiDir = resolve(wikiDir);
   if (resolved !== resolvedWikiDir && !resolved.startsWith(`${resolvedWikiDir}${sep}`)) {
     return null;
   }
   return filePath;
+}
+
+function listMarkdownPagesRecursive(
+  wikiDir: string,
+  currentDir = wikiDir,
+): string[] {
+  const entries = readdirSync(currentDir, { withFileTypes: true });
+  const pages: string[] = [];
+
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue;
+
+    const entryPath = join(currentDir, entry.name);
+    if (entry.isDirectory()) {
+      pages.push(...listMarkdownPagesRecursive(wikiDir, entryPath));
+      continue;
+    }
+
+    if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+
+    const relativePath = relative(wikiDir, entryPath).split(sep).join('/');
+    if (!relativePath.includes('/') && RESERVED_FILES.has(relativePath)) continue;
+    pages.push(relativePath);
+  }
+
+  return pages.sort();
 }
 
 
@@ -259,9 +290,7 @@ export function readPage(root: string, filename: string): WikiPage | null {
 export function listPages(root: string): string[] {
   const wikiDir = getReadableWikiDir(root);
   if (!existsSync(wikiDir)) return [];
-  return readdirSync(wikiDir)
-    .filter((entry) => entry.endsWith('.md') && !RESERVED_FILES.has(entry))
-    .sort();
+  return listMarkdownPagesRecursive(wikiDir);
 }
 
 export function readAllPages(root: string): WikiPage[] {
@@ -273,9 +302,7 @@ export function readAllPages(root: string): WikiPage[] {
 function listCanonicalPages(root: string): string[] {
   const wikiDir = getWikiDir(root);
   if (!existsSync(wikiDir)) return [];
-  return readdirSync(wikiDir)
-    .filter((entry) => entry.endsWith('.md') && !RESERVED_FILES.has(entry))
-    .sort();
+  return listMarkdownPagesRecursive(wikiDir);
 }
 
 function readAllCanonicalPages(root: string): WikiPage[] {
