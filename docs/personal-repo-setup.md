@@ -37,6 +37,37 @@ When you change something you want on other PCs:
 4. Push to your custom GitHub repo.
 5. Pull the repo on the other PC and rerun `npm ci` and `npm run setup` if needed.
 
+## Nested wiki repositories
+
+This repo uses Git submodules for cross-machine knowledge stores:
+
+- `personal-wiki` -> `git@github.com:yanapang/personal-wiki.git`
+- `work-wiki` -> `git@github.com:yanapang/work-wiki.git`
+
+Clone on a new PC with submodules:
+
+```bash
+git clone --recurse-submodules git@github.com:yanapang/my-codex.git
+```
+
+If the repo was cloned without submodules:
+
+```bash
+git submodule update --init --recursive
+```
+
+To pull the latest wiki commits from their `main` branches:
+
+```bash
+git submodule update --remote --merge personal-wiki work-wiki
+```
+
+After updating a wiki, commit inside that wiki repo first, then commit the updated submodule pointer in this parent repo.
+
+## Local-only LifeOS vault
+
+`/Users/yana/Codex/LifeOS` is intentionally local-only because it may contain sensitive personal, finance, health, or journal material. Keep LifeOS out of this repository unless a specific, reviewed subset is promoted into one of the nested wiki repositories.
+
 ## Personalization tips
 
 - Put durable cross-machine preferences in tracked docs or scripts.
