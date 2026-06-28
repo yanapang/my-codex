@@ -17,6 +17,36 @@
 
 **Community:** [Discord](https://discord.gg/sj4exxQ9v) — shared OMX/community server for oh-my-codex and related tooling.
 
+## Personal workspace overlay
+
+This checkout also carries local workspace conventions for `yanapang/my-codex`.
+The reproducible knowledge stores are Git submodules:
+
+- [`personal-wiki`](./personal-wiki/README.md) — personal learning, projects, decisions, and logs
+- [`work-wiki`](./work-wiki/README.md) — work-only project context, logs, and presentation notes
+
+Clone with submodules on another PC:
+
+```bash
+git clone --recurse-submodules git@github.com:yanapang/my-codex.git
+```
+
+Initialize submodules after a normal clone:
+
+```bash
+git submodule update --init --recursive
+```
+
+Pull the latest wiki commits:
+
+```bash
+git submodule update --remote --merge personal-wiki work-wiki
+```
+
+The local LifeOS vault is intentionally not part of this repository. It lives at
+`/Users/yana/Codex/LifeOS` on this machine because it may contain sensitive
+personal, finance, health, or journal material.
+
 ## Official project and package
 
 The official/original OMX project is this repository, [`Yeachan-Heo/oh-my-codex`](https://github.com/Yeachan-Heo/oh-my-codex), and the official npm package for this project is [`oh-my-codex`](https://www.npmjs.com/package/oh-my-codex). Install this project with `npm install -g oh-my-codex` (or alongside Codex CLI as shown below).
