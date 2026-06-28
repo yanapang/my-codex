@@ -43,6 +43,7 @@ This repo uses Git submodules for cross-machine knowledge stores:
 
 - `personal-wiki` -> `git@github.com:yanapang/personal-wiki.git`
 - `work-wiki` -> `git@github.com:yanapang/work-wiki.git`
+- `lifeos-template` -> `git@github.com:yanapang/lifeos-template.git`
 
 Clone on a new PC with submodules:
 
@@ -59,14 +60,30 @@ git submodule update --init --recursive
 To pull the latest wiki commits from their `main` branches:
 
 ```bash
-git submodule update --remote --merge personal-wiki work-wiki
+git submodule update --remote --merge personal-wiki work-wiki lifeos-template
 ```
 
 After updating a wiki, commit inside that wiki repo first, then commit the updated submodule pointer in this parent repo.
 
-## Local-only LifeOS vault
+## LifeOS template and local vault
 
-`/Users/yana/Codex/LifeOS` is intentionally local-only because it may contain sensitive personal, finance, health, or journal material. Keep LifeOS out of this repository unless a specific, reviewed subset is promoted into one of the nested wiki repositories.
+`lifeos-template` is the reproducible, sanitized Obsidian vault template. It
+contains structure, dashboards, examples, and safety rules only.
+
+`/Users/yana/Codex/LifeOS` is the real local vault on this PC. It is
+intentionally local-only because it may contain sensitive personal, finance,
+health, or journal material. Keep private records in ignored local-only paths
+such as `99_Private/`, `Private/`, `Secrets/`, `Sensitive/`, `Actuals/`, or
+`Raw/`.
+
+To create a local LifeOS vault on another PC, clone or copy the template into a
+local vault path and open it in Obsidian:
+
+```bash
+git clone git@github.com:yanapang/lifeos-template.git LifeOS
+```
+
+Do not commit machine-local private records back to `lifeos-template`.
 
 ## Personalization tips
 

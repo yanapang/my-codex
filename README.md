@@ -24,6 +24,7 @@ The reproducible knowledge stores are Git submodules:
 
 - [`personal-wiki`](./personal-wiki/README.md) — personal learning, projects, decisions, and logs
 - [`work-wiki`](./work-wiki/README.md) — work-only project context, logs, and presentation notes
+- [`lifeos-template`](./lifeos-template/README.md) — sanitized LifeOS Obsidian vault template
 
 Clone with submodules on another PC:
 
@@ -40,12 +41,14 @@ git submodule update --init --recursive
 Pull the latest wiki commits:
 
 ```bash
-git submodule update --remote --merge personal-wiki work-wiki
+git submodule update --remote --merge personal-wiki work-wiki lifeos-template
 ```
 
-The local LifeOS vault is intentionally not part of this repository. It lives at
-`/Users/yana/Codex/LifeOS` on this machine because it may contain sensitive
-personal, finance, health, or journal material.
+The real local LifeOS vault is intentionally not part of this repository. It
+lives at `/Users/yana/Codex/LifeOS` on this machine because it may contain
+sensitive personal, finance, health, or journal material. Use
+`lifeos-template` to bootstrap a safe empty vault on another PC, then keep
+private records in ignored local-only paths.
 
 ## Official project and package
 

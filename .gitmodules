@@ -7,3 +7,8 @@
 	path = work-wiki
 	url = git@github.com:yanapang/work-wiki.git
 	branch = main
+
+[submodule "lifeos-template"]
+	path = lifeos-template
+	url = git@github.com:yanapang/lifeos-template.git
+	branch = main
