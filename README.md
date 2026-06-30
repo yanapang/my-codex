@@ -50,6 +50,15 @@ sensitive personal, finance, health, or journal material. Use
 `lifeos-template` to bootstrap a safe empty vault on another PC, then keep
 private records in ignored local-only paths.
 
+This checkout can also resolve a machine-local vault path from
+`.lifeos.local.json` when you want an explicit override. If that file is
+missing, the default local vault path is `../LifeOS`.
+
+```bash
+npm run lifeos:doctor
+npm run lifeos:path
+```
+
 ## Official project and package
 
 The official/original OMX project is this repository, [`Yeachan-Heo/oh-my-codex`](https://github.com/Yeachan-Heo/oh-my-codex), and the official npm package for this project is [`oh-my-codex`](https://www.npmjs.com/package/oh-my-codex). Install this project with `npm install -g oh-my-codex` (or alongside Codex CLI as shown below).

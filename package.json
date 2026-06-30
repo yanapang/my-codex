@@ -20,6 +20,8 @@
     "postinstall": "node -e \"const fs=require('fs');const p='./dist/scripts/postinstall.js';if(fs.existsSync(p))import(p).then(m=>m.main?.()).catch(e=>console.warn('[omx] Postinstall skipped after a non-fatal error: '+(e?.message??e)))\"",
     "setup": "node dist/cli/omx.js setup",
     "doctor": "node dist/cli/omx.js doctor",
+    "lifeos:doctor": "node dist/scripts/lifeos-local.js",
+    "lifeos:path": "node dist/scripts/lifeos-local.js --print-path",
     "ask:claude": "./src/scripts/ask-claude.sh",
     "ask:gemini": "./src/scripts/ask-gemini.sh",
     "test:explore": "cargo test -p omx-explore-harness && node --test dist/cli/__tests__/explore.test.js dist/hooks/__tests__/explore-routing.test.js dist/hooks/__tests__/explore-sparkshell-guidance-contract.test.js",

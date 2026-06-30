@@ -76,6 +76,25 @@ health, or journal material. Keep private records in ignored local-only paths
 such as `99_Private/`, `Private/`, `Secrets/`, `Sensitive/`, `Actuals/`, or
 `Raw/`.
 
+This repo can resolve that local vault through an ignored root file named
+`.lifeos.local.json`. Use it when your vault is not at the default relative
+path `../LifeOS`.
+
+Example:
+
+```json
+{
+  "vaultPath": "../LifeOS"
+}
+```
+
+Validation commands:
+
+```bash
+npm run lifeos:doctor
+npm run lifeos:path
+```
+
 To create a local LifeOS vault on another PC, clone or copy the template into a
 local vault path and open it in Obsidian:
 
