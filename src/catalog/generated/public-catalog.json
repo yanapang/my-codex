@@ -1,10 +1,10 @@
 {
-  "generatedAt": "2026-06-17T05:57:55.659Z",
+  "generatedAt": "2026-06-30T04:22:23.717Z",
   "version": "2026.02.28.1",
   "counts": {
-    "skillCount": 50,
+    "skillCount": 56,
     "promptCount": 34,
-    "activeSkillCount": 28,
+    "activeSkillCount": 34,
     "activeAgentCount": 20
   },
   "coreSkills": [
@@ -213,6 +213,48 @@
       "category": "shortcut",
       "status": "active",
       "canonical": "designer",
+      "core": false,
+      "internalRequired": false
+    },
+    {
+      "name": "career",
+      "category": "shortcut",
+      "status": "active",
+      "core": false,
+      "internalRequired": false
+    },
+    {
+      "name": "platform",
+      "category": "shortcut",
+      "status": "active",
+      "core": false,
+      "internalRequired": false
+    },
+    {
+      "name": "pair",
+      "category": "shortcut",
+      "status": "active",
+      "core": false,
+      "internalRequired": false
+    },
+    {
+      "name": "writing",
+      "category": "shortcut",
+      "status": "active",
+      "core": false,
+      "internalRequired": false
+    },
+    {
+      "name": "research",
+      "category": "shortcut",
+      "status": "active",
+      "core": false,
+      "internalRequired": false
+    },
+    {
+      "name": "life",
+      "category": "shortcut",
+      "status": "active",
       "core": false,
       "internalRequired": false
     },

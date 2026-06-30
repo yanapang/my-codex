@@ -166,6 +166,36 @@
       "canonical": "designer"
     },
     {
+      "name": "career",
+      "category": "shortcut",
+      "status": "active"
+    },
+    {
+      "name": "platform",
+      "category": "shortcut",
+      "status": "active"
+    },
+    {
+      "name": "pair",
+      "category": "shortcut",
+      "status": "active"
+    },
+    {
+      "name": "writing",
+      "category": "shortcut",
+      "status": "active"
+    },
+    {
+      "name": "research",
+      "category": "shortcut",
+      "status": "active"
+    },
+    {
+      "name": "life",
+      "category": "shortcut",
+      "status": "active"
+    },
+    {
       "name": "frontend-ui-ux",
       "category": "shortcut",
       "status": "deprecated"

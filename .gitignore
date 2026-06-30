@@ -45,3 +45,6 @@ snapshot.json
 !.codex/prompts/**
 
 .idea/
+
+# Local LifeOS path override
+.lifeos.local.json
