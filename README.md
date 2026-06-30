@@ -29,7 +29,7 @@ The reproducible knowledge stores are Git submodules:
 Clone with submodules on another PC:
 
 ```bash
-git clone --recurse-submodules git@github.com:yanapang/my-codex.git
+git clone --recurse-submodules https://github.com/yanapang/my-codex.git
 ```
 
 Initialize submodules after a normal clone:

@@ -1,14 +1,14 @@
 [submodule "personal-wiki"]
 	path = personal-wiki
-	url = git@github.com:yanapang/personal-wiki.git
+	url = https://github.com/yanapang/personal-wiki.git
 	branch = main
 
 [submodule "work-wiki"]
 	path = work-wiki
-	url = git@github.com:yanapang/work-wiki.git
+	url = https://github.com/yanapang/work-wiki.git
 	branch = main
 
 [submodule "lifeos-template"]
 	path = lifeos-template
-	url = git@github.com:yanapang/lifeos-template.git
+	url = https://github.com/yanapang/lifeos-template.git
 	branch = main

@@ -48,7 +48,7 @@ This repo uses Git submodules for cross-machine knowledge stores:
 Clone on a new PC with submodules:
 
 ```bash
-git clone --recurse-submodules git@github.com:yanapang/my-codex.git
+git clone --recurse-submodules https://github.com/yanapang/my-codex.git
 ```
 
 If the repo was cloned without submodules:
