@@ -36,7 +36,7 @@ Project-scoped resume and search discovery include generated runtime homes under
 - **OMX plugin hooks**: `.omx/hooks/*.mjs`
 - **tmux/runtime fallbacks**: `omx tmux-hook`, notify-hook, derived watcher, idle/session-end reporters
 
-OMX only owns the wrapper entries that invoke `dist/scripts/codex-native-hook.js`. User-managed hook entries in the same `.codex/hooks.json` file are preserved across `omx setup` refreshes and `omx uninstall`.
+OMX only owns the setup-managed native hook wrapper entries. User-managed hook entries in the same `.codex/hooks.json` file are preserved across `omx setup` refreshes and `omx uninstall`.
 Setup-owned trust state is limited to those generated wrapper identities; user hooks and user-owned `hooks.state` entries are preserved and remain subject to Codex's normal review flow.
 
 ## Mapping matrix
