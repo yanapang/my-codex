@@ -2491,7 +2491,7 @@ describe("omx setup install mode behavior", () => {
 							(line) =>
 								line.trim() !== "# OMX-owned Codex hook trust state" &&
 								line.trim() !==
-									"# Trusts only setup-managed codex-native-hook.js wrappers." &&
+									"# Trusts only setup-managed native hook wrappers." &&
 								line.trim() !== "# End OMX-owned Codex hook trust state",
 						)
 						.join("\n");
