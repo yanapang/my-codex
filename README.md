@@ -9,13 +9,14 @@ I use it as the reproducible layer for prompts, skills, hooks, scripts, and mach
 
 Website: https://yeachan-heo.github.io/oh-my-codex-website/
 
-Docs: [Getting Started](./docs/getting-started.html) · [Agents](./docs/agents.html) · [Skills](./docs/skills.html) · [Integrations](./docs/integrations.html) · [Demo](./DEMO.md) · [OpenClaw guide](./docs/openclaw-integration.md)
+Docs: [Getting Started](./docs/getting-started.html) · [Agents](./docs/agents.html) · [Skills](./docs/skills.html) · [Integrations](./docs/integrations.html) · [LifeOS operating guide](./docs/lifeos-operating-guide.md) · [Demo](./DEMO.md) · [OpenClaw guide](./docs/openclaw-integration.md)
 
 ## How this workspace is organized
 
 This is the working layout I actually use:
 
 - `oh-my-codex` - OMX runtime, CLI, prompts, hooks, templates, and source code.
+- `AGENTS.md` and `.codex/{agents,prompts,skills}` - project-local Codex/OMX operating contract and installed agent surfaces.
 - `personal-wiki` - Git-synced personal knowledge that is safe to keep in a repo.
 - `work-wiki` - Git-synced work knowledge that is safe to keep in a repo.
 - `lifeos-template` - sanitized Obsidian vault template for bootstrapping a local LifeOS vault.
@@ -35,6 +36,7 @@ This repo is the stable shell around Codex. I use it to:
 - keep my OMX setup reproducible across machines
 - launch Codex with my preferred orchestration layer
 - maintain prompts, skills, agents, templates, and local workflow docs
+- keep project-local Codex agent surfaces reproducible through `AGENTS.md` and `.codex/`
 - sync wiki submodules that hold durable knowledge
 - keep local-only sensitive data outside Git
 
@@ -162,6 +164,30 @@ Use `$ralph` as an intentional alternate completion loop.
 - `work-wiki` - reusable work context, project logs, presentation drafts
 - this repo - reusable automation, prompts, templates, configuration, docs
 
+### 5. Route LifeOS work with shortcuts
+
+These shortcuts are lightweight LifeOS routing commands. They tell Codex which role should lead the task and which context should be loaded.
+
+| Shortcut | Role | Use for |
+| --- | --- | --- |
+| `$life` | Life Manager | Weekly planning, prioritization, goal review, dashboard maintenance, routine and review design. |
+| `$career` | Career Coach | Resume review, portfolio shaping, interview story extraction, role-fit feedback, career planning. |
+| `$pair` | Pair Programmer | Code changes, debugging, code review, refactoring, test design and verification. |
+| `$platform` | Platform Mentor | Kubernetes, Terraform, backend/platform architecture, system design critique, operational debugging, runbook design. |
+| `$research` | Research Agent | Official documentation lookup, source-backed comparisons, terminology validation, recent framework or API verification. |
+| `$writing` | Writing Coach | Blog writing, documentation cleanup, summaries, presentation drafts, tone and structure improvement. |
+
+Examples:
+
+```text
+$life 이번 주 우선순위 정리해줘
+$career 이 이력서 bullet 더 임팩트 있게 바꿔줘
+$pair 이 테스트 실패 원인 찾아서 고쳐줘
+$platform 이 Terraform 모듈 구조 리뷰해줘
+$research 최신 API 동작을 공식 문서 기준으로 확인해줘
+$writing 이 초안을 더 읽히는 구조로 다듬어줘
+```
+
 ## Submodule and LifeOS maintenance
 
 The reproducible knowledge stores are Git submodules:
@@ -210,6 +236,7 @@ npm run lifeos:path
 
 What should stay in Git:
 
+- `AGENTS.md` and reproducible project-local Codex surfaces under `.codex/agents/`, `.codex/prompts/`, and `.codex/skills/`
 - source changes under `src/`, `crates/`, `docs/`, `prompts/`, `skills/`, `templates/`, and `plugins/`
 - repo-level workflow docs and setup notes
 - reproducible helper scripts and automation
@@ -220,7 +247,7 @@ What should stay local:
 - `dist/`
 - `target/`
 - `.omx/`
-- `.codex/`
+- local `.codex` runtime/config files such as `.codex/config.toml`, `.codex/hooks.json`, and `.codex/.omx/`
 - local auth state, secrets, and private notes
 
 ## Plugin and setup note
