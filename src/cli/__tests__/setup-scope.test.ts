@@ -325,13 +325,13 @@ describe("omx setup scope behavior", () => {
 
       assert.equal(
         sessionStartHooks.filter((hook) =>
-          String(hook.command ?? "").includes("codex-native-hook.js")
+          String(hook.command ?? "").includes("omx codex-native-hook")
         ).length,
         1,
       );
       assert.equal(
         stopHooks.filter((hook) =>
-          String(hook.command ?? "").includes("codex-native-hook.js")
+          String(hook.command ?? "").includes("omx codex-native-hook")
         ).length,
         1,
       );

@@ -84,9 +84,7 @@ function cloneJson<T>(value: T): T {
 
 type HookCommandPlatform = NodeJS.Platform;
 
-function quoteCommandPart(value: string): string {
-  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-}
+const OMX_NATIVE_HOOK_CLI_COMMAND = "omx codex-native-hook";
 
 export function escapeTomlBasicString(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
@@ -216,9 +214,6 @@ export function buildManagedCodexNativeHookCommand(
     ? { platform: optionsOrPlatform }
     : optionsOrPlatform;
   const platform = options.platform ?? process.platform;
-  const hookScript = platform === "win32"
-    ? win32.join(pkgRoot, "dist", "scripts", "codex-native-hook.js")
-    : join(pkgRoot, "dist", "scripts", "codex-native-hook.js");
 
   if (platform === "win32") {
     const codexHomeDir = options.codexHomeDir ?? dirname(pkgRoot);
@@ -227,7 +222,7 @@ export function buildManagedCodexNativeHookCommand(
     return `${quoteWindowsCommandPart(powerShellPath)} -NoProfile -ExecutionPolicy Bypass -File ${quoteWindowsCommandPart(shimPath)}`;
   }
 
-  return `${quoteCommandPart(process.execPath)} ${quoteCommandPart(hookScript)}`;
+  return OMX_NATIVE_HOOK_CLI_COMMAND;
 }
 
 function buildCommandHook(
@@ -305,6 +300,9 @@ export function parseCodexHooksConfig(
 }
 
 function isOmxManagedHookCommand(command: string): boolean {
+  if (/(?:^|[\s"'`])omx(?:\.cmd|\.exe)?\s+codex-native-hook(?:[\s"'`]|$)/i.test(command)) {
+    return true;
+  }
   return /(?:^|[\\/])codex-native-hook\.js(?:["'\s]|$)/.test(command)
     || /(?:^|[\\/])omx-native-hook-windows-shim\.ps1(?:["'\s]|$)/i.test(command);
 }

@@ -25,13 +25,13 @@ import {
 
 describe("codex hooks helpers", () => {
 
-  it("uses the current JavaScript runtime for managed hook commands", () => {
+  it("uses the OMX launcher for portable managed hook commands", () => {
     const config = buildManagedCodexHooksConfig("/repo");
     const command = (config.hooks.SessionStart[0] as { hooks?: Array<{ command?: string }> } | undefined)?.hooks?.[0]?.command;
 
     assert.equal(
       command,
-      `"${process.execPath.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}" "/repo/dist/scripts/codex-native-hook.js"`,
+      "omx codex-native-hook",
     );
   });
 
@@ -260,7 +260,7 @@ describe("codex hooks helpers", () => {
     const sessionStart = merged.hooks.SessionStart;
     assert.equal(
       sessionStart.flatMap((entry) => entry.hooks ?? []).filter((hook) =>
-        String(hook.command ?? "").includes("codex-native-hook.js")
+        String(hook.command ?? "").includes("omx codex-native-hook")
       ).length,
       1,
     );
@@ -289,8 +289,7 @@ describe("codex hooks helpers", () => {
 
   it("matches Codex's normalized command hook hash identity", async () => {
     const state = buildManagedCodexHookTrustState("/hooks.json", "/repo");
-    const command =
-      `"${process.execPath.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}" "/repo/dist/scripts/codex-native-hook.js"`;
+    const command = "omx codex-native-hook";
     const expectedIdentity = {
       event_name: "pre_tool_use",
       hooks: [
@@ -653,8 +652,8 @@ describe("codex hooks helpers", () => {
     const postCompact = config.hooks.PostCompact as Array<{ hooks?: Array<{ command?: string }> }>;
     const preCommand = preCompact[0]?.hooks?.[0]?.command;
     const postCommand = postCompact[0]?.hooks?.[0]?.command;
-    assert.match(String(preCommand), /codex-native-hook\.js/);
-    assert.match(String(postCommand), /codex-native-hook\.js/);
+    assert.match(String(preCommand), /\bomx(?:\.cmd|\.exe)?\s+codex-native-hook\b/i);
+    assert.match(String(postCommand), /\bomx(?:\.cmd|\.exe)?\s+codex-native-hook\b/i);
     assert.equal(postCommand, preCommand);
     assert.doesNotMatch(String(postCommand), /PostCompact Nudge|additionalContext|printf/);
   });

@@ -16,7 +16,7 @@ Native Codex hook ownership is documented separately in
 - `omx tmux-hook` / notify-hook / derived watcher = tmux/runtime fallback surfaces
 
 `omx setup` treats `.codex/hooks.json` as a shared-ownership file: it refreshes only the OMX-managed
-wrapper entries that invoke `dist/scripts/codex-native-hook.js` and preserves user hook entries in the
+setup-managed native hook wrapper entries and preserves user hook entries in the
 same file. `omx uninstall` removes only those OMX-managed wrappers and leaves `.codex/hooks.json` in
 place when user hooks remain.
 

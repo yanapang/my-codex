@@ -88,13 +88,15 @@ function hookCommands(entries: HookRegistration[] | undefined): string[] {
 
 function countManagedHooks(entries: HookRegistration[] | undefined): number {
   return hookCommands(entries).filter((command) =>
-    command.includes("codex-native-hook.js")
+    command.includes("omx codex-native-hook")
+    || command.includes("codex-native-hook.js")
     || command.includes("omx-native-hook-windows-shim.ps1")
   ).length;
 }
 
 function hasManagedHookCommand(command: string): boolean {
-  return command.includes("codex-native-hook.js")
+  return command.includes("omx codex-native-hook")
+    || command.includes("codex-native-hook.js")
     || command.includes("omx-native-hook-windows-shim.ps1");
 }
 
